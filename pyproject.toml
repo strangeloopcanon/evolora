@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "symbiont-ecology"
+version = "0.1.0"
+description = "Symbiotic agent ecology with Hebbian LoRA organelles and evolutionary pressure."
+readme = "AGENTS.md"
+authors = [{ name = "Symbiont Team" }]
+license = { text = "Proprietary" }
+requires-python = ">=3.9"
+dependencies = [
+  "torch>=2.2",
+  "transformers>=4.40",
+  "peft>=0.11",
+  "accelerate>=0.29",
+  "numpy>=1.25",
+  "scipy>=1.11",
+  "rich>=13.7",
+  "pydantic>=2.7",
+  "omegaconf>=2.3",
+  "python-dotenv>=1.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "black>=24.4",
+  "ruff>=0.5",
+  "mypy>=1.10",
+  "pytest>=8.2",
+  "pytest-cov>=5.0",
+  "bandit>=1.7",
+  "detect-secrets>=1.4",
+  "pip-audit>=2.7",
+  "pre-commit>=3.7",
+  "types-setuptools",
+  "matplotlib>=3.9"
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "N", "W"]
+ignore = ["E203", "E266", "E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unused_configs = true
+plugins = []
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --cov=symbiont_ecology --cov-report=term-missing"
+testpaths = [
+  "tests"
+]
+
+[tool.coverage.run]
+branch = true
+source = ["symbiont_ecology"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+omit = [
+  "src/symbiont_ecology/host/gemma.py",
+  "src/symbiont_ecology/organelles/peft_hebbian.py",
+]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+]
+
+[tool.bandit]
+targets = ["src/symbiont_ecology"]
+
+[tool.symbiont]
+default_backbone = "unsloth/Qwen2.5-0.5b-instruct"
+max_lora_rank = 8

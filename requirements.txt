@@ -1,0 +1,10 @@
+torch>=2.2
+transformers>=4.40
+peft>=0.11
+accelerate>=0.29
+numpy>=1.25
+scipy>=1.11
+rich>=13.7
+pydantic>=2.7
+omegaconf>=2.3
+python-dotenv>=1.0

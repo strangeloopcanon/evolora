@@ -1,0 +1,6 @@
+{"prompt": "Add 7 and 5. Respond with the number only.", "target": 12, "family": "math", "depth": "short"}
+{"prompt": "Multiply 6 by 8. Respond with the number only.", "target": 48, "family": "math", "depth": "medium"}
+{"prompt": "Add 134 and 289. Respond with the number only.", "target": 423, "family": "math", "depth": "long"}
+{"prompt": "Given the numbers 4, 1, 7, produce a valid JSON array containing them sorted ascending.", "target": [1, 4, 7], "family": "json_repair", "depth": "short"}
+{"prompt": "Given the numbers 12, 3, 9, 6, produce a valid JSON array containing them sorted ascending.", "target": [3, 6, 9, 12], "family": "json_repair", "depth": "medium"}
+{"prompt": "Given the numbers 15, 4, 18, 2, 11, produce a valid JSON array containing them sorted ascending.", "target": [2, 4, 11, 15, 18], "family": "json_repair", "depth": "long"}

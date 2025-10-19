@@ -1,0 +1,66 @@
+host:
+  backbone_type: gemma
+  backbone_model: google/gemma-3-270m-it
+  tokenizer: google/gemma-3-270m-it
+  device: mps
+  max_lora_rank: 8
+  max_sequence_length: 256
+
+energy:
+  Emax: 6.0
+  m: 0.6
+  alpha: 1.0e-14
+  beta: 0.015
+  gamma: 0.0004
+  lambda_p: 8.0e-8
+  bankruptcy_grace: 2
+
+pricing:
+  base: 1.4
+  k: 1.8
+  min: 0.4
+  max: 2.4
+
+assimilation_tuning:
+  per_cell_interval: 3
+  max_merges_per_cell: 2
+  seed_scale: 0.4
+  soup_size: 4
+  hf_prompts:
+    - "Summarize the grid policy impact for stakeholders."
+    - "List a human-checkable claim from your answer."
+
+evolution:
+  assimilation_threshold: 0.005
+  assimilation_p_value: 0.05
+  max_merges_per_gen: 3
+  min_population: 4
+  max_population: 16
+
+limits:
+  lora_budget_frac: 0.04
+  max_active_adapters_per_layer: 2
+
+meta:
+  enabled: true
+  interval: 4
+  mutation_scale: 0.08
+  catastrophe_interval: 40
+  catastrophe_scale: 0.4
+
+environment:
+  synthetic_batch_size: 2
+  human_bandit_batch_size: 4
+  max_episode_steps: 128
+  energy_budget: 50.0
+human_bandit:
+  enabled: true
+  preference_weight: 0.15
+  helper_weight: 0.05
+  frequency: 0.5
+evaluation:
+  enabled: true
+  cadence: 10
+  tasks_path: config/evaluation/holdout_tasks.jsonl
+  sample_size: 20
+  reward_weight: 0.75

@@ -1,0 +1,84 @@
+host:
+  backbone_type: gemma
+  backbone_model: google/gemma-3-270m-it
+  tokenizer: google/gemma-3-270m-it
+  device: mps
+  max_lora_rank: 8
+  max_sequence_length: 256
+
+energy:
+  Emax: 6.0
+  m: 0.6
+  alpha: 5.0e-15   # halve FLOPs penalty
+  beta: 0.015      # lighter memory cost
+  gamma: 0.0005    # lighter latency cost
+  lambda_p: 6.0e-8 # lower param cost
+  bankruptcy_grace: 2
+  cost_scale: 0.7
+
+pricing:
+  base: 1.2
+  k: 1.6
+  min: 0.3
+  max: 2.2
+
+assimilation_tuning:
+  per_cell_interval: 1    # attempt every generation per cell
+  max_merges_per_cell: 3
+  seed_scale: 0.6
+  soup_size: 4
+  hf_prompts:
+    - "Summarize your solution for a non-technical reviewer."
+  probe_max_other_cells: 2
+  probe_required_passes: 1
+  energy_floor: 0.0
+  energy_floor_roi: 0.0
+  energy_floor_base: 0.6
+  energy_floor_roi_base: 0.9
+  holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
+  holdout_sample_size: 3
+  holdout_margin: 0.02
+
+evolution:
+  assimilation_threshold: 0.001  # easier early gate
+  assimilation_p_value: 0.2      # more permissive early merges
+  max_merges_per_gen: 4
+  min_population: 4
+  max_population: 16
+
+limits:
+  lora_budget_frac: 0.04
+  max_active_adapters_per_layer: 2
+
+meta:
+  enabled: true
+  interval: 5
+  mutation_scale: 0.1
+  catastrophe_interval: 0
+  catastrophe_scale: 0.6
+
+environment:
+  synthetic_batch_size: 2
+  human_bandit_batch_size: 4
+  max_episode_steps: 128
+  energy_budget: 50.0
+  success_reward_bonus: 1.0
+  failure_cost_multiplier: 0.5
+
+human_bandit:
+  enabled: true
+  preference_weight: 0.1
+  helper_weight: 0.05
+  frequency: 0.4
+
+evaluation:
+  enabled: true
+  cadence: 10
+  tasks_path: config/evaluation/holdout_tasks.jsonl
+  sample_size: 12
+  reward_weight: 0.75
+
+diversity:
+  enabled: true
+  energy_gini_cap: 0.85
+  max_species_energy_share: 0.55

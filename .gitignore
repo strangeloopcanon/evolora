@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+.venv311/
+.env
+.env.*
+
+# Local tooling
+.beads/
+.agents.yml
+
+
+# Artifacts & telemetry
+artifacts*/
+visuals/
+results/
+*.report.md
+
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Tooling
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Editors
+.vscode/
+.idea/
+.DS_Store
+
+# Detect-secrets
+.secrets.baseline

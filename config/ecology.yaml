@@ -1,0 +1,60 @@
+env:
+  grid:
+    families: ["math", "json_repair"]
+    depths: ["short", "medium", "long"]
+teacher:
+  tau: 0.5
+  beta: 0.2
+  eta: 0.5
+pricing:
+  base: 1.0
+  k: 1.5
+  min: 0.3
+  max: 2.0
+energy:
+  Emax: 5.0
+  m: 1.0
+  alpha: 1.0e-14   # per FLOP
+  beta: 0.02       # per GB
+  gamma: 0.001     # per ms
+  lambda_p: 1.0e-7 # per trainable param
+  bankruptcy_grace: 3
+canary:
+  q_min: 0.95
+population:
+  mu: 4
+  lambda: 12
+  max_population: 16
+assimilation_tuning:
+  per_cell_interval: 5
+  max_merges_per_cell: 1
+  seed_scale: 0.5
+  soup_size: 3
+  hf_prompts:
+    - "Summarize your solution for a non-technical reviewer."
+    - "Suggest a follow-up action we can validate manually."
+environment:
+  synthetic_batch_size: 8
+  human_bandit_batch_size: 4
+  max_episode_steps: 128
+  energy_budget: 50.0
+human_bandit:
+  enabled: true
+  preference_weight: 0.2
+  helper_weight: 0.1
+  frequency: 1.0
+limits:
+  lora_budget_frac: 0.03
+  max_active_adapters_per_layer: 2
+meta:
+  enabled: true
+  interval: 5
+  mutation_scale: 0.12
+  catastrophe_interval: 0
+  catastrophe_scale: 0.6
+evaluation:
+  enabled: true
+  cadence: 10
+  tasks_path: config/evaluation/holdout_tasks.jsonl
+  sample_size: 6
+  reward_weight: 0.75
