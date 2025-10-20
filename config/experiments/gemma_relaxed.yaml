@@ -36,7 +36,7 @@ pricing:
   max: 2.2
 
 assimilation_tuning:
-  per_cell_interval: 1    # attempt every generation per cell
+  per_cell_interval: 2    # allow adapters to gather signal between attempts
   max_merges_per_cell: 3
   seed_scale: 0.8
   soup_size: 4
@@ -51,8 +51,8 @@ assimilation_tuning:
   energy_topup_roi_bonus: 0.2
   gating_snapshot_limit: 64
   holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
-  holdout_sample_size: 3
-  holdout_margin: 0.02
+  holdout_sample_size: 4
+  holdout_margin: 0.05
   min_window: 4
   window_step: 2
   adaptive_decay: 0.82
