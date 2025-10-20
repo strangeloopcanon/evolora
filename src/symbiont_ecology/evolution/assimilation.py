@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,6 +38,9 @@ class AssimilationTester:
         treatment_scores: Iterable[float],
         safety_hits: int,
         energy_cost: float,
+        *,
+        energy_balance: float | None = None,
+        energy_top_up: Mapping[str, float | str] | None = None,
     ) -> AssimilationTestResult:
         control = np.array(list(control_scores), dtype=float)
         treatment = np.array(list(treatment_scores), dtype=float)
@@ -50,14 +53,27 @@ class AssimilationTester:
                 passed=False,
                 energy_cost=energy_cost,
                 safety_hits=safety_hits,
+                sample_size=min_len if min_len > 0 else None,
+                control_mean=float(control.mean()) if len(control) else None,
+                treatment_mean=float(treatment.mean()) if len(treatment) else None,
+                control_std=float(control.std(ddof=0)) if len(control) else None,
+                treatment_std=float(treatment.std(ddof=0)) if len(treatment) else None,
+                uplift_threshold=self.uplift_threshold,
+                p_value_threshold=self.p_value_threshold,
+                energy_balance=energy_balance,
+                energy_top_up=energy_top_up,
             )
             return AssimilationTestResult(event=event, decision=False)
         if len(control) != len(treatment):
             control = control[:min_len]
             treatment = treatment[:min_len]
-        uplift = float(treatment.mean() - control.mean())
-        variance = float(np.var(treatment - control, ddof=1)) + 1e-8
-        z_score = uplift / np.sqrt(variance / max(len(treatment), 1))
+        sample_size = len(control)
+        control_mean = float(control.mean())
+        treatment_mean = float(treatment.mean())
+        uplift = treatment_mean - control_mean
+        diff = treatment - control
+        variance = float(np.var(diff, ddof=1)) + 1e-8
+        z_score = uplift / np.sqrt(variance / max(sample_size, 1))
         p_value = 0.5 * math.erfc(z_score / math.sqrt(2.0))
         passed = (
             uplift >= self.uplift_threshold
@@ -71,6 +87,15 @@ class AssimilationTester:
             passed=passed,
             energy_cost=energy_cost,
             safety_hits=safety_hits,
+            sample_size=sample_size,
+            control_mean=control_mean,
+            control_std=float(control.std(ddof=1)) if sample_size >= 2 else 0.0,
+            treatment_mean=treatment_mean,
+            treatment_std=float(treatment.std(ddof=1)) if sample_size >= 2 else 0.0,
+            uplift_threshold=self.uplift_threshold,
+            p_value_threshold=self.p_value_threshold,
+            energy_balance=energy_balance,
+            energy_top_up=energy_top_up,
         )
         return AssimilationTestResult(event=event, decision=passed)
 

@@ -23,6 +23,17 @@ class RouteEvent(BaseModel):
     latency_ms: float = 0.0
 
 
+class EnergyTopUpEvent(BaseModel):
+    status: str
+    before: float
+    after: float
+    credited: float = 0.0
+    roi: float = 0.0
+    floor: float = 0.0
+    roi_threshold: float = 0.0
+    roi_threshold_effective: float = 0.0
+
+
 class AssimilationEvent(BaseModel):
     organelle_id: str
     uplift: float
@@ -30,6 +41,15 @@ class AssimilationEvent(BaseModel):
     passed: bool
     energy_cost: float
     safety_hits: int
+    sample_size: int | None = None
+    control_mean: float | None = None
+    control_std: float | None = None
+    treatment_mean: float | None = None
+    treatment_std: float | None = None
+    uplift_threshold: float | None = None
+    p_value_threshold: float | None = None
+    energy_balance: float | None = None
+    energy_top_up: EnergyTopUpEvent | None = None
     cell: dict[str, str] | None = None
     soup: list[dict[str, float]] = Field(default_factory=list)
     probes: list[dict[str, object]] = Field(default_factory=list)
@@ -84,6 +104,7 @@ class EpisodeLog(BaseModel):
 __all__ = [
     "AssimilationEvent",
     "EpisodeLog",
+    "EnergyTopUpEvent",
     "LedgerSnapshot",
     "LiveEvalSummary",
     "RewardBreakdown",

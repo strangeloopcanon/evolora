@@ -1,0 +1,75 @@
+host:
+  backbone_type: gemma
+  backbone_model: google/gemma-3-270m-it
+  tokenizer: google/gemma-3-270m-it
+  device: mps
+  max_lora_rank: 8
+  max_sequence_length: 256
+
+grid:
+  families:
+    - math
+    - math.sequence
+    - json_repair
+    - string.sort
+    - word.count
+    - logic.bool
+  depths:
+    - short
+    - medium
+    - long
+
+energy:
+  Emax: 6.0
+  m: 0.5
+  alpha: 5.0e-15
+  beta: 0.015
+  gamma: 0.0005
+  lambda_p: 6.0e-8
+  bankruptcy_grace: 2
+  cost_scale: 0.7
+
+assimilation_tuning:
+  per_cell_interval: 1
+  max_merges_per_cell: 3
+  seed_scale: 0.8
+  soup_size: 4
+  energy_floor: 0.0
+  energy_floor_roi: 0.0
+  energy_floor_base: 0.5
+  energy_floor_roi_base: 0.8
+  energy_topup_roi_bonus: 0.5
+  gating_snapshot_limit: 64
+  holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
+  holdout_sample_size: 2
+  holdout_margin: 0.01
+  holdout_margin_step: 0.015
+  holdout_max_retries: 2
+  min_window: 4
+  window_step: 2
+  adaptive_decay: 0.82
+  adaptive_floor: 0.0003
+
+evolution:
+  assimilation_threshold: 0.0
+  assimilation_p_value: 0.25
+  max_merges_per_gen: 6
+  min_population: 4
+  max_population: 16
+
+environment:
+  synthetic_batch_size: 2
+  human_bandit_batch_size: 2
+  max_episode_steps: 128
+  energy_budget: 40.0
+  success_reward_bonus: 1.0
+  failure_cost_multiplier: 0.5
+
+human_bandit:
+  enabled: false
+
+evaluation:
+  enabled: false
+
+meta:
+  enabled: false

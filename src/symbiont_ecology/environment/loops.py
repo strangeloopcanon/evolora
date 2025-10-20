@@ -95,6 +95,8 @@ class EcologyLoop:
     _diversity_snapshot: dict[str, float] | None = field(default=None, init=False, repr=False)
     no_merge_counter: int = 0
     assim_fail_streak: int = 0
+    assim_gating_samples: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    assim_attempt_samples: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
@@ -217,6 +219,12 @@ class EcologyLoop:
         }
         if hasattr(self, "assim_gating_counts"):
             summary["assimilation_gating"] = getattr(self, "assim_gating_counts")
+        samples = getattr(self, "assim_gating_samples_snapshot", None)
+        if samples:
+            summary["assimilation_gating_samples"] = samples
+        attempt_samples = getattr(self, "assim_attempt_samples_snapshot", None)
+        if attempt_samples:
+            summary["assimilation_attempts"] = attempt_samples
         if self.population.assimilation_history:
             history_snapshot: dict[str, dict[str, object]] = {}
             for (organelle_id, family, depth), records in self.population.assimilation_history.items():
@@ -277,6 +285,10 @@ class EcologyLoop:
         )
         cost *= max(0.0, min(self.config.energy.cost_scale, 1.0))
         roi = revenue / max(cost, 1e-6) if cost > 0 else (float("inf") if revenue > 0 else 0.0)
+        if not math.isfinite(roi):
+            roi = 0.0
+        else:
+            roi = max(-10.0, min(roi, 10.0))
         delta = revenue - cost
         energy_after = max(0.0, min(self.host.ledger.energy_cap, energy_before + delta))
         self.host.ledger.set_energy(organelle_id, energy_after)
@@ -346,6 +358,11 @@ class EcologyLoop:
             "insufficient_scores": 0,
             "global_probe_failed": 0,
             "holdout_failed": 0,
+            "topup_success": 0,
+            "topup_roi_blocked": 0,
+            "topup_cap_blocked": 0,
+            "topup_already_sufficient": 0,
+            "topup_disabled": 0,
         }
         merges_per_cell: Dict[GridKey, int] = {}
         per_cell_interval = self.config.assimilation_tuning.per_cell_interval
@@ -353,29 +370,88 @@ class EcologyLoop:
         for genome in list(self.population.population.values()):
             if self.environment.canary_failed(genome.organelle_id):
                 gating["canary_failed"] += 1
+                self._record_assimilation_gate(
+                    reason="canary_failed",
+                    organelle_id=genome.organelle_id,
+                    details={"generation": self.generation_index},
+                )
                 continue
             balance = self.host.ledger.energy_balance(genome.organelle_id)
-            balance = self._maybe_top_up_energy(genome, balance)
+            balance, topup_info = self._maybe_top_up_energy(genome, balance)
+            status = topup_info.get("status", "unknown")
+            if status == "credited":
+                gating["topup_success"] += 1
+            elif status == "skip_low_roi":
+                gating["topup_roi_blocked"] += 1
+            elif status == "skip_no_capacity":
+                gating["topup_cap_blocked"] += 1
+            elif status == "already_sufficient":
+                gating["topup_already_sufficient"] += 1
+            elif status == "disabled":
+                gating["topup_disabled"] += 1
             if balance < self.config.energy.m:
                 gating["low_energy"] += 1
+                self._record_assimilation_gate(
+                    reason="low_energy",
+                    organelle_id=genome.organelle_id,
+                    details={
+                        "generation": self.generation_index,
+                        "balance": balance,
+                        "ticket": self.config.energy.m,
+                        "top_up": topup_info,
+                    },
+                )
                 continue
             best_cell = self.environment.best_cell_score(genome.organelle_id)
             if best_cell is None:
                 gating["no_best_cell"] += 1
+                self._record_assimilation_gate(
+                    reason="no_best_cell",
+                    organelle_id=genome.organelle_id,
+                    details={"generation": self.generation_index},
+                )
                 continue
             cell, ema = best_cell
             key = (genome.organelle_id, cell)
             last_attempt = self.assimilation_cooldown.get(key, -per_cell_interval)
             if self.generation_index - last_attempt < per_cell_interval:
                 gating["cooldown"] += 1
+                self._record_assimilation_gate(
+                    reason="cooldown",
+                    organelle_id=genome.organelle_id,
+                    details={
+                        "generation": self.generation_index,
+                        "cooldown_remaining": per_cell_interval - (self.generation_index - last_attempt),
+                    },
+                )
                 continue
             uplift_gate = ema - self.config.controller.tau
             if uplift_gate < self.config.evolution.assimilation_threshold:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["uplift_below_threshold"] += 1
+                self._record_assimilation_gate(
+                    reason="uplift_below_threshold",
+                    organelle_id=genome.organelle_id,
+                    details={
+                        "generation": self.generation_index,
+                        "ema": ema,
+                        "tau": self.config.controller.tau,
+                        "uplift_gate": uplift_gate,
+                        "threshold": self.config.evolution.assimilation_threshold,
+                    },
+                )
                 continue
             if merges_per_cell.get(cell, 0) >= max_cell_merges:
                 gating["cell_merges_exceeded"] += 1
+                self._record_assimilation_gate(
+                    reason="cell_merges_exceeded",
+                    organelle_id=genome.organelle_id,
+                    details={
+                        "generation": self.generation_index,
+                        "cell": {"family": cell[0], "depth": cell[1]},
+                        "max_cell_merges": max_cell_merges,
+                    },
+                )
                 continue
             scores = self.population.recent_scores(genome.organelle_id, limit=16)
             min_window = max(2, self.config.assimilation_tuning.min_window)
@@ -384,6 +460,15 @@ class EcologyLoop:
             if available < min_window:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["insufficient_scores"] += 1
+                self._record_assimilation_gate(
+                    reason="insufficient_scores",
+                    organelle_id=genome.organelle_id,
+                    details={
+                        "generation": self.generation_index,
+                        "scores_available": len(scores),
+                        "min_window": min_window,
+                    },
+                )
                 continue
             window_len = available
             while window_len > min_window and window_len - step >= min_window:
@@ -402,6 +487,14 @@ class EcologyLoop:
             if len(control) < 2 or len(treatment) < 2:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["insufficient_scores"] += 1
+                self._record_assimilation_gate(
+                    reason="insufficient_scores_window",
+                    organelle_id=genome.organelle_id,
+                    details={
+                        "generation": self.generation_index,
+                        "window_len": window_len,
+                    },
+                )
                 continue
             avg_energy = self.population.average_energy(genome.organelle_id)
             result = self.assimilation.evaluate(
@@ -410,12 +503,32 @@ class EcologyLoop:
                 treatment_scores=treatment,
                 safety_hits=0,
                 energy_cost=avg_energy * len(treatment),
+                energy_balance=balance,
+                energy_top_up=topup_info,
             )
             self.assimilation_cooldown[key] = self.generation_index
             probe_records: list[dict[str, object]] = []
             soup_records: list[dict[str, float]] = []
             holdout_info: dict[str, object] | None = None
             decision_final = False
+            attempt_detail: dict[str, object] = {
+                "generation": self.generation_index,
+                "organelle_id": genome.organelle_id,
+                "cell": {"family": cell[0], "depth": cell[1]},
+                "uplift": float(result.event.uplift),
+                "p_value": float(result.event.p_value),
+                "sample_size": result.event.sample_size,
+                "threshold": self.config.evolution.assimilation_threshold,
+                "uplift_threshold": result.event.uplift_threshold,
+                "p_value_threshold": result.event.p_value_threshold,
+                "control_mean": result.event.control_mean,
+                "treatment_mean": result.event.treatment_mean,
+                "control_std": result.event.control_std,
+                "treatment_std": result.event.treatment_std,
+                "energy_balance": balance,
+                "top_up": dict(topup_info),
+                "passes_stat_test": bool(result.decision),
+            }
             if not result.decision:
                 self.assim_fail_streak += 1
                 self._maybe_decay_assimilation_thresholds()
@@ -425,10 +538,20 @@ class EcologyLoop:
                     genome.organelle_id,
                     [oid for oid in soup_ids if oid != genome.organelle_id],
                 )
+                attempt_detail["holdout"] = holdout_info or {}
+                attempt_detail["holdout_passed"] = bool(holdout_ok)
                 if not holdout_ok:
                     gating["holdout_failed"] += 1
                     self.assim_fail_streak += 1
                     self._maybe_decay_assimilation_thresholds()
+                    self._record_assimilation_gate(
+                        reason="holdout_failed",
+                        organelle_id=genome.organelle_id,
+                        details={
+                            "generation": self.generation_index,
+                            "holdout": holdout_info or {},
+                        },
+                    )
                 elif self._global_probe(genome.organelle_id, cell, gating):
                     probe_records = self._run_hf_probes(genome.organelle_id)
                     soup_records = self._apply_lora_soup_merge(
@@ -444,6 +567,13 @@ class EcologyLoop:
                     merges_per_cell[cell] = merges_per_cell.get(cell, 0) + 1
                     decision_final = True
                     self.assim_fail_streak = 0
+                    attempt_detail["global_probe_passed"] = True
+                else:
+                    attempt_detail["global_probe_passed"] = False
+            else:
+                attempt_detail["holdout_passed"] = False
+                attempt_detail["global_probe_passed"] = False
+            self._record_assimilation_attempt(attempt_detail)
             if self.sink:
                 event = result.event.model_copy(
                     update={
@@ -466,6 +596,17 @@ class EcologyLoop:
                     "roi": float(self.population.average_roi(genome.organelle_id)),
                     "probes": probe_records,
                     "holdout": holdout_info,
+                    "sample_size": result.event.sample_size,
+                    "control_mean": result.event.control_mean,
+                    "control_std": result.event.control_std,
+                    "treatment_mean": result.event.treatment_mean,
+                    "treatment_std": result.event.treatment_std,
+                    "energy_balance": result.event.energy_balance,
+                    "energy_top_up": (
+                        result.event.energy_top_up.model_dump(mode="json")
+                        if result.event.energy_top_up is not None
+                        else None
+                    ),
                 },
             )
         for organelle_id in removable:
@@ -474,9 +615,44 @@ class EcologyLoop:
         # expose gating counts for diagnostics in generation summary
         try:
             self.assim_gating_counts = gating  # type: ignore[attr-defined]
+            self.assim_gating_samples_snapshot = list(self.assim_gating_samples[-24:])  # type: ignore[attr-defined]
+            self.assim_attempt_samples_snapshot = list(self.assim_attempt_samples[-24:])  # type: ignore[attr-defined]
         except Exception:
             pass
         return merges
+
+    @staticmethod
+    def _sanitize_telemetry(value: object) -> object:
+        if isinstance(value, float):
+            if math.isfinite(value):
+                return float(value)
+            return 0.0
+        if isinstance(value, (int, str, bool)) or value is None:
+            return value
+        if isinstance(value, dict):
+            return {key: EcologyLoop._sanitize_telemetry(val) for key, val in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [EcologyLoop._sanitize_telemetry(item) for item in value]
+        return str(value)
+
+    def _record_assimilation_gate(self, reason: str, organelle_id: str, details: dict[str, object]) -> None:
+        limit = max(1, int(getattr(self.config.assimilation_tuning, "gating_snapshot_limit", 48)))
+        sample = {
+            "generation": self.generation_index,
+            "organelle_id": organelle_id,
+            "reason": reason,
+            "details": self._sanitize_telemetry(details),
+        }
+        self.assim_gating_samples.append(sample)
+        if len(self.assim_gating_samples) > limit:
+            self.assim_gating_samples = self.assim_gating_samples[-limit:]
+
+    def _record_assimilation_attempt(self, details: dict[str, object]) -> None:
+        limit = max(1, int(getattr(self.config.assimilation_tuning, "gating_snapshot_limit", 48)))
+        sample = self._sanitize_telemetry(details)
+        self.assim_attempt_samples.append(sample)
+        if len(self.assim_attempt_samples) > limit:
+            self.assim_attempt_samples = self.assim_attempt_samples[-limit:]
 
     def _auto_tune_assimilation_energy(self, summary: dict[str, object]) -> None:
         tuning = self.config.assimilation_tuning
@@ -583,21 +759,45 @@ class EcologyLoop:
             "decay_applied": decay_applied,
         }
 
-    def _maybe_top_up_energy(self, genome: Genome, balance: float) -> float:
+    def _maybe_top_up_energy(self, genome: Genome, balance: float) -> tuple[float, dict[str, float | str]]:
         tuning = self.config.assimilation_tuning
         floor = getattr(tuning, "energy_floor", 0.0)
-        if floor <= 0.0 or balance >= floor:
-            return balance
         roi_threshold = getattr(tuning, "energy_floor_roi", 0.0)
+        roi_bonus = getattr(tuning, "energy_topup_roi_bonus", 0.0)
+        effective_threshold = max(0.0, roi_threshold - roi_bonus)
+        info: dict[str, float | str] = {
+            "status": "disabled" if floor <= 0.0 else "pending",
+            "before": float(balance),
+            "after": float(balance),
+            "floor": float(floor),
+            "roi_threshold": float(roi_threshold),
+            "roi_threshold_effective": float(effective_threshold),
+            "credited": 0.0,
+        }
+        if floor <= 0.0:
+            return balance, info
+        if balance >= floor:
+            info["status"] = "already_sufficient"
+            info["after"] = float(balance)
+            return balance, info
         roi = self.population.average_roi(genome.organelle_id, limit=5)
-        if roi < roi_threshold:
-            return balance
+        info["roi"] = float(roi)
+        if roi < effective_threshold:
+            info["status"] = "skip_low_roi"
+            return balance, info
         ledger = self.host.ledger
         available = max(0.0, min(floor - balance, ledger.energy_cap - balance))
         if available <= 0.0:
-            return balance
+            info["status"] = "skip_no_capacity"
+            return balance, info
         ledger.credit_energy(genome.organelle_id, available)
-        return ledger.energy_balance(genome.organelle_id)
+        new_balance = ledger.energy_balance(genome.organelle_id)
+        info["status"] = "credited"
+        info["credited"] = float(new_balance - balance)
+        info["after"] = float(new_balance)
+        info["floor"] = float(floor)
+        info["roi_threshold"] = float(roi_threshold)
+        return new_balance, info
 
     def _load_holdout_tasks(self) -> list[EvaluationTask]:
         if self._holdout_tasks_cache is not None:

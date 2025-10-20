@@ -6,6 +6,19 @@ host:
   max_lora_rank: 8
   max_sequence_length: 256
 
+grid:
+  families:
+    - math
+    - math.sequence
+    - json_repair
+    - string.sort
+    - word.count
+    - logic.bool
+  depths:
+    - short
+    - medium
+    - long
+
 energy:
   Emax: 6.0
   m: 0.6
@@ -35,6 +48,8 @@ assimilation_tuning:
   energy_floor_roi: 0.0
   energy_floor_base: 0.6
   energy_floor_roi_base: 0.9
+  energy_topup_roi_bonus: 0.2
+  gating_snapshot_limit: 64
   holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
   holdout_sample_size: 3
   holdout_margin: 0.02

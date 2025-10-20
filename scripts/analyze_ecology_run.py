@@ -76,6 +76,10 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         last = eval_records[-1]
         eval_weight = last.get("reward_weight")
 
+    latest_record = records[-1]
+    latest_gating_samples = latest_record.get("assimilation_gating_samples", [])
+    latest_attempts = latest_record.get("assimilation_attempts", [])
+
     return {
         "generations": len(records),
         "avg_roi_mean": mean(roi),
@@ -111,6 +115,8 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "diversity_effective_population_mean": diversity_effective_mean,
         "diversity_max_species_share_mean": diversity_max_share_mean,
         "diversity_enforced_rate": diversity_enforced_rate,
+        "assimilation_gating_samples": latest_gating_samples[-5:],
+        "assimilation_attempts": latest_attempts[-5:],
     }
 
 
@@ -218,6 +224,33 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         lines.append(
             f"- Assimilation tests: {assimilation['events']} (passes {assimilation['passes']}, failures {assimilation['failures']})"
         )
+    gating_samples = summary.get("assimilation_gating_samples") or []
+    if gating_samples:
+        lines.append("- Recent gating snapshots:")
+        for sample in gating_samples:
+            reason = sample.get("reason")
+            organelle = sample.get("organelle_id")
+            generation = sample.get("generation")
+            details = json.dumps(sample.get("details", {}), sort_keys=True)
+            lines.append(f"  - gen {generation:03d} {organelle}: {reason} | {details}")
+    attempt_samples = summary.get("assimilation_attempts") or []
+    if attempt_samples:
+        lines.append("- Recent assimilation attempts:")
+        for attempt in attempt_samples:
+            generation = int(attempt.get("generation", 0))
+            organelle = attempt.get("organelle_id")
+            cell = attempt.get("cell", {})
+            uplift = float(attempt.get("uplift", 0.0) or 0.0)
+            p_value = float(attempt.get("p_value", 0.0) or 0.0)
+            passed = bool(attempt.get("passes_stat_test"))
+            holdout_passed = bool(attempt.get("holdout_passed"))
+            global_passed = bool(attempt.get("global_probe_passed"))
+            top_up = attempt.get("top_up", {})
+            top_up_status = top_up.get("status")
+            lines.append(
+                f"  - gen {generation:03d} {organelle}@{cell.get('family')}:{cell.get('depth')} "
+                f"uplift={uplift:.3f} p={p_value:.3f} stat_pass={passed} holdout={holdout_passed} global={global_passed} topup={top_up_status}"
+            )
     else:
         lines.append("- Assimilation tests: none recorded")
     if summary.get("diversity_samples", 0):

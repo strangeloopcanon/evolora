@@ -38,16 +38,27 @@ def _build_loop(roi: float, balance: float = 0.2) -> tuple[EcologyLoop, Genome, 
 def test_energy_topup_applies_when_roi_high() -> None:
     loop, genome, ledger = _build_loop(roi=0.4)
     before = ledger.energy_balance(genome.organelle_id)
-    boosted = loop._maybe_top_up_energy(genome, before)
+    boosted, info = loop._maybe_top_up_energy(genome, before)
     assert pytest.approx(boosted, abs=1e-6) == 1.0
+    assert info["status"] == "credited"
     assert ledger.energy_balance(genome.organelle_id) == pytest.approx(boosted, abs=1e-6)
 
 
 def test_energy_topup_skipped_without_roi_signal() -> None:
     loop, genome, ledger = _build_loop(roi=0.05)
     before = ledger.energy_balance(genome.organelle_id)
-    boosted = loop._maybe_top_up_energy(genome, before)
+    boosted, info = loop._maybe_top_up_energy(genome, before)
     assert boosted == pytest.approx(before, abs=1e-6)
+    assert info["status"] == "skip_low_roi"
+
+
+def test_energy_topup_bonus_relaxes_threshold() -> None:
+    loop, genome, ledger = _build_loop(roi=0.08)
+    loop.config.assimilation_tuning.energy_topup_roi_bonus = 0.05
+    before = ledger.energy_balance(genome.organelle_id)
+    boosted, info = loop._maybe_top_up_energy(genome, before)
+    assert info["status"] == "credited"
+    assert boosted > before
 
 
 def test_auto_tune_energy_floor_updates_config() -> None:

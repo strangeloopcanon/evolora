@@ -39,7 +39,7 @@ class GridTask:
         success = False
         task_reward = 0.0
 
-        if self.family == "math":
+        if self.family in {"math", "math.sequence"}:
             try:
                 predicted = float(clean.split()[0]) if " " in clean else float(clean)
             except ValueError:
@@ -66,6 +66,17 @@ class GridTask:
                 success = isinstance(parsed, list) and parsed == self.target
             except json.JSONDecodeError:
                 success = False
+            task_reward = 1.0 if success else 0.0
+
+        elif self.family == "logic.bool":
+            normalized = clean.strip().lower().rstrip(".")
+            if normalized in {"true", "false"}:
+                predicted_bool = normalized == "true"
+            elif normalized in {"yes", "no"}:
+                predicted_bool = normalized == "yes"
+            else:
+                predicted_bool = None
+            success = predicted_bool is not None and predicted_bool == bool(self.target)
             task_reward = 1.0 if success else 0.0
 
         novelty = min(0.1, self.difficulty * 0.1)
@@ -115,13 +126,34 @@ class EnvironmentController:
         self.canary_cfg = canary_cfg
         self.rng = random.Random(seed)
         self.cells: Dict[GridKey, GridCellState] = {}
+        self.bandit_counts: Dict[GridKey, int] = {}
+        self.bandit_success: Dict[GridKey, float] = {}
+        self.bandit_c = 1.2
         for family in grid_config.families:
             for depth in grid_config.depths:
-                self.cells[(family, depth)] = GridCellState(price=pricing_cfg.base)
+                key = (family, depth)
+                self.cells[key] = GridCellState(price=pricing_cfg.base)
+                self.bandit_counts[key] = 0
+                self.bandit_success[key] = 0.0
 
     def sample_cell(self) -> GridKey:
         keys = list(self.cells.keys())
-        return self.rng.choice(keys)
+        if not keys:
+            raise RuntimeError("No cells configured for sampling")
+        # Ensure each cell is explored at least once
+        for key in keys:
+            if self.bandit_counts.get(key, 0) == 0:
+                self.bandit_counts[key] = 1
+                return key
+        # Occasional random exploration
+        if self.rng.random() < 0.05:
+            choice = self.rng.choice(keys)
+            self.bandit_counts[choice] += 1
+            return choice
+        total_pulls = sum(self.bandit_counts.values())
+        best_cell = max(keys, key=lambda key: self._bandit_score(key, total_pulls))
+        self.bandit_counts[best_cell] += 1
+        return best_cell
 
     def update(self, cell: GridKey, success: bool) -> None:
         state = self.cells[cell]
@@ -134,6 +166,7 @@ class EnvironmentController:
             self.pricing.max,
             max(self.pricing.min, self.pricing.base + self.pricing.k * (tau - state.success_ema)),
         )
+        self.bandit_success[cell] = self.bandit_success.get(cell, 0.0) + (1.0 if success else 0.0)
 
     def get_state(self, cell: GridKey) -> GridCellState:
         return deepcopy(self.cells[cell])
@@ -175,6 +208,16 @@ class EnvironmentController:
                     self.pricing.max,
                     max(self.pricing.min, self.pricing.base + self.pricing.k * (self.ctrl.tau - state.success_ema)),
                 )
+
+    def _bandit_score(self, cell: GridKey, total_pulls: int) -> float:
+        pulls = max(1, self.bandit_counts.get(cell, 0))
+        reward_total = self.bandit_success.get(cell, 0.0)
+        empirical_success = reward_total / pulls
+        price = self.cells[cell].price
+        roi_estimate = price * empirical_success
+        exploration_bonus = self.bandit_c * math.sqrt(math.log(total_pulls + 1) / pulls)
+        diversity_bonus = max(0.0, 1.0 - self.cells[cell].success_ema) * 0.1
+        return roi_estimate + exploration_bonus + diversity_bonus
 
 
 class GridEnvironment:
@@ -351,6 +394,82 @@ class GridEnvironment:
                 price=price,
                 target=target,
                 family="json_repair",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "logic.bool":
+            literal_count = {"short": 2, "medium": 3, "long": 4}.get(depth, 3)
+            values = [self.rng.choice([True, False]) for _ in range(literal_count)]
+            operators = [self.rng.choice(["and", "or"]) for _ in range(max(literal_count - 1, 0))]
+            parts: List[str] = []
+            result_value: Optional[bool] = None
+            for idx, value in enumerate(values):
+                literal = "TRUE" if value else "FALSE"
+                actual = value
+                if self.rng.random() < 0.3:
+                    literal = f"NOT {literal}"
+                    actual = not value
+                if idx == 0:
+                    parts.append(literal)
+                    result_value = actual
+                    continue
+                op = operators[idx - 1]
+                parts.append(op.upper())
+                parts.append(literal)
+                if op == "and":
+                    result_value = bool(result_value and actual)
+                else:
+                    result_value = bool(result_value or actual)
+            expression = " ".join(parts)
+            prompt = (
+                "Evaluate the logical expression and respond with 'True' or 'False': "
+                f"{expression}"
+            )
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt,
+                price=price,
+                target=bool(result_value),
+                family="logic.bool",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "math.sequence":
+            length_map = {"short": 3, "medium": 4, "long": 5}
+            length = length_map.get(depth, 4)
+            pattern = self.rng.choice(["arithmetic", "geometric"])
+            base_start = max(2, int(2 + difficulty * 10))
+            start = self.rng.randint(2, base_start)
+            if pattern == "arithmetic":
+                step = self.rng.randint(1, max(2, int(3 + difficulty * 8)))
+                sequence = [start + i * step for i in range(length)]
+                next_value = start + length * step
+            else:
+                ratio_candidates = [2, 3]
+                ratio = self.rng.choice(ratio_candidates)
+                sequence = [start * (ratio**i) for i in range(length)]
+                next_value = start * (ratio**length)
+            prompt = (
+                "Given the sequence "
+                + ", ".join(str(n) for n in sequence)
+                + ", what is the next number? Respond with the number only."
+            )
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt,
+                price=price,
+                target=float(next_value),
+                family="math.sequence",
                 depth=depth,
                 difficulty=difficulty,
                 canary=canary,

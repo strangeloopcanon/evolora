@@ -45,7 +45,16 @@ class EvolutionConfig(BaseModel):
 
 
 class GridConfig(BaseModel):
-    families: list[str] = Field(default_factory=lambda: ["math", "json_repair"])
+    families: list[str] = Field(
+        default_factory=lambda: [
+            "math",
+            "json_repair",
+            "string.sort",
+            "word.count",
+            "logic.bool",
+            "math.sequence",
+        ]
+    )
     depths: list[str] = Field(default_factory=lambda: ["short", "medium", "long"])
 
 
@@ -163,6 +172,16 @@ class AssimilationTuningConfig(BaseModel):
         0.02,
         ge=0.0,
         description="Margin reduction applied on each holdout retry.",
+    )
+    energy_topup_roi_bonus: float = Field(
+        0.0,
+        ge=0.0,
+        description="Amount subtracted from the ROI threshold when deciding on energy top-ups.",
+    )
+    gating_snapshot_limit: int = Field(
+        48,
+        ge=1,
+        description="Maximum number of assimilation gating/attempt samples retained per run.",
     )
 
 
