@@ -61,6 +61,7 @@ assimilation_tuning:
   holdout_margin_step: 0.02
 
 evolution:
+  mutation_rate: 0.32
   assimilation_threshold: 0.0    # allow neutral uplift
   assimilation_p_value: 0.25     # more permissive early merges
   max_merges_per_gen: 6
@@ -74,7 +75,7 @@ limits:
 meta:
   enabled: true
   interval: 5
-  mutation_scale: 0.1
+  mutation_scale: 0.18
   catastrophe_interval: 0
   catastrophe_scale: 0.6
 

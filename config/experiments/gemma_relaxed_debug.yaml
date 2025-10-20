@@ -51,6 +51,7 @@ assimilation_tuning:
   adaptive_floor: 0.0003
 
 evolution:
+  mutation_rate: 0.35
   assimilation_threshold: 0.0
   assimilation_p_value: 0.25
   max_merges_per_gen: 6
