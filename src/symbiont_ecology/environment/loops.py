@@ -425,7 +425,14 @@ class EcologyLoop:
                     },
                 )
                 continue
-            uplift_gate = ema - self.config.controller.tau
+            tau = self.config.controller.tau
+            if family in {"math", "math.sequence"}:
+                tau = min(0.6, tau + 0.08)
+            elif family in {"logic.bool", "word.count"}:
+                tau = min(0.58, tau + 0.06)
+            elif family == "json_repair":
+                tau = min(0.57, tau + 0.05)
+            uplift_gate = ema - tau
             if uplift_gate < self.config.evolution.assimilation_threshold:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["uplift_below_threshold"] += 1
@@ -454,8 +461,14 @@ class EcologyLoop:
                 )
                 continue
             scores = self.population.recent_scores(genome.organelle_id, limit=16)
-            min_window = max(2, self.config.assimilation_tuning.min_window)
+            min_window = max(4, self.config.assimilation_tuning.min_window)
+            if family in {"math", "math.sequence"}:
+                min_window = max(min_window, 8)
+            elif family in {"logic.bool", "word.count"}:
+                min_window = max(min_window, 6)
             step = max(2, self.config.assimilation_tuning.window_step)
+            if family in {"math", "math.sequence"}:
+                step = max(step, 4)
             available = len(scores) - (len(scores) % 2)
             if available < min_window:
                 self.assimilation_cooldown[key] = self.generation_index
