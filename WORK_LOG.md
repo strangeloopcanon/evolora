@@ -104,3 +104,7 @@
 - Config: config/experiments/gemma_relaxed.yaml updated with adaptive guard knobs.
 - Tests: AGENT_MODE=baseline make test VENV=.venv311
 
+# Run 2025-10-19 – assimilation guard loosened
+- Adjusted config: assimilation_threshold→0.0, seed_scale 0.8, holdout retries 3 with step 0.02, max merges/gen 6.
+- Tests: AGENT_MODE=baseline make test VENV=.venv311
+

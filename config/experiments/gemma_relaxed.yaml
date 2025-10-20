@@ -25,7 +25,7 @@ pricing:
 assimilation_tuning:
   per_cell_interval: 1    # attempt every generation per cell
   max_merges_per_cell: 3
-  seed_scale: 0.6
+  seed_scale: 0.8
   soup_size: 4
   hf_prompts:
     - "Summarize your solution for a non-technical reviewer."
@@ -42,13 +42,13 @@ assimilation_tuning:
   window_step: 2
   adaptive_decay: 0.82
   adaptive_floor: 0.0003
-  holdout_max_retries: 2
-  holdout_margin_step: 0.015
+  holdout_max_retries: 3
+  holdout_margin_step: 0.02
 
 evolution:
-  assimilation_threshold: 0.001  # easier early gate
-  assimilation_p_value: 0.2      # more permissive early merges
-  max_merges_per_gen: 4
+  assimilation_threshold: 0.0    # allow neutral uplift
+  assimilation_p_value: 0.25     # more permissive early merges
+  max_merges_per_gen: 6
   min_population: 4
   max_population: 16
 
