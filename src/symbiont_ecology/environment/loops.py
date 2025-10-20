@@ -412,6 +412,7 @@ class EcologyLoop:
                 )
                 continue
             cell, ema = best_cell
+            family, depth = cell
             key = (genome.organelle_id, cell)
             last_attempt = self.assimilation_cooldown.get(key, -per_cell_interval)
             if self.generation_index - last_attempt < per_cell_interval:
@@ -461,15 +462,20 @@ class EcologyLoop:
                 )
                 continue
             scores = self.population.recent_scores(genome.organelle_id, limit=16)
-            min_window = max(4, self.config.assimilation_tuning.min_window)
+            base_min = max(4, self.config.assimilation_tuning.min_window)
+            desired_min = base_min
             if family in {"math", "math.sequence"}:
-                min_window = max(min_window, 8)
+                desired_min = max(desired_min, 8)
             elif family in {"logic.bool", "word.count"}:
-                min_window = max(min_window, 6)
+                desired_min = max(desired_min, 6)
+            available = len(scores) - (len(scores) % 2)
+            if available < base_min:
+                min_window = base_min
+            else:
+                min_window = min(desired_min, available)
             step = max(2, self.config.assimilation_tuning.window_step)
             if family in {"math", "math.sequence"}:
                 step = max(step, 4)
-            available = len(scores) - (len(scores) % 2)
             if available < min_window:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["insufficient_scores"] += 1
