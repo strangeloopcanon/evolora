@@ -94,6 +94,7 @@ class EcologyLoop:
     _holdout_tasks_cache: list[EvaluationTask] | None = field(default=None, init=False, repr=False)
     _diversity_snapshot: dict[str, float] | None = field(default=None, init=False, repr=False)
     no_merge_counter: int = 0
+    assim_fail_streak: int = 0
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
@@ -240,6 +241,7 @@ class EcologyLoop:
         )
         if self._diversity_snapshot is not None:
             summary["diversity"] = dict(self._diversity_snapshot)
+        summary["assimilation_fail_streak"] = self.assim_fail_streak
         self._auto_tune_assimilation_energy(summary)
         if self.evaluation_manager and self.generation_index % self.evaluation_manager.config.cadence == 0:
             evaluation_result = self.evaluation_manager.evaluate(self.host, self.environment)
@@ -375,14 +377,28 @@ class EcologyLoop:
             if merges_per_cell.get(cell, 0) >= max_cell_merges:
                 gating["cell_merges_exceeded"] += 1
                 continue
-            scores = self.population.recent_scores(genome.organelle_id, limit=8)
-            if len(scores) < 4:
+            scores = self.population.recent_scores(genome.organelle_id, limit=16)
+            min_window = max(2, self.config.assimilation_tuning.min_window)
+            step = max(2, self.config.assimilation_tuning.window_step)
+            available = len(scores) - (len(scores) % 2)
+            if available < min_window:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["insufficient_scores"] += 1
                 continue
-            split = len(scores) // 2
-            control = scores[:split]
-            treatment = scores[split:]
+            window_len = available
+            while window_len > min_window and window_len - step >= min_window:
+                window_len_candidate = window_len - step
+                if window_len_candidate % 2 != 0:
+                    window_len_candidate -= 1
+                if window_len_candidate < min_window:
+                    break
+                window_len = window_len_candidate
+                break
+            start_idx = len(scores) - window_len
+            window = scores[start_idx:]
+            split = window_len // 2
+            control = window[:split]
+            treatment = window[split:]
             if len(control) < 2 or len(treatment) < 2:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["insufficient_scores"] += 1
@@ -400,6 +416,9 @@ class EcologyLoop:
             soup_records: list[dict[str, float]] = []
             holdout_info: dict[str, object] | None = None
             decision_final = False
+            if not result.decision:
+                self.assim_fail_streak += 1
+                self._maybe_decay_assimilation_thresholds()
             if result.decision and (capped is None or merges < capped):
                 soup_ids, stats_map = self._select_soup_members(cell, genome.organelle_id)
                 holdout_ok, holdout_info = self._holdout_accepts(
@@ -408,6 +427,8 @@ class EcologyLoop:
                 )
                 if not holdout_ok:
                     gating["holdout_failed"] += 1
+                    self.assim_fail_streak += 1
+                    self._maybe_decay_assimilation_thresholds()
                 elif self._global_probe(genome.organelle_id, cell, gating):
                     probe_records = self._run_hf_probes(genome.organelle_id)
                     soup_records = self._apply_lora_soup_merge(
@@ -422,6 +443,7 @@ class EcologyLoop:
                     merges += 1
                     merges_per_cell[cell] = merges_per_cell.get(cell, 0) + 1
                     decision_final = True
+                    self.assim_fail_streak = 0
             if self.sink:
                 event = result.event.model_copy(
                     update={
@@ -645,22 +667,32 @@ class EcologyLoop:
         return sum(rois) / len(rois)
 
     def _holdout_accepts(self, candidate_id: str, mate_ids: list[str]) -> tuple[bool, dict[str, object] | None]:
-        tasks = self._sample_holdout_tasks()
-        if not tasks:
-            return True, None
-        candidate_roi = self._evaluate_holdout_roi(candidate_id, tasks)
-        baseline_rois = [self._evaluate_holdout_roi(mid, tasks) for mid in mate_ids]
-        baseline_rois = [roi for roi in baseline_rois if math.isfinite(roi)]
-        best_baseline = max(baseline_rois, default=float("-inf"))
-        margin = self.config.assimilation_tuning.holdout_margin
-        accepted = candidate_roi >= (best_baseline if math.isfinite(best_baseline) else 0.0) + margin
-        info: dict[str, object] = {
-            "candidate_roi": candidate_roi,
-            "baseline_roi": best_baseline if math.isfinite(best_baseline) else None,
-            "margin": margin,
-            "tasks": len(tasks),
-        }
-        return accepted, info
+        cfg = self.config.assimilation_tuning
+        retries = 0
+        margin = cfg.holdout_margin
+        info: dict[str, object] | None = None
+        while retries <= cfg.holdout_max_retries:
+            tasks = self._sample_holdout_tasks()
+            if not tasks:
+                return True, info
+            candidate_roi = self._evaluate_holdout_roi(candidate_id, tasks)
+            baseline_rois = [self._evaluate_holdout_roi(mid, tasks) for mid in mate_ids]
+            baseline_rois = [roi for roi in baseline_rois if math.isfinite(roi)]
+            best_baseline = max(baseline_rois, default=float("-inf"))
+            target = (best_baseline if math.isfinite(best_baseline) else 0.0) + margin
+            accepted = candidate_roi >= target
+            info = {
+                "candidate_roi": candidate_roi,
+                "baseline_roi": best_baseline if math.isfinite(best_baseline) else None,
+                "margin": margin,
+                "tasks": len(tasks),
+                "retries": retries,
+            }
+            if accepted:
+                return True, info
+            retries += 1
+            margin = max(0.0, margin - cfg.holdout_margin_step)
+        return False, info
 
     def _species_partition(self) -> dict[tuple[tuple[str, int], ...], list[str]]:
         mapping: dict[tuple[tuple[str, int], ...], list[str]] = {}
@@ -758,6 +790,19 @@ class EcologyLoop:
         reward -= 0.01 * cooldown
         reward -= 0.005 * insufficient
         return reward
+
+    def _maybe_decay_assimilation_thresholds(self) -> None:
+        cfg = self.config.assimilation_tuning
+        if self.assim_fail_streak <= 0:
+            return
+        if self.assim_fail_streak % 10 != 0:
+            return
+        decay = max(0.5, min(cfg.adaptive_decay, 1.0))
+        new_threshold = max(cfg.adaptive_floor, self.config.evolution.assimilation_threshold * decay)
+        self.config.evolution.assimilation_threshold = new_threshold
+        self.assimilation.update_thresholds(uplift_threshold=new_threshold)
+        # relax p-value marginally when decay triggers
+        self.config.evolution.assimilation_p_value = min(0.5, self.config.evolution.assimilation_p_value * (1.0 + (1.0 - decay)))
 
     def _collect_human_feedback(
         self, prompt: str, responses: dict[str, tuple[str, float]]

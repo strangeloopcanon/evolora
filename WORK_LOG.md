@@ -98,3 +98,9 @@
 - Command: AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed.yaml --generations 100 --batch-size 2 --output artifacts_gemma_relaxed_autotune_v5
 - Outcome: ROI mean 0.66 (max 2.99), merges=0, assimilation attempts 14 (failures: uplift 286, insufficient 67, holdout 1)
 
+# Run 2025-10-19 – assimilation tuning pre-run
+- Adjusted assimilation windows (even-length up to 16), adaptive uplift decay, holdout retries, and larger soups.
+- Added survival resilience regression tests (tests/test_survival_resilience.py).
+- Config: config/experiments/gemma_relaxed.yaml updated with adaptive guard knobs.
+- Tests: AGENT_MODE=baseline make test VENV=.venv311
+

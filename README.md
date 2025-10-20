@@ -104,6 +104,7 @@ Pull requests welcome! Please:
 - open an issue (or `bd create`) before large feature work,
 - keep gitignored paths (artifacts, virtualenvs, caches) out of commits,
 - run the full test suite (`AGENT_MODE=baseline make test VENV=.venv311`),
+- run the survival regression (`tests/test_survival_resilience.py`) after touching economics,
 - include analysis notes or updated documentation when behaviour changes.
 
 Happy evolving — let’s see if this Cambrian-era colony learns something genuinely new.

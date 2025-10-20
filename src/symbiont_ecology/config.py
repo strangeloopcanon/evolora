@@ -129,9 +129,40 @@ class AssimilationTuningConfig(BaseModel):
         description="Number of holdout tasks sampled per assimilation gate.",
     )
     holdout_margin: float = Field(
-        0.0,
+        0.05,
         ge=0.0,
         description="Minimum ROI improvement on holdout tasks required to accept a merge.",
+    )
+    min_window: int = Field(
+        4,
+        ge=2,
+        description="Minimum even window length of recent scores used for uplift testing.",
+    )
+    window_step: int = Field(
+        2,
+        ge=2,
+        description="Step size when expanding the score window for assimilation tests.",
+    )
+    adaptive_decay: float = Field(
+        0.85,
+        ge=0.5,
+        le=1.0,
+        description="Multiplicative decay applied to uplift threshold when merges keep failing.",
+    )
+    adaptive_floor: float = Field(
+        0.0005,
+        ge=0.0,
+        description="Floor for the adaptive uplift threshold.",
+    )
+    holdout_max_retries: int = Field(
+        1,
+        ge=0,
+        description="Number of additional holdout retries before rejecting a merge.",
+    )
+    holdout_margin_step: float = Field(
+        0.02,
+        ge=0.0,
+        description="Margin reduction applied on each holdout retry.",
     )
 
 

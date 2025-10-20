@@ -38,6 +38,12 @@ assimilation_tuning:
   holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
   holdout_sample_size: 3
   holdout_margin: 0.02
+  min_window: 4
+  window_step: 2
+  adaptive_decay: 0.82
+  adaptive_floor: 0.0003
+  holdout_max_retries: 2
+  holdout_margin_step: 0.015
 
 evolution:
   assimilation_threshold: 0.001  # easier early gate
