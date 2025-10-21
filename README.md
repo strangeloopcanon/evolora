@@ -17,6 +17,12 @@ If the colony keeps earning more than it spends, the population should drift tow
 - **Cambrian bloom without fossils:** relaxing energy taxes let ROI climb toward 1.0 and the population stayed solvent, yet every assimilation attempt still failed—adaptors hoarded cheap wins but showed no measurable uplift.
 - **Modern diagnostics:** fresh telemetry reveals the culprits: only a couple of organelles clear the energy gate each generation, their recent score windows rarely trend upward, and holdout checks never see improvement. We now know energy scarcity isn’t the blocker—the ecology needs richer signal (better tasks, smarter allocation) before any organelle can prove it deserves to merge.
 
+## Latest Milestone (Oct 2025)
+- 100-generation `gemma_relaxed_autotune_v8` run averaged ROI 3.49 (peaking at 7.49) with zero bankruptcies; energy floor decayed to ≈0.65 while 133 top-ups kept exploration healthy.
+- Three `word.count:medium` organelles cleared the uplift + holdout gate, merged via LoRA soups, and passed the HF probe—our first confirmed assimilation successes.
+- Most failures now stall on uplift (<0.03 margin) rather than probes or holdouts, so the ecology is profit-rich but still chasing deeper skill gains.
+- External evaluation accuracy remains 0/60; next experiments focus on tougher word-count curricula and broader mutation operators to turn internal uplift into holdout wins.
+
 ## Evolution Glossary
 | Term | In-code meaning | Evolution analogy |
 | --- | --- | --- |

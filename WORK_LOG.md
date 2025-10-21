@@ -108,3 +108,8 @@
 - Adjusted config: assimilation_threshold→0.0, seed_scale 0.8, holdout retries 3 with step 0.02, max merges/gen 6.
 - Tests: AGENT_MODE=baseline make test VENV=.venv311
 
+# Run 2025-10-20 – first successful assimilations
+- Config: `config/experiments/gemma_relaxed.yaml` (mutation_rate 0.32, per-cell interval 2, holdout sample 4 with margin 0.05).
+- Command: `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed.yaml --generations 100 --batch-size 2 --output artifacts_gemma_relaxed_autotune_v8`
+- Outcome: ROI mean 3.49 (max 7.49), 3 assimilation passes on `word.count:medium` cells (sample_size 2–4, uplift 0.18–0.60) with HF probes clean; 86 attempts total, rest failed on sub-threshold uplift. Evaluation accuracy still 0/60.
+- Notes: Energy floor decayed to 0.65 with 133 top-ups and no bankruptcies. Next up—harder word-count curricula and broader mutations to push uplift onto external holdouts.
