@@ -344,79 +344,7 @@ class GridEnvironment:
             )
 
         if family == "word.count":
-            length_map = {"short": (4, 6), "medium": (9, 13), "long": (16, 24)}
-            min_len, max_len = length_map.get(depth, length_map["medium"])
-            length = self.rng.randint(min_len, max_len)
-            common_words = [
-                "adaptive",
-                "agents",
-                "align",
-                "biosphere",
-                "clusters",
-                "coordinate",
-                "feedback",
-                "gradients",
-                "harvest",
-                "iterate",
-                "learning",
-                "morphology",
-                "novel",
-                "organelles",
-                "pipeline",
-                "quanta",
-                "receptors",
-                "signals",
-                "symbiotic",
-                "tensors",
-                "uplift",
-                "vectors",
-                "workflow",
-                "yield",
-                "zenith",
-            ]
-            connectors = [
-                "and",
-                "while",
-                "because",
-                "whenever",
-                "although",
-                "despite",
-                "before",
-                "after",
-            ]
-            numeric_tokens = ["3", "five", "seven", "twelve", "30%", "half", "twice"]
-            emphasis_tokens = ["really", "remarkably", "carefully", "boldly"]
-
-            tokens: list[str] = []
-            for idx in range(length):
-                pool = common_words
-                if idx > 0 and self.rng.random() < 0.15:
-                    pool = connectors
-                elif self.rng.random() < 0.12:
-                    pool = numeric_tokens
-                word = self.rng.choice(pool)
-                if self.rng.random() < 0.1:
-                    word = f"{self.rng.choice(['bio', 'neuro', 'meta', 'eco'])}-{word}"
-                if self.rng.random() < 0.12:
-                    word = word.upper()
-                if self.rng.random() < 0.18:
-                    word = f"{word}{self.rng.choice([',', ';', ':'])}"
-                if self.rng.random() < 0.12:
-                    word = f"{word}({self.rng.choice(emphasis_tokens)})"
-                tokens.append(word)
-
-            if tokens:
-                tokens[0] = tokens[0][0].upper() + tokens[0][1:]
-            sentence = " ".join(tokens)
-            if self.rng.random() < 0.25:
-                sentence = f"\"{sentence}\""
-            if self.rng.random() < 0.3:
-                spaces = [i for i, ch in enumerate(sentence) if ch == " "]
-                if spaces:
-                    idx = self.rng.choice(spaces)
-                    sentence = sentence[:idx] + "  " + sentence[idx + 1 :]
-            sentence = sentence.rstrip(",;: ")
-            sentence += self.rng.choice([".", "!", "?"])
+            sentence = self._generate_word_count_sentence(depth)
             prompt = f"Count the number of words in the sentence: '{sentence}'. Respond with an integer."
             target = len(sentence.split())
             return GridTask(
@@ -521,22 +449,109 @@ class GridEnvironment:
                 + ", ".join(str(n) for n in sequence)
                 + ", what is the next number? Respond with the number only."
             )
-            return GridTask(
-                task_id=task_id,
-                cell=cell,
-                prompt=prompt,
-                price=price,
-                target=float(next_value),
-                family="math.sequence",
-                depth=depth,
-                difficulty=difficulty,
-                canary=canary,
-                reward_bonus=self.reward_bonus,
+        return GridTask(
+            task_id=task_id,
+            cell=cell,
+            prompt=prompt,
+            price=price,
+            target=float(next_value),
+            family="math.sequence",
+            depth=depth,
+            difficulty=difficulty,
+            canary=canary,
+            reward_bonus=self.reward_bonus,
                 failure_cost_scale=self.failure_cost_multiplier,
             )
 
         # fallback: math task
         return self._make_task(("math", depth), canary)
+
+    def _generate_word_count_sentence(self, depth: str) -> str:
+        base_sentences = {
+            "short": [
+                "Symbiotic agents cooperate",
+                "LoRA adapters evolve rapidly",
+                "Energy tickets enforce scarcity",
+            ],
+            "medium": [
+                "Autonomous organelles coordinate under fluctuating budgets",
+                "Bankruptcy culls reset the colony when energy collapses",
+                "Meta mutations jitter the controller and ticket price together",
+            ],
+            "long": [
+                "Dynamic niches encourage exploration throughout the Cambrian soup colony",
+                "Assimilation requires consistent improvement across checkpoints and probes",
+                "Telemetry snapshots surface ROI variance, energy gini, and uplift deltas per cell",
+            ],
+        }
+        chaos_probability = {"short": 0.25, "medium": 0.45, "long": 0.65}.get(depth, 0.4)
+        if self.rng.random() > chaos_probability:
+            return self.rng.choice(base_sentences.get(depth, base_sentences["short"]))
+
+        length_map = {"short": (4, 6), "medium": (9, 13), "long": (16, 24)}
+        min_len, max_len = length_map.get(depth, length_map["medium"])
+        length = self.rng.randint(min_len, max_len)
+        lexicon = [
+            "adaptive",
+            "agents",
+            "align",
+            "biosphere",
+            "clusters",
+            "coordinate",
+            "feedback",
+            "gradients",
+            "harvest",
+            "iterate",
+            "learning",
+            "morphology",
+            "organelles",
+            "pipeline",
+            "quanta",
+            "receptors",
+            "signals",
+            "symbiotic",
+            "tensors",
+            "uplift",
+            "vectors",
+            "workflow",
+            "yield",
+            "zenith",
+        ]
+        connectors = ["and", "while", "because", "whenever", "although", "despite", "before", "after"]
+        numeric_tokens = ["3", "five", "seven", "twelve", "30%", "half", "twice"]
+        emphasis_tokens = ["really", "remarkably", "carefully", "boldly"]
+
+        tokens: list[str] = []
+        for idx in range(length):
+            pool = lexicon
+            if idx > 0 and self.rng.random() < 0.15:
+                pool = connectors
+            elif self.rng.random() < 0.12:
+                pool = numeric_tokens
+            word = self.rng.choice(pool)
+            if self.rng.random() < 0.1:
+                word = f"{self.rng.choice(['bio', 'neuro', 'meta', 'eco'])}-{word}"
+            if self.rng.random() < 0.12:
+                word = word.upper()
+            if self.rng.random() < 0.18:
+                word = f"{word}{self.rng.choice([',', ';', ':'])}"
+            if self.rng.random() < 0.12:
+                word = f"{word}({self.rng.choice(emphasis_tokens)})"
+            tokens.append(word)
+
+        if tokens:
+            tokens[0] = tokens[0][0].upper() + tokens[0][1:]
+        sentence = " ".join(tokens)
+        if self.rng.random() < 0.25:
+            sentence = f"\"{sentence}\""
+        if self.rng.random() < 0.3:
+            spaces = [i for i, ch in enumerate(sentence) if ch == " "]
+            if spaces:
+                idx = self.rng.choice(spaces)
+                sentence = sentence[:idx] + "  " + sentence[idx + 1 :]
+        sentence = sentence.rstrip(",;: ")
+        sentence += self.rng.choice([".", "!", "?"])
+        return sentence
 
     # ------------------------------------------------------------------
     def register_result(self, organelle_id: str, task: GridTask, success: bool) -> None:

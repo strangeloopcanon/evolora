@@ -4,3 +4,12 @@
 {"prompt": "Given the numbers 4, 1, 7, produce a valid JSON array containing them sorted ascending.", "target": [1, 4, 7], "family": "json_repair", "depth": "short"}
 {"prompt": "Given the numbers 12, 3, 9, 6, produce a valid JSON array containing them sorted ascending.", "target": [3, 6, 9, 12], "family": "json_repair", "depth": "medium"}
 {"prompt": "Given the numbers 15, 4, 18, 2, 11, produce a valid JSON array containing them sorted ascending.", "target": [2, 4, 11, 15, 18], "family": "json_repair", "depth": "long"}
+{"prompt": "Count the number of words in the sentence: 'Symbiotic agents cooperate boldly.' Respond with an integer.", "target": 4, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'Autonomous organelles collaborate under shifting energy quotas.' Respond with an integer.", "target": 8, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'Dynamic niches encourage exploration throughout the evolving colony ecosystem.' Respond with an integer.", "target": 13, "family": "word.count", "depth": "long"}
+{"prompt": "Count the number of words in the sentence: '"NEURO-symbiotic" agents iterate (carefully) despite bandit taxes!' Respond with an integer.", "target": 8, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'Signals and vectors align before meta-uplift adjustments.' Respond with an integer.", "target": 9, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'BIO-gradients and tensors iterate; uplift (remarkably) follows.' Respond with an integer.", "target": 10, "family": "word.count", "depth": "long"}
+{"prompt": "Count the number of words in the sentence: 'Workflow yield doubles because agents coordinate after feedback.' Respond with an integer.", "target": 11, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: '"META-pipeline" signals align and vectors iterate twice.' Respond with an integer.", "target": 9, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'Symbiotic agents align before adaptive tensors, despite energy drag.' Respond with an integer.", "target": 12, "family": "word.count", "depth": "long"}
