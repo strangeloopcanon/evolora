@@ -344,21 +344,79 @@ class GridEnvironment:
             )
 
         if family == "word.count":
-            base_sentences = {
-                "short": [
-                    "symbiotic agents cooperate",
-                    "loRA adapters evolve rapidly",
-                ],
-                "medium": [
-                    "autonomous organelles compete within the host",
-                    "energy tickets enforce survival constraints",
-                ],
-                "long": [
-                    "dynamic niches encourage diversity throughout the colony",
-                    "assimilation requires consistent improvement across checkpoints",
-                ],
-            }
-            sentence = self.rng.choice(base_sentences.get(depth, base_sentences["short"]))
+            length_map = {"short": (4, 6), "medium": (9, 13), "long": (16, 24)}
+            min_len, max_len = length_map.get(depth, length_map["medium"])
+            length = self.rng.randint(min_len, max_len)
+            common_words = [
+                "adaptive",
+                "agents",
+                "align",
+                "biosphere",
+                "clusters",
+                "coordinate",
+                "feedback",
+                "gradients",
+                "harvest",
+                "iterate",
+                "learning",
+                "morphology",
+                "novel",
+                "organelles",
+                "pipeline",
+                "quanta",
+                "receptors",
+                "signals",
+                "symbiotic",
+                "tensors",
+                "uplift",
+                "vectors",
+                "workflow",
+                "yield",
+                "zenith",
+            ]
+            connectors = [
+                "and",
+                "while",
+                "because",
+                "whenever",
+                "although",
+                "despite",
+                "before",
+                "after",
+            ]
+            numeric_tokens = ["3", "five", "seven", "twelve", "30%", "half", "twice"]
+            emphasis_tokens = ["really", "remarkably", "carefully", "boldly"]
+
+            tokens: list[str] = []
+            for idx in range(length):
+                pool = common_words
+                if idx > 0 and self.rng.random() < 0.15:
+                    pool = connectors
+                elif self.rng.random() < 0.12:
+                    pool = numeric_tokens
+                word = self.rng.choice(pool)
+                if self.rng.random() < 0.1:
+                    word = f"{self.rng.choice(['bio', 'neuro', 'meta', 'eco'])}-{word}"
+                if self.rng.random() < 0.12:
+                    word = word.upper()
+                if self.rng.random() < 0.18:
+                    word = f"{word}{self.rng.choice([',', ';', ':'])}"
+                if self.rng.random() < 0.12:
+                    word = f"{word}({self.rng.choice(emphasis_tokens)})"
+                tokens.append(word)
+
+            if tokens:
+                tokens[0] = tokens[0][0].upper() + tokens[0][1:]
+            sentence = " ".join(tokens)
+            if self.rng.random() < 0.25:
+                sentence = f"\"{sentence}\""
+            if self.rng.random() < 0.3:
+                spaces = [i for i, ch in enumerate(sentence) if ch == " "]
+                if spaces:
+                    idx = self.rng.choice(spaces)
+                    sentence = sentence[:idx] + "  " + sentence[idx + 1 :]
+            sentence = sentence.rstrip(",;: ")
+            sentence += self.rng.choice([".", "!", "?"])
             prompt = f"Count the number of words in the sentence: '{sentence}'. Respond with an integer."
             target = len(sentence.split())
             return GridTask(

@@ -45,15 +45,18 @@ class PopulationManager:
         )
 
     def mutate(self, genome: Genome) -> Genome:
-        mutated_weights = {
-            key: weight + random.gauss(0, self.config.mutation_rate)
-            for key, weight in genome.drive_weights.items()
-        }
-        mutated_rank = max(1, int(round(genome.rank + random.choice([-1, 0, 1]))))  # nosec B311
+        candidate_keys = set(genome.drive_weights.keys()) | {"novelty", "word_count_focus", "logic_focus"}
+        mutated_weights: dict[str, float] = {}
+        for key in candidate_keys:
+            base = genome.drive_weights.get(key, 0.0)
+            sigma = self.config.mutation_rate * (1.5 if key != "novelty" else 1.0)
+            mutated_weights[key] = base + random.gauss(0, sigma)
+        rank_delta = random.choice([-2, -1, 0, 0, 1, 2])  # nosec B311
+        mutated_rank = max(1, genome.rank + rank_delta)
         return Genome(
             organelle_id=genome.organelle_id,
             drive_weights=mutated_weights,
-            gate_bias=genome.gate_bias + random.gauss(0, 0.1),
+            gate_bias=genome.gate_bias + random.gauss(0, 0.15),
             rank=mutated_rank,
         )
 
