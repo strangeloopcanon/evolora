@@ -21,13 +21,13 @@ grid:
 
 energy:
   Emax: 6.0
-  m: 0.6
-  alpha: 5.0e-15   # halve FLOPs penalty
-  beta: 0.015      # lighter memory cost
-  gamma: 0.0005    # lighter latency cost
-  lambda_p: 6.0e-8 # lower param cost
+  m: 0.5
+  alpha: 5.0e-15
+  beta: 0.015
+  gamma: 0.0005
+  lambda_p: 6.0e-8
   bankruptcy_grace: 2
-  cost_scale: 0.7
+  cost_scale: 0.6
 
 pricing:
   base: 1.2
@@ -36,7 +36,7 @@ pricing:
   max: 2.2
 
 assimilation_tuning:
-  per_cell_interval: 2    # allow adapters to gather signal between attempts
+  per_cell_interval: 2
   max_merges_per_cell: 3
   seed_scale: 0.8
   soup_size: 4
@@ -48,12 +48,12 @@ assimilation_tuning:
   energy_floor_roi: 0.0
   energy_floor_base: 0.6
   energy_floor_roi_base: 0.9
-  energy_topup_roi_bonus: 0.2
+  energy_topup_roi_bonus: 1.0   # allow top-ups even for marginal ROI to build evidence
   gating_snapshot_limit: 64
   holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
-  holdout_sample_size: 4
-  holdout_margin: 0.05
-  min_window: 4
+  holdout_sample_size: 16       # stronger holdout signal per attempt
+  holdout_margin: 0.03
+  min_window: 8                 # larger uplift windows (=> >=4 pairs)
   window_step: 2
   adaptive_decay: 0.82
   adaptive_floor: 0.0003
@@ -62,13 +62,20 @@ assimilation_tuning:
   bootstrap_uplift_enabled: true
   bootstrap_samples: 200
   permutation_samples: 200
-  min_uplift_samples: 2
+  min_uplift_samples: 4         # require at least 4 pairs for uplift
   merge_audit_enabled: true
+  # offspring merges (energy => right to try)
+  merge_mode: hybrid
+  trial_offspring_enabled: true
+  trial_per_gen_cap: 4
+  trial_stipend: 1.0
+  trial_probation_gens: 12
+  trial_promote_margin: 0.03
 
 evolution:
   mutation_rate: 0.32
-  assimilation_threshold: 0.0    # allow neutral uplift
-  assimilation_p_value: 0.25     # more permissive early merges
+  assimilation_threshold: 0.0
+  assimilation_p_value: 0.45    # more permissive to admit early merges
   max_merges_per_gen: 6
   min_population: 4
   max_population: 16
@@ -87,6 +94,9 @@ meta:
 curriculum:
   lp_mix: 0.2
   lp_alpha: 0.5
+
+controller:
+  tau: 0.40
 
 qd:
   enabled: true
@@ -116,8 +126,9 @@ diversity:
   enabled: true
   energy_gini_cap: 0.85
   max_species_energy_share: 0.55
+
 comms:
-  enabled: false
+  enabled: true   # turn on message board for long run
   post_cost: 0.2
   read_cost: 0.1
   credit_frac: 0.2

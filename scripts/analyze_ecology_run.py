@@ -80,6 +80,10 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     latest_gating_samples = latest_record.get("assimilation_gating_samples", [])
     latest_attempts = latest_record.get("assimilation_attempts", [])
 
+    qd_coverage = latest_record.get("qd_coverage")
+    # Trials/promotions totals
+    total_trials = sum(int(rec.get("trials_created", 0) or 0) for rec in records)
+    total_promotions = sum(int(rec.get("promotions", 0) or 0) for rec in records)
     return {
         "generations": len(records),
         "avg_roi_mean": mean(roi),
@@ -117,14 +121,21 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "diversity_enforced_rate": diversity_enforced_rate,
         "assimilation_gating_samples": latest_gating_samples[-5:],
         "assimilation_attempts": latest_attempts[-5:],
+        "qd_coverage": qd_coverage,
+        "trials_total": total_trials,
+        "promotions_total": total_promotions,
     }
 
 
-def summarise_assimilation(path: Path) -> Dict[str, int]:
+def summarise_assimilation(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {"events": 0, "passes": 0, "failures": 0}
     passes = 0
     failures = 0
+    ci_excludes_zero = 0
+    sample_sizes: list[int] = []
+    powers: list[float] = []
+    for_ci = 0
     with path.open() as handle:
         for line in handle:
             line = line.strip()
@@ -137,7 +148,31 @@ def summarise_assimilation(path: Path) -> Dict[str, int]:
                 passes += 1
             else:
                 failures += 1
-    return {"events": passes + failures, "passes": passes, "failures": failures}
+            event = record
+            ss = event.get("sample_size")
+            if isinstance(ss, int):
+                sample_sizes.append(ss)
+            lo = event.get("ci_low")
+            hi = event.get("ci_high")
+            if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+                for_ci += 1
+                if lo > 0 or hi < 0:
+                    ci_excludes_zero += 1
+            pw = event.get("power")
+            if isinstance(pw, (int, float)):
+                powers.append(float(pw))
+    out: Dict[str, Any] = {
+        "events": passes + failures,
+        "passes": passes,
+        "failures": failures,
+    }
+    if sample_sizes:
+        out["sample_size_mean"] = float(mean(sample_sizes))
+    if for_ci:
+        out["ci_excludes_zero_rate"] = ci_excludes_zero / max(for_ci, 1)
+    if powers:
+        out["power_mean"] = float(mean(powers))
+    return out
 
 
 def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
@@ -257,6 +292,10 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         lines.append(
             f"- Diversity: mean energy Gini {summary['diversity_energy_gini_mean']:.3f}, effective pop {summary['diversity_effective_population_mean']:.2f}, max species share {summary['diversity_max_species_share_mean']:.3f}, enforcement rate {summary['diversity_enforced_rate']*100:.1f}%"
         )
+    if summary.get("qd_coverage") is not None:
+        lines.append(f"- QD coverage: {summary['qd_coverage']}")
+    if summary.get("trials_total") or summary.get("promotions_total"):
+        lines.append(f"- Trials/promotions: {summary.get('trials_total', 0)} / {summary.get('promotions_total', 0)}")
     if summary["eval_events"]:
         accuracy_pct = summary["eval_accuracy_mean"] * 100
         lines.append(
@@ -334,8 +373,16 @@ def main() -> None:
             "passes:", assimilation_summary["passes"],
             "failures:", assimilation_summary["failures"],
         )
+        if "sample_size_mean" in assimilation_summary:
+            print("Assimilation mean sample size:", f"{assimilation_summary['sample_size_mean']:.1f}")
+        if "ci_excludes_zero_rate" in assimilation_summary:
+            print("Uplift CI excludes zero (rate):", f"{assimilation_summary['ci_excludes_zero_rate']*100:.1f}%")
+        if "power_mean" in assimilation_summary:
+            print("Power (proxy) mean:", f"{assimilation_summary['power_mean']:.2f}")
     else:
         print("No assimilation events recorded")
+    if summary.get("trials_total") or summary.get("promotions_total"):
+        print("Trials created:", summary.get("trials_total", 0), "Promotions:", summary.get("promotions_total", 0))
 
     if args.plots:
         ensure_plots(gen_records, run_dir / "visuals")

@@ -129,17 +129,25 @@ class EnvironmentController:
         self.bandit_counts: Dict[GridKey, int] = {}
         self.bandit_success: Dict[GridKey, float] = {}
         self.bandit_c = 1.2
+        self.lp_progress: Dict[GridKey, float] = {}
+        self.lp_prev_ema: Dict[GridKey, float] = {}
         for family in grid_config.families:
             for depth in grid_config.depths:
                 key = (family, depth)
                 self.cells[key] = GridCellState(price=pricing_cfg.base)
                 self.bandit_counts[key] = 0
                 self.bandit_success[key] = 0.0
+                self.lp_progress[key] = 0.0
+                self.lp_prev_ema[key] = 0.5
 
-    def sample_cell(self) -> GridKey:
+    def sample_cell(self, *, lp_mix: float = 0.0) -> GridKey:
         keys = list(self.cells.keys())
         if not keys:
             raise RuntimeError("No cells configured for sampling")
+        if lp_mix > 0.0 and self.rng.random() < lp_mix:
+            best_cell = max(keys, key=lambda k: self.lp_progress.get(k, 0.0))
+            self.bandit_counts[best_cell] += 1
+            return best_cell
         # Ensure each cell is explored at least once
         for key in keys:
             if self.bandit_counts.get(key, 0) == 0:
@@ -160,13 +168,19 @@ class EnvironmentController:
         beta = self.ctrl.beta
         tau = self.ctrl.tau
         eta = self.ctrl.eta
-        state.success_ema = (1 - beta) * state.success_ema + beta * (1.0 if success else 0.0)
+        prev = state.success_ema
+        state.success_ema = (1 - beta) * prev + beta * (1.0 if success else 0.0)
         state.difficulty = min(0.95, max(0.05, state.difficulty + eta * (state.success_ema - tau)))
         state.price = min(
             self.pricing.max,
             max(self.pricing.min, self.pricing.base + self.pricing.k * (tau - state.success_ema)),
         )
         self.bandit_success[cell] = self.bandit_success.get(cell, 0.0) + (1.0 if success else 0.0)
+        # learning progress EMA
+        delta = abs(state.success_ema - self.lp_prev_ema.get(cell, prev))
+        self.lp_prev_ema[cell] = state.success_ema
+        lp_alpha = 0.5
+        self.lp_progress[cell] = (1 - lp_alpha) * self.lp_progress.get(cell, 0.0) + lp_alpha * delta
 
     def get_state(self, cell: GridKey) -> GridCellState:
         return deepcopy(self.cells[cell])
@@ -242,6 +256,29 @@ class GridEnvironment:
         self.reward_bonus = max(0.0, reward_bonus)
         self.failure_cost_multiplier = max(0.0, min(failure_cost_multiplier, 1.0))
         self._bootstrap_canaries()
+        # simple message board (off by default unless enabled in config via loop)
+        self.message_board: list[dict[str, object]] = []
+
+    def post_message(self, organelle_id: str, text: str, *, cost: float = 0.2, ttl: int = 10) -> bool:
+        try:
+            entry = {"organelle_id": organelle_id, "text": text, "ttl": int(ttl)}
+            self.message_board.append(entry)
+            return True
+        except Exception:
+            return False
+
+    def read_messages(self, max_items: int = 3) -> list[dict[str, str]]:
+        cleaned: list[dict[str, str]] = []
+        for entry in list(self.message_board):
+            ttl = int(entry.get("ttl", 0))
+            if ttl <= 0:
+                self.message_board.remove(entry)
+                continue
+            entry["ttl"] = ttl - 1
+            cleaned.append({"organelle_id": str(entry.get("organelle_id")), "text": str(entry.get("text"))})
+            if len(cleaned) >= max_items:
+                break
+        return cleaned
 
     def _bootstrap_canaries(self) -> None:
         for cell in self.controller.cells.keys():

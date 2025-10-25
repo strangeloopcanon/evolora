@@ -24,6 +24,8 @@ class HostConfig(BaseModel):
     max_lora_rank: int = Field(8, ge=1)
     cache_dir: Optional[Path] = None
     max_sequence_length: int = Field(256, ge=8)
+    temperature: float = Field(0.0, ge=0.0, le=1.0)
+    top_p: float = Field(1.0, ge=0.0, le=1.0)
 
 
 class OrganismConfig(BaseModel):
@@ -69,6 +71,15 @@ class PricingConfig(BaseModel):
     k: float = Field(1.5, ge=0.0)
     min: float = Field(0.3, ge=0.0)
     max: float = Field(2.0, ge=0.0)
+
+
+class CurriculumConfig(BaseModel):
+    lp_mix: float = Field(
+        0.0, ge=0.0, le=1.0, description="Probability to route by learning progress instead of ROI bandit"
+    )
+    lp_alpha: float = Field(
+        0.5, ge=0.0, le=1.0, description="Smoothing for learning progress EMA per cell"
+    )
 
 
 class EnergyConfig(BaseModel):
@@ -173,6 +184,13 @@ class AssimilationTuningConfig(BaseModel):
         ge=0.0,
         description="Margin reduction applied on each holdout retry.",
     )
+    bootstrap_uplift_enabled: bool = Field(
+        False, description="Use bootstrap/permutation uplift test instead of z-test"
+    )
+    bootstrap_samples: int = Field(200, ge=10)
+    permutation_samples: int = Field(200, ge=10)
+    min_uplift_samples: int = Field(2, ge=1)
+    merge_audit_enabled: bool = Field(False)
     energy_topup_roi_bonus: float = Field(
         0.0,
         ge=0.0,
@@ -183,6 +201,17 @@ class AssimilationTuningConfig(BaseModel):
         ge=1,
         description="Maximum number of assimilation gating/attempt samples retained per run.",
     )
+    # Offspring merge mode -------------------------------------------------
+    merge_mode: str = Field(
+        "strict",
+        description="strict | offspring | hybrid: offspring allows energy-eligible trial children; hybrid tries strict then offspring",
+    )
+    trial_offspring_enabled: bool = Field(False)
+    trial_per_gen_cap: int = Field(2, ge=0)
+    trial_stipend: float = Field(0.5, ge=0.0)
+    trial_probation_gens: int = Field(5, ge=1)
+    trial_promote_margin: float = Field(0.02, ge=0.0)
+    trial_min_power: float = Field(0.1, ge=0.0, le=1.0)
 
 
 class LimitConfig(BaseModel):
@@ -210,6 +239,19 @@ class DiversityConfig(BaseModel):
     enabled: bool = True
     energy_gini_cap: float = Field(0.9, ge=0.0, le=1.0)
     max_species_energy_share: float = Field(0.6, ge=0.0, le=1.0)
+
+
+class QDConfig(BaseModel):
+    enabled: bool = False
+    cost_bins: int = Field(3, ge=1)
+
+
+class CommsConfig(BaseModel):
+    enabled: bool = False
+    post_cost: float = Field(0.2, ge=0.0)
+    read_cost: float = Field(0.1, ge=0.0)
+    credit_frac: float = Field(0.2, ge=0.0, le=1.0)
+    ttl: int = Field(10, ge=1)
 
 
 class EnvironmentConfig(BaseModel):
@@ -245,6 +287,7 @@ class EcologyConfig(BaseModel):
     grid: GridConfig = Field(default_factory=GridConfig)  # type: ignore[arg-type]
     controller: ControllerConfig = Field(default_factory=ControllerConfig)  # type: ignore[arg-type]
     pricing: PricingConfig = Field(default_factory=PricingConfig)  # type: ignore[arg-type]
+    curriculum: CurriculumConfig = Field(default_factory=CurriculumConfig)  # type: ignore[arg-type]
     energy: EnergyConfig = Field(default_factory=EnergyConfig)  # type: ignore[arg-type]
     canary: CanaryConfig = Field(default_factory=CanaryConfig)  # type: ignore[arg-type]
     population_strategy: PopulationStrategyConfig = Field(default_factory=PopulationStrategyConfig)  # type: ignore[arg-type]
@@ -254,6 +297,8 @@ class EcologyConfig(BaseModel):
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)  # type: ignore[arg-type]
     human_bandit: HumanBanditConfig = Field(default_factory=HumanBanditConfig)  # type: ignore[arg-type]
     diversity: DiversityConfig = Field(default_factory=DiversityConfig)  # type: ignore[arg-type]
+    qd: QDConfig = Field(default_factory=QDConfig)  # type: ignore[arg-type]
+    comms: CommsConfig = Field(default_factory=CommsConfig)  # type: ignore[arg-type]
 
 
 __all__ = [

@@ -1,5 +1,7 @@
 # Evolora — Symbiotic LLM Ecology
 
+TL;DR: Many tiny LoRA adapters live on a frozen Gemma‑270M host and compete for energy by solving small tasks. We measure reward‑on‑cost (ROI), gate merges by uplift and holdout checks, and adapt the energy floor automatically. The goal is to see if useful behaviours emerge via evolutionary pressure rather than full fine‑tuning.
+
 ## Why We’re Doing This (Human-Sized Version)
 We want to see whether a colony of tiny LoRA adapters can learn useful behaviour *without* back-propagating through the whole model. Think of the base Gemma-270M host as an ecosystem and each adapter as an organism. They earn “energy” by solving small tasks, spend it on inference, and occasionally merge if they consistently outperform their peers. Our goal is to nudge this colony from random noise to adaptive cooperation, the way life crept out of the Hadean soup into the Cambrian explosion.
 
@@ -12,16 +14,15 @@ We want to see whether a colony of tiny LoRA adapters can learn useful behaviour
 
 If the colony keeps earning more than it spends, the population should drift toward better answers all on its own.
 
-## Evolution Journey So Far
-- **Hadean survival:** the earliest 100-generation runs kept the colony just above starvation; most adapters burned their tickets, got culled, and no merges ever fired.
-- **Cambrian bloom without fossils:** relaxing energy taxes let ROI climb toward 1.0 and the population stayed solvent, yet every assimilation attempt still failed—adaptors hoarded cheap wins but showed no measurable uplift.
-- **Modern diagnostics:** fresh telemetry reveals the culprits: only a couple of organelles clear the energy gate each generation, their recent score windows rarely trend upward, and holdout checks never see improvement. We now know energy scarcity isn’t the blocker—the ecology needs richer signal (better tasks, smarter allocation) before any organelle can prove it deserves to merge.
+## Current Status
+- Long run (300 gens): avg ROI ≈ 0.94; merges 0; promotions 0; eval 0/360.
+- Assimilation blockers: low_energy and low statistical power dominate; uplift windows too short; top‑ups often ROI‑blocked.
+- Recent changes: added low‑power gating (defer decisions), larger evidence windows, easier evidence top‑ups, and trial offspring with promotion checks.
 
-## Latest Milestone (Oct 2025)
-- 100-generation `gemma_relaxed_autotune_v8` run averaged ROI 3.49 (peaking at 7.49) with zero bankruptcies; energy floor decayed to ≈0.65 while 133 top-ups kept exploration healthy.
-- Three `word.count:medium` organelles cleared the uplift + holdout gate, merged via LoRA soups, and passed the HF probe—our first confirmed assimilation successes.
-- Most failures now stall on uplift (<0.03 margin) rather than probes or holdouts, so the ecology is profit-rich but still chasing deeper skill gains.
-- External evaluation accuracy remains 0/60; next experiments focus on tougher word-count curricula and broader mutation operators to turn internal uplift into holdout wins.
+## What’s New (Oct 2025)
+- Low‑power gating in assimilation (defers merges when evidence is weak).
+- Adaptive energy top‑ups (ease ROI threshold when variance/streak is high).
+- Trial offspring path with evidence accumulation across generations.
 
 ## Evolution Glossary
 | Term | In-code meaning | Evolution analogy |
@@ -142,3 +143,25 @@ Pull requests welcome! Please:
 - include analysis notes or updated documentation when behaviour changes.
 
 Happy evolving — let’s see if this Cambrian-era colony learns something genuinely new.
+
+## Run & Observe
+- Debug (20 generations, rich telemetry):
+  - `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed_debug.yaml --generations 20 --batch-size 2 --output artifacts_gemma_debug_latest`
+- Long (overnight, ~24–30h, 120–150 gens):
+  - `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed_plus.yaml --generations 150 --batch-size 2 --output artifacts_gemma_relaxed_plus_latest`
+- Analyse any run dir:
+  - `.venv311/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report`
+
+During runs, the progress ticker prints what actually matters each generation:
+`Generation 090 | ROI 0.932 | merges 0 | energy floor 0.61 (ROI≥1.00) | gating low-energy 14 cooldown 1 | episodes 28 | eval 0.000 (0/12)`
+
+- ROI: average reward-on-cost this gen
+- merges: accepted assimilation merges
+- energy floor / ROI≥x: current auto‑tuned energy gate and ROI needed for top‑ups
+- gating: most frequent assimilation gates hit this gen
+- episodes: episode count processed this gen
+- eval: holdout accuracy if scheduled for this gen
+
+Note: noisy Transformer/PEFT warnings and pad‑token notices are suppressed in `scripts/eval_gemma_long.py` to keep the ticker readable.
+
+Analyzer notes: `scripts/analyze_ecology_run.py` reports assimilation power and may show a `low_power` gating total when uplift tests defer. If `low_power` dominates, extend runs slightly or increase evidence windows (config knobs) to accumulate more samples per attempt.
