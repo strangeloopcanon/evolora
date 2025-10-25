@@ -13,3 +13,10 @@
 {"prompt": "Count the number of words in the sentence: 'Workflow yield doubles because agents coordinate after feedback.' Respond with an integer.", "target": 11, "family": "word.count", "depth": "medium"}
 {"prompt": "Count the number of words in the sentence: '\"META-pipeline\" signals align and vectors iterate twice.' Respond with an integer.", "target": 9, "family": "word.count", "depth": "medium"}
 {"prompt": "Count the number of words in the sentence: 'Symbiotic agents align before adaptive tensors, despite energy drag.' Respond with an integer.", "target": 12, "family": "word.count", "depth": "long"}
+{"prompt": "Is 7 greater than 5? Respond with true or false.", "target": true, "family": "logic.bool", "depth": "short"}
+{"prompt": "Is (3 * 4) equal to 11? Respond with true or false.", "target": false, "family": "logic.bool", "depth": "medium"}
+{"prompt": "Is (12 / 3) greater than (7 - 2)? Respond with true or false.", "target": true, "family": "logic.bool", "depth": "long"}
+{"prompt": "Sort the list ['pear','apple','banana'] ascending and return a JSON array.", "target": ["apple","banana","pear"], "family": "string.sort", "depth": "short"}
+{"prompt": "Sort the list ['delta','alpha','charlie','bravo'] ascending and return a JSON array.", "target": ["alpha","bravo","charlie","delta"], "family": "string.sort", "depth": "medium"}
+{"prompt": "Given the sequence 2, 4, 6, what is the next number? Respond with the number only.", "target": 8, "family": "math.sequence", "depth": "short"}
+{"prompt": "Given the sequence 5, 10, 20, what is the next number? Respond with the number only.", "target": 40, "family": "math.sequence", "depth": "medium"}

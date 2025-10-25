@@ -81,6 +81,7 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     latest_attempts = latest_record.get("assimilation_attempts", [])
 
     qd_coverage = latest_record.get("qd_coverage")
+    roi_volatility = latest_record.get("roi_volatility")
     # Trials/promotions totals
     total_trials = sum(int(rec.get("trials_created", 0) or 0) for rec in records)
     total_promotions = sum(int(rec.get("promotions", 0) or 0) for rec in records)
@@ -122,6 +123,7 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "assimilation_gating_samples": latest_gating_samples[-5:],
         "assimilation_attempts": latest_attempts[-5:],
         "qd_coverage": qd_coverage,
+        "roi_volatility": roi_volatility,
         "trials_total": total_trials,
         "promotions_total": total_promotions,
     }
@@ -294,6 +296,8 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         )
     if summary.get("qd_coverage") is not None:
         lines.append(f"- QD coverage: {summary['qd_coverage']}")
+    if summary.get("roi_volatility") is not None:
+        lines.append(f"- ROI volatility (std across organelles): {summary['roi_volatility']:.3f}")
     if summary.get("trials_total") or summary.get("promotions_total"):
         lines.append(f"- Trials/promotions: {summary.get('trials_total', 0)} / {summary.get('promotions_total', 0)}")
     if summary["eval_events"]:
