@@ -1,0 +1,127 @@
+host:
+  backbone_type: gemma
+  backbone_model: google/gemma-3-270m-it
+  tokenizer: google/gemma-3-270m-it
+  device: mps
+  max_lora_rank: 8
+  max_sequence_length: 256
+
+grid:
+  families: [math, math.sequence, json_repair, string.sort, word.count, logic.bool]
+  depths: [short, medium, long]
+
+energy:
+  Emax: 6.0
+  m: 0.5
+  alpha: 5.0e-15
+  beta: 0.015
+  gamma: 0.0005
+  lambda_p: 6.0e-8
+  bankruptcy_grace: 2
+  cost_scale: 0.6
+
+pricing:
+  base: 1.2
+  k: 1.6
+  min: 0.3
+  max: 2.2
+
+assimilation_tuning:
+  per_cell_interval: 2
+  max_merges_per_cell: 3
+  seed_scale: 0.8
+  soup_size: 4
+  probe_max_other_cells: 2
+  probe_required_passes: 1
+  energy_floor: 0.0
+  energy_floor_roi: 0.0
+  energy_floor_base: 0.6
+  energy_floor_roi_base: 0.9
+  energy_topup_roi_bonus: 1.0
+  gating_snapshot_limit: 64
+  holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
+  holdout_sample_size: 16
+  holdout_margin: 0.03
+  min_window: 8
+  window_step: 2
+  adaptive_decay: 0.82
+  adaptive_floor: 0.0003
+  holdout_max_retries: 3
+  holdout_margin_step: 0.02
+  bootstrap_uplift_enabled: true
+  bootstrap_samples: 200
+  permutation_samples: 200
+  min_uplift_samples: 4
+  merge_audit_enabled: true
+  merge_mode: hybrid
+  trial_offspring_enabled: true
+  trial_per_gen_cap: 4
+  trial_stipend: 1.0
+  trial_probation_gens: 12
+  trial_promote_margin: 0.03
+
+evolution:
+  mutation_rate: 0.32
+  assimilation_threshold: 0.0
+  assimilation_p_value: 0.45
+  max_merges_per_gen: 6
+  min_population: 4
+  max_population: 16
+
+limits:
+  lora_budget_frac: 0.04
+  max_active_adapters_per_layer: 2
+
+meta:
+  enabled: true
+  interval: 5
+  mutation_scale: 0.18
+  catastrophe_interval: 0
+  catastrophe_scale: 0.6
+
+curriculum:
+  lp_mix: 0.2
+  lp_alpha: 0.5
+
+controller:
+  tau: 0.40
+
+qd:
+  enabled: true
+
+environment:
+  synthetic_batch_size: 2
+  auto_batch: true
+  batch_min: 1
+  batch_max: 4
+  human_bandit_batch_size: 4
+  max_episode_steps: 128
+  energy_budget: 50.0
+  success_reward_bonus: 1.0
+  failure_cost_multiplier: 0.5
+
+human_bandit:
+  enabled: true
+  preference_weight: 0.1
+  helper_weight: 0.05
+  frequency: 0.4
+
+evaluation:
+  enabled: true
+  cadence: 10
+  tasks_path: config/evaluation/holdout_tasks.jsonl
+  sample_size: 12
+  reward_weight: 0.75
+
+diversity:
+  enabled: true
+  energy_gini_cap: 0.85
+  max_species_energy_share: 0.55
+
+comms:
+  enabled: true
+  post_cost: 0.2
+  read_cost: 0.1
+  credit_frac: 0.2
+  ttl: 10
+

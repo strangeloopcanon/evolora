@@ -101,6 +101,8 @@ class EcologyLoop:
     trial_offspring: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     promotions_this_gen: int = 0
     trial_creations_this_gen: int = 0
+    _qd_archive: dict[tuple[str, str, int], dict[str, object]] = field(default_factory=dict, init=False, repr=False)
+    _synergy_window: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
@@ -167,8 +169,12 @@ class EcologyLoop:
         credit_frac = float(getattr(self.config.comms, "credit_frac", 0.2))
         if comms_enabled:
             for organelle_id in active:
-                # attempt to read up to 2 messages and pay read cost per read
-                messages = self.environment.read_messages(max_items=2)
+                # attempt to read messages and pay read cost per read; scaled by trait
+                read_attempts = 2
+                genome = self.population.population.get(organelle_id)
+                if genome is not None and isinstance(getattr(genome, "read_rate", 0.0), float):
+                    read_attempts = max(0, min(2, int(round(2 * max(0.0, min(1.0, genome.read_rate))))))
+                messages = self.environment.read_messages(max_items=max(0, read_attempts))
                 for msg in messages:
                     # charge reader if enough energy
                     bal = self.host.ledger.energy_balance(organelle_id)
@@ -195,8 +201,24 @@ class EcologyLoop:
                             if len(bucket) < 3:
                                 bucket.append(hint_text)
 
+        # endogenous batch size option
+        bs = batch_size
+        try:
+            if bool(getattr(self.config.environment, "auto_batch", False)):
+                roi_sample = self.population.aggregate_roi(limit=5)
+                bmin = int(max(1, getattr(self.config.environment, "batch_min", 1)))
+                bmax = int(max(bmin, getattr(self.config.environment, "batch_max", 4)))
+                if roi_sample <= 0.5:
+                    bs = bmin
+                elif roi_sample >= 1.5:
+                    bs = bmax
+                else:
+                    frac = (roi_sample - 0.5) / 1.0
+                    bs = int(max(bmin, min(bmax, round(bmin + frac * (bmax - bmin)))))
+        except Exception:
+            bs = batch_size
         for organelle_id in active:
-            for _ in range(batch_size):
+            for _ in range(bs):
                 lp_mix = getattr(self.config.curriculum, "lp_mix", 0.0)
                 task = (
                     self._sample_task_lp(lp_mix)
@@ -247,12 +269,13 @@ class EcologyLoop:
         # Optional: communication post step (one hint per generation by top ROI organelle)
         if comms_enabled and active:
             try:
-                top_org = max(
-                    active,
-                    key=lambda oid: self.population.average_roi(oid, limit=5),
-                )
-                # Only post if enough energy
-                if self.host.ledger.energy_balance(top_org) >= post_cost:
+                top_org = max(active, key=lambda oid: self.population.average_roi(oid, limit=5))
+                genome = self.population.population.get(top_org)
+                post_ok = True
+                if genome is not None and isinstance(getattr(genome, "post_rate", 0.0), float):
+                    post_ok = max(0.0, min(1.0, genome.post_rate)) > 0.0
+                # Only post if enough energy and trait allows
+                if post_ok and self.host.ledger.energy_balance(top_org) >= post_cost:
                     self.host.ledger.consume_energy(top_org, post_cost)
                     hint = "Hint: count words ignoring punctuation and double spaces."
                     self.environment.post_message(top_org, hint, cost=post_cost, ttl=int(getattr(self.config.comms, "ttl", 10)))
@@ -342,10 +365,22 @@ class EcologyLoop:
         summary["trial_offspring_active"] = len(self.trial_offspring)
         summary["trials_created"] = int(getattr(self, "trial_creations_this_gen", 0))
         summary["promotions"] = int(getattr(self, "promotions_this_gen", 0))
+        # Update QD archive and expose size
+        try:
+            summary["qd_archive_size"] = int(self._update_qd_archive())
+        except Exception:
+            summary["qd_archive_size"] = 0
         self._auto_tune_assimilation_energy(summary)
         # Auto‑nudge evidence settings when assimilation stalls (no merges, low power)
         try:
             self._auto_nudge_evidence(summary)
+        except Exception:
+            pass
+        # Ephemeral team synergy sampling (log only)
+        try:
+            self._sample_team_synergy()
+            if self._synergy_window:
+                summary["synergy_samples"] = list(self._synergy_window[-5:])
         except Exception:
             pass
         if self.evaluation_manager and self.generation_index % self.evaluation_manager.config.cadence == 0:
@@ -947,6 +982,68 @@ class EcologyLoop:
         self.assim_attempt_samples.append(sample)
         if len(self.assim_attempt_samples) > limit:
             self.assim_attempt_samples = self.assim_attempt_samples[-limit:]
+
+    def _update_qd_archive(self) -> int:
+        if not getattr(self.config.qd, "enabled", False):
+            return len(self._qd_archive)
+        # cost bins as in _select_soup_members
+        energies = {oid: float(self.population.average_energy(oid)) for oid in self.population.population.keys()}
+        vals = sorted(v for v in energies.values() if math.isfinite(v))
+        bins: list[float] = []
+        if vals:
+            try:
+                qs = quantiles(vals, n=max(2, getattr(self.config.qd, "cost_bins", 3)), method="inclusive")
+                bins = [float(x) for x in qs]
+            except Exception:
+                bins = [vals[len(vals) // 2]]
+        def cost_bin(val: float) -> int:
+            if not bins:
+                return 0
+            for i, edge in enumerate(bins):
+                if val <= edge:
+                    return i
+            return len(bins)
+        for oid in self.population.population.keys():
+            best = self.environment.best_cell_score(oid)
+            if not best:
+                continue
+            (family, depth), ema = best
+            key = (str(family), str(depth), cost_bin(energies.get(oid, 0.0)))
+            roi = float(self.population.average_roi(oid, limit=5))
+            prev = self._qd_archive.get(key)
+            if prev is None or roi > float(prev.get("roi", 0.0)):
+                self._qd_archive[key] = {"organelle_id": oid, "roi": roi, "ema": float(ema), "energy": energies.get(oid, 0.0)}
+        return len(self._qd_archive)
+
+    def _sample_team_synergy(self) -> None:
+        # Sample up to 2 top ROI pairs and log simple synergy stats on matched holdout
+        ids = list(self.population.population.keys())
+        if len(ids) < 2:
+            return
+        ranked = sorted(ids, key=lambda oid: self.population.average_roi(oid, limit=5), reverse=True)
+        pairs = [(ranked[i], ranked[i+1]) for i in range(0, min(len(ranked)-1, 3), 2)]
+        tasks = self._sample_holdout_tasks()
+        if not tasks:
+            return
+        for a, b in pairs:
+            solo_a = self._evaluate_holdout_roi(a, tasks)
+            solo_b = self._evaluate_holdout_roi(b, tasks)
+            # Cheap team ROI proxy: best-of-two per task (approximates routing)
+            team_roi = max(solo_a, solo_b)
+            synergy = team_roi - (solo_a + solo_b)
+            sample = {
+                "generation": self.generation_index,
+                "a": a,
+                "b": b,
+                "solo_a": float(solo_a),
+                "solo_b": float(solo_b),
+                "team": float(team_roi),
+                "synergy": float(synergy),
+                "tasks": int(len(tasks)),
+            }
+            self._synergy_window.append(self._sanitize_telemetry(sample))
+            if len(self._synergy_window) > 24:
+                self._synergy_window = self._synergy_window[-24:]
 
     def _auto_tune_assimilation_energy(self, summary: dict[str, object]) -> None:
         tuning = self.config.assimilation_tuning
