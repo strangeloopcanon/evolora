@@ -46,6 +46,9 @@ class AssimilationEvent(BaseModel):
     control_std: float | None = None
     treatment_mean: float | None = None
     treatment_std: float | None = None
+    ci_low: float | None = None
+    ci_high: float | None = None
+    power: float | None = None
     uplift_threshold: float | None = None
     p_value_threshold: float | None = None
     energy_balance: float | None = None

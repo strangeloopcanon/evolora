@@ -97,9 +97,15 @@ class EcologyLoop:
     assim_fail_streak: int = 0
     assim_gating_samples: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
     assim_attempt_samples: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _pending_hints: dict[str, list[str]] = field(default_factory=dict, init=False, repr=False)
+    trial_offspring: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
+    promotions_this_gen: int = 0
+    trial_creations_this_gen: int = 0
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
+        self.promotions_this_gen = 0
+        self.trial_creations_this_gen = 0
         if self.morphogenesis is None:
             self.morphogenesis = MorphogenesisController(config=self.config, host=self.host)
         if self.config.evaluation.enabled and self.evaluation_manager is None:
@@ -154,11 +160,59 @@ class EcologyLoop:
             self.population.record_energy(organelle_id, 0.0)
             self.population.record_roi(organelle_id, 0.0)
 
+        # Optional: communication read step once per active organelle
+        comms_enabled = getattr(self.config.comms, "enabled", False)
+        post_cost = float(getattr(self.config.comms, "post_cost", 0.2))
+        read_cost = float(getattr(self.config.comms, "read_cost", 0.1))
+        credit_frac = float(getattr(self.config.comms, "credit_frac", 0.2))
+        if comms_enabled:
+            for organelle_id in active:
+                # attempt to read up to 2 messages and pay read cost per read
+                messages = self.environment.read_messages(max_items=2)
+                for msg in messages:
+                    # charge reader if enough energy
+                    bal = self.host.ledger.energy_balance(organelle_id)
+                    if bal >= read_cost:
+                        try:
+                            self.host.ledger.consume_energy(organelle_id, read_cost)
+                        except Exception:
+                            pass
+                        # credit poster
+                        poster = msg.get("organelle_id")
+                        if isinstance(poster, str):
+                            try:
+                                self.host.ledger.credit_energy(poster, credit_frac * read_cost)
+                            except Exception:
+                                pass
+                        # small gate bias nudge for reader
+                        genome = self.population.population.get(organelle_id)
+                        if genome is not None:
+                            genome.gate_bias += 0.01
+                        # stash hint for next prompt
+                        hint_text = str(msg.get("text", "")).strip()
+                        if hint_text:
+                            bucket = self._pending_hints.setdefault(organelle_id, [])
+                            if len(bucket) < 3:
+                                bucket.append(hint_text)
+
         for organelle_id in active:
             for _ in range(batch_size):
-                task = self.environment.sample_task()
+                lp_mix = getattr(self.config.curriculum, "lp_mix", 0.0)
+                task = (
+                    self._sample_task_lp(lp_mix)
+                    if lp_mix > 0.0
+                    else self.environment.sample_task()
+                )
+                # apply any pending hints to the prompt
+                prompt_text = task.prompt
+                hints = self._pending_hints.get(organelle_id, [])
+                if hints:
+                    joined = "; ".join(hints)
+                    prompt_text = f"Hints: {joined}\n\n{task.prompt}"
+                    # clear after use
+                    self._pending_hints[organelle_id] = []
                 result = self.host.step(
-                    prompt=task.prompt,
+                    prompt=prompt_text,
                     intent="solve task",
                     max_routes=1,
                     allowed_organelle_ids=[organelle_id],
@@ -190,7 +244,23 @@ class EcologyLoop:
                 self.host.apply_reward(result.envelope, {organelle_id: reward})
 
         self._enforce_diversity()
+        # Optional: communication post step (one hint per generation by top ROI organelle)
+        if comms_enabled and active:
+            try:
+                top_org = max(
+                    active,
+                    key=lambda oid: self.population.average_roi(oid, limit=5),
+                )
+                # Only post if enough energy
+                if self.host.ledger.energy_balance(top_org) >= post_cost:
+                    self.host.ledger.consume_energy(top_org, post_cost)
+                    hint = "Hint: count words ignoring punctuation and double spaces."
+                    self.environment.post_message(top_org, hint, cost=post_cost, ttl=int(getattr(self.config.comms, "ttl", 10)))
+            except Exception:
+                pass
         merges = self._attempt_assimilation(capped=self.config.evolution.max_merges_per_gen)
+        # review trial offspring for potential promotion or cull
+        self._review_trial_offspring()
         if merges > 0:
             self.no_merge_counter = 0
         else:
@@ -204,7 +274,7 @@ class EcologyLoop:
             "active": len(active),
             "bankrupt": len(bankrupt),
             "culled_bankrupt": len(culled_bankrupt),
-            "merges": merges,
+            "merges": merges + self.promotions_this_gen,
             "population": len(self.population.population),
             "avg_roi": self.population.aggregate_roi(),
             "avg_energy_cost": self.population.aggregate_energy(),
@@ -217,6 +287,19 @@ class EcologyLoop:
                 for (family, depth), state in self.environment.controller.cells.items()
             },
         }
+        # QD coverage (family-depth cells with observed stats)
+        try:
+            if getattr(self.config.qd, "enabled", False):
+                total_bins = len(self.environment.controller.cells)
+                populated = 0
+                seen = set()
+                for stats in self.environment.organism_stats.values():
+                    for cell in stats.keys():
+                        seen.add(cell)
+                populated = len(seen)
+                summary["qd_coverage"] = f"{populated}/{total_bins}"
+        except Exception:
+            pass
         if hasattr(self, "assim_gating_counts"):
             summary["assimilation_gating"] = getattr(self, "assim_gating_counts")
         samples = getattr(self, "assim_gating_samples_snapshot", None)
@@ -250,7 +333,15 @@ class EcologyLoop:
         if self._diversity_snapshot is not None:
             summary["diversity"] = dict(self._diversity_snapshot)
         summary["assimilation_fail_streak"] = self.assim_fail_streak
+        summary["trial_offspring_active"] = len(self.trial_offspring)
+        summary["trials_created"] = int(getattr(self, "trial_creations_this_gen", 0))
+        summary["promotions"] = int(getattr(self, "promotions_this_gen", 0))
         self._auto_tune_assimilation_energy(summary)
+        # Auto‑nudge evidence settings when assimilation stalls (no merges, low power)
+        try:
+            self._auto_nudge_evidence(summary)
+        except Exception:
+            pass
         if self.evaluation_manager and self.generation_index % self.evaluation_manager.config.cadence == 0:
             evaluation_result = self.evaluation_manager.evaluate(self.host, self.environment)
             summary["evaluation"] = evaluation_result
@@ -345,12 +436,22 @@ class EcologyLoop:
         if self.sink:
             self.sink.log_episode(episode)
 
+    def _sample_task_lp(self, lp_mix: float) -> GridTask:
+        try:
+            cell = self.environment.controller.sample_cell(lp_mix=lp_mix)
+            state = self.environment.controller.get_state(cell)
+            use_canary = state.success_ema > self.environment.canary_q_min and self.environment.rng.random() < 0.1
+            return self.environment.sample_task_from_cell(cell, canary=use_canary)
+        except Exception:
+            return self.environment.sample_task()
+
     def _attempt_assimilation(self, capped: int | None = None) -> int:
         removable: list[str] = []
         merges = 0
         gating: Dict[str, int] = {
             "canary_failed": 0,
             "low_energy": 0,
+            "low_power": 0,
             "no_best_cell": 0,
             "cooldown": 0,
             "uplift_below_threshold": 0,
@@ -526,9 +627,28 @@ class EcologyLoop:
                 energy_top_up=topup_info,
             )
             self.assimilation_cooldown[key] = self.generation_index
+            # If statistical power is too low, defer and expand evidence window next time
+            try:
+                min_power = float(getattr(self.config.assimilation_tuning, "trial_min_power", 0.1))
+            except Exception:
+                min_power = 0.1
+            if result.event.power is not None and result.event.power < min_power:
+                gating["low_power"] += 1
+                self._record_assimilation_gate(
+                    reason="low_power",
+                    organelle_id=genome.organelle_id,
+                    details={
+                        "generation": self.generation_index,
+                        "power": float(result.event.power),
+                        "min_power": float(min_power),
+                        "sample_size": int(result.event.sample_size or 0),
+                    },
+                )
+                continue
             probe_records: list[dict[str, object]] = []
             soup_records: list[dict[str, float]] = []
             holdout_info: dict[str, object] | None = None
+            audit_info: dict[str, object] | None = None
             decision_final = False
             attempt_detail: dict[str, object] = {
                 "generation": self.generation_index,
@@ -580,6 +700,17 @@ class EcologyLoop:
                         stats_map,
                         probe_records,
                     )
+                    audit_info = None
+                    if getattr(self.config.assimilation_tuning, "merge_audit_enabled", False):
+                        try:
+                            tasks = self._sample_holdout_tasks()
+                            post_roi = self._evaluate_holdout_roi(genome.organelle_id, tasks)
+                            pre_roi = None
+                            if holdout_info:
+                                pre_roi = holdout_info.get("candidate_roi")
+                            audit_info = {"post_roi": float(post_roi), "pre_roi": float(pre_roi) if pre_roi is not None else None, "tasks": len(tasks)}
+                        except Exception:
+                            audit_info = {"post_roi": None, "pre_roi": None, "tasks": 0}
                     self._spawn_replacement_from(genome)
                     removable.append(genome.organelle_id)
                     merges += 1
@@ -592,6 +723,16 @@ class EcologyLoop:
             else:
                 attempt_detail["holdout_passed"] = False
                 attempt_detail["global_probe_passed"] = False
+                # Offspring merge path: allow energy-eligible trial child
+                mode = getattr(self.config.assimilation_tuning, "merge_mode", "strict")
+                enable_trials = bool(getattr(self.config.assimilation_tuning, "trial_offspring_enabled", False))
+                cap = int(getattr(self.config.assimilation_tuning, "trial_per_gen_cap", 0))
+                if enable_trials and mode in {"offspring", "hybrid"} and self.trial_creations_this_gen < cap:
+                    soup_ids, stats_map = self._select_soup_members(cell, genome.organelle_id)
+                    child_id = self._create_trial_offspring(cell, genome.organelle_id, soup_ids, stats_map)
+                    if child_id:
+                        self.trial_creations_this_gen += 1
+                        attempt_detail["trial_offspring_created"] = child_id
             self._record_assimilation_attempt(attempt_detail)
             if self.sink:
                 event = result.event.model_copy(
@@ -600,6 +741,7 @@ class EcologyLoop:
                         "probes": probe_records,
                         "soup": soup_records,
                         "holdout": holdout_info,
+                        "audit": audit_info,
                     }
                 )
                 self.sink.log_assimilation(event, decision_final)
@@ -639,6 +781,133 @@ class EcologyLoop:
         except Exception:
             pass
         return merges
+
+    def _create_trial_offspring(
+        self,
+        cell: GridKey,
+        candidate_id: str,
+        soup_ids: list[str],
+        stats_map: dict[str, dict[str, float]],
+    ) -> str | None:
+        try:
+            organelle = self.host.get_organelle(candidate_id)
+            target_rank = int(getattr(organelle, "rank", self.config.host.max_lora_rank)) if organelle is not None else self.config.host.max_lora_rank
+            target_rank = max(1, min(target_rank, self.config.host.max_lora_rank))
+            # weights based on roi*ema, same as merge
+            weights: list[float] = []
+            for oid in soup_ids:
+                stats = stats_map.get(oid, {"roi": 0.0, "ema": 0.0})
+                w = (max(stats.get("roi", 0.0), 0.0) + 1e-3) * (stats.get("ema", 0.0) + 1e-3)
+                weights.append(w)
+            total = sum(weights) or 1.0
+            soup = {oid: w / total for oid, w in zip(soup_ids, weights)}
+            soup_state, _alpha = self.host.build_lora_soup_state(soup, target_rank)
+            child_id = self.host.spawn_organelle(rank=target_rank)
+            child = self.host.get_organelle(child_id)
+            if child is None:
+                return None
+            child.import_adapter_state(soup_state, alpha=1.0)
+            # stipend energy
+            stipend = float(getattr(self.config.assimilation_tuning, "trial_stipend", 0.5))
+            self.host.ledger.set_energy(child_id, stipend)
+            # register in population
+            self.population.register(Genome(organelle_id=child_id, drive_weights={"novelty": 0.1}, gate_bias=0.0, rank=target_rank))
+            # track probation
+            self.trial_offspring[child_id] = {
+                "parents": list(soup_ids),
+                "cell": {"family": cell[0], "depth": cell[1]},
+                "created_gen": self.generation_index,
+                "probation_left": int(getattr(self.config.assimilation_tuning, "trial_probation_gens", 5)),
+                "promoted": False,
+            }
+            return child_id
+        except Exception:
+            return None
+
+    def _review_trial_offspring(self) -> None:
+        if not self.trial_offspring:
+            return
+        margin = float(getattr(self.config.assimilation_tuning, "trial_promote_margin", 0.02))
+        min_power = float(getattr(self.config.assimilation_tuning, "trial_min_power", 0.1))
+        to_remove: list[str] = []
+        for child_id, meta in list(self.trial_offspring.items()):
+            if bool(meta.get("promoted", False)):
+                to_remove.append(child_id)
+                continue
+            # sample holdout and compare to baseline mates
+            tasks = self._sample_holdout_tasks()
+            child_roi = self._evaluate_holdout_roi(str(child_id), tasks)
+            parents: list[str] = [str(x) for x in meta.get("parents", [])]
+            baselines = [self._evaluate_holdout_roi(pid, tasks) for pid in parents]
+            baselines = [b for b in baselines if math.isfinite(b)]
+            best_base = max(baselines, default=float("-inf"))
+            target = (best_base if math.isfinite(best_base) else 0.0) + margin
+            # accumulate evidence across generations
+            ev = meta.setdefault("evidence", {"deltas": []})
+            try:
+                deltas: list[float] = list(ev.get("deltas", []))
+            except Exception:
+                deltas = []
+            uplift = float(child_roi - (best_base if math.isfinite(best_base) else 0.0))
+            deltas.append(uplift)
+            if len(deltas) > 24:
+                deltas = deltas[-24:]
+            ev["deltas"] = deltas
+            # simple power proxy for mean uplift against margin
+            n = len(deltas)
+            if n >= 2:
+                mean_u = float(sum(deltas) / n)
+                var_u = float(sum((x - mean_u) ** 2 for x in deltas) / max(n - 1, 1))
+                se = math.sqrt(max(var_u, 1e-12) / n)
+                delta = mean_u - margin
+                z = delta / max(se, 1e-12)
+                z_alpha = 1.64
+                from math import erf, sqrt
+                Phi = lambda x: 0.5 * (1.0 + erf(x / sqrt(2.0)))
+                power = max(0.0, min(1.0, 1.0 - float(Phi(z_alpha - z))))
+            else:
+                mean_u = uplift
+                power = 0.0
+            if child_roi >= target or (power >= min_power and mean_u >= 0.0):
+                # promote
+                self.promotions_this_gen += 1
+                meta["promoted"] = True
+                to_remove.append(child_id)
+                # record as assimilation success in history/logs for transparency
+                if self.sink:
+                    event = AssimilationEvent(
+                        organelle_id=str(child_id),
+                        uplift=child_roi - (best_base if math.isfinite(best_base) else 0.0),
+                        p_value=1.0,
+                        passed=True,
+                        energy_cost=0.0,
+                        safety_hits=0,
+                        sample_size=len(tasks),
+                        control_mean=best_base if math.isfinite(best_base) else 0.0,
+                        treatment_mean=child_roi,
+                        control_std=0.0,
+                        treatment_std=0.0,
+                        ci_low=None,
+                        ci_high=None,
+                        power=power,
+                        uplift_threshold=self.config.evolution.assimilation_threshold,
+                        p_value_threshold=self.config.evolution.assimilation_p_value,
+                        energy_balance=self.host.ledger.energy_balance(str(child_id)),
+                        energy_top_up=None,
+                        cell=meta.get("cell"),
+                    )
+                    self.sink.log_assimilation(event, True)
+                continue
+            # probation countdown
+            meta["probation_left"] = int(meta.get("probation_left", 0)) - 1
+            if int(meta["probation_left"]) <= 0:
+                # cull child
+                to_remove.append(child_id)
+        for cid in to_remove:
+            # if still present, retire
+            self.host.retire_organelle(cid)
+            self.population.remove(cid)
+            self.trial_offspring.pop(cid, None)
 
     @staticmethod
     def _sanitize_telemetry(value: object) -> object:
@@ -783,7 +1052,15 @@ class EcologyLoop:
         floor = getattr(tuning, "energy_floor", 0.0)
         roi_threshold = getattr(tuning, "energy_floor_roi", 0.0)
         roi_bonus = getattr(tuning, "energy_topup_roi_bonus", 0.0)
-        effective_threshold = max(0.0, roi_threshold - roi_bonus)
+        # dynamic easing: variance and fail streak make top-ups slightly easier to build evidence
+        try:
+            recent = self.population.roi.get(genome.organelle_id, [])[-8:]
+            roi_std = pstdev([r for r in recent if math.isfinite(r)]) if len(recent) >= 2 else 0.0
+        except Exception:
+            roi_std = 0.0
+        streak = max(0, int(getattr(self, "assim_fail_streak", 0)))
+        dynamic_bonus = min(1.5, float(roi_bonus) + 0.15 * float(roi_std) + 0.02 * float(streak))
+        effective_threshold = max(0.0, float(roi_threshold) - dynamic_bonus)
         info: dict[str, float | str] = {
             "status": "disabled" if floor <= 0.0 else "pending",
             "before": float(balance),
@@ -792,6 +1069,8 @@ class EcologyLoop:
             "roi_threshold": float(roi_threshold),
             "roi_threshold_effective": float(effective_threshold),
             "credited": 0.0,
+            "roi_std": float(roi_std),
+            "fail_streak": float(streak),
         }
         if floor <= 0.0:
             return balance, info
@@ -1022,6 +1301,122 @@ class EcologyLoop:
         self.assimilation.update_thresholds(uplift_threshold=new_threshold)
         # relax p-value marginally when decay triggers
         self.config.evolution.assimilation_p_value = min(0.5, self.config.evolution.assimilation_p_value * (1.0 + (1.0 - decay)))
+
+    def _auto_nudge_evidence(self, summary: dict[str, object]) -> None:
+        """Adapt assimilation evidence knobs in‑run when progress stalls.
+
+        Nudges are incremental and bounded, and revert softly after a success.
+        """
+        tuning = self.config.assimilation_tuning
+        gating = summary.get("assimilation_gating") or {}
+        if not isinstance(gating, dict):
+            gating = {}
+        low_power = int(gating.get("low_power", 0) or 0)
+        uplift_below = int(gating.get("uplift_below_threshold", 0) or 0)
+        topup_blocked = int(gating.get("topup_roi_blocked", 0) or 0)
+        promotions = int(summary.get("promotions", 0) or 0)
+        merges = int(summary.get("merges", 0) or 0)
+        # Initialize baselines once
+        if not hasattr(self, "_nudge_baseline"):
+            self._nudge_baseline = {
+                "min_window": int(getattr(tuning, "min_window", 4)),
+                "holdout": int(getattr(tuning, "holdout_sample_size", 4)),
+                "cap": int(getattr(tuning, "trial_per_gen_cap", 2)),
+                "prob": int(getattr(tuning, "trial_probation_gens", 5)),
+                "stipend": float(getattr(tuning, "trial_stipend", 0.5)),
+                "bonus": float(getattr(tuning, "energy_topup_roi_bonus", 0.0)),
+                "tau": float(self.config.controller.tau),
+            }
+        base = self._nudge_baseline  # type: ignore[attr-defined]
+        # Decide whether to nudge up evidence or relax back
+        stall = (self.assim_fail_streak >= 8) or (low_power >= 2 and promotions == 0 and merges == 0) or (topup_blocked >= 5)
+        changed: dict[str, float] = {}
+        if stall:
+            # Increase evidence and budget within bounds
+            mw = int(getattr(tuning, "min_window", 4))
+            ho = int(getattr(tuning, "holdout_sample_size", 4))
+            cap = int(getattr(tuning, "trial_per_gen_cap", 2))
+            prob = int(getattr(tuning, "trial_probation_gens", 5))
+            stipend = float(getattr(tuning, "trial_stipend", 0.5))
+            bonus = float(getattr(tuning, "energy_topup_roi_bonus", 0.0))
+            tau = float(self.config.controller.tau)
+            new_mw = min(12, mw + 2)
+            if new_mw % 2 == 1:
+                new_mw += 1
+            new_ho = min(24, ho + 2)
+            new_cap = min(4, cap + 1)
+            new_prob = min(12, prob + 2)
+            new_stipend = min(1.2, stipend + 0.1)
+            new_bonus = min(1.5, bonus + 0.1)
+            new_tau = max(0.35, tau - 0.01)
+            if new_mw != mw:
+                tuning.min_window = new_mw
+                changed["min_window"] = new_mw
+            if new_ho != ho:
+                tuning.holdout_sample_size = new_ho
+                changed["holdout_sample_size"] = new_ho
+            if new_cap != cap:
+                tuning.trial_per_gen_cap = new_cap
+                changed["trial_per_gen_cap"] = new_cap
+            if new_prob != prob:
+                tuning.trial_probation_gens = new_prob
+                changed["trial_probation_gens"] = new_prob
+            if new_stipend != stipend:
+                tuning.trial_stipend = new_stipend
+                changed["trial_stipend"] = new_stipend
+            if new_bonus != bonus:
+                tuning.energy_topup_roi_bonus = new_bonus
+                changed["energy_topup_roi_bonus"] = new_bonus
+            if new_tau != tau:
+                self.config.controller.tau = new_tau
+                changed["tau"] = new_tau
+        elif promotions > 0 or merges > 0:
+            # Softly revert towards baselines after successes
+            mw = int(getattr(tuning, "min_window", 4))
+            ho = int(getattr(tuning, "holdout_sample_size", 4))
+            cap = int(getattr(tuning, "trial_per_gen_cap", 2))
+            prob = int(getattr(tuning, "trial_probation_gens", 5))
+            stipend = float(getattr(tuning, "trial_stipend", 0.5))
+            bonus = float(getattr(tuning, "energy_topup_roi_bonus", 0.0))
+            tau = float(self.config.controller.tau)
+            def step_towards(cur: float, tgt: float, step: float) -> float:
+                if cur > tgt:
+                    return max(tgt, cur - step)
+                if cur < tgt:
+                    return min(tgt, cur + step)
+                return cur
+            new_mw = int(step_towards(mw, base["min_window"], 2.0))
+            if new_mw % 2 == 1:
+                new_mw -= 1
+            new_ho = int(step_towards(ho, base["holdout"], 2.0))
+            new_cap = int(step_towards(cap, base["cap"], 1.0))
+            new_prob = int(step_towards(prob, base["prob"], 2.0))
+            new_stipend = step_towards(stipend, base["stipend"], 0.1)
+            new_bonus = step_towards(bonus, base["bonus"], 0.1)
+            new_tau = step_towards(tau, base["tau"], 0.01)
+            if new_mw != mw:
+                tuning.min_window = new_mw
+                changed["min_window"] = new_mw
+            if new_ho != ho:
+                tuning.holdout_sample_size = new_ho
+                changed["holdout_sample_size"] = new_ho
+            if new_cap != cap:
+                tuning.trial_per_gen_cap = new_cap
+                changed["trial_per_gen_cap"] = new_cap
+            if new_prob != prob:
+                tuning.trial_probation_gens = new_prob
+                changed["trial_probation_gens"] = new_prob
+            if new_stipend != stipend:
+                tuning.trial_stipend = float(new_stipend)
+                changed["trial_stipend"] = float(new_stipend)
+            if new_bonus != bonus:
+                tuning.energy_topup_roi_bonus = float(new_bonus)
+                changed["energy_topup_roi_bonus"] = float(new_bonus)
+            if new_tau != tau:
+                self.config.controller.tau = float(new_tau)
+                changed["tau"] = float(new_tau)
+        if changed:
+            summary["adaptive_nudges"] = {k: float(v) for k, v in changed.items()}
 
     def _collect_human_feedback(
         self, prompt: str, responses: dict[str, tuple[str, float]]

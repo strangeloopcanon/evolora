@@ -290,7 +290,27 @@ class HostKernel:
         self.ledger.charge(organelle_id, self.ledger.accounts[organelle_id].balance)
 
     def merge_lora_soup(self, soup: dict[str, float], target_rank: int) -> None:
+        soup_state, total_alpha_map = self.build_lora_soup_state(soup, target_rank)
+        for key, combined in soup_state.items():
+            if key not in self.assimilation_state:
+                self.assimilation_state[key] = torch.zeros_like(combined)
+                self.assimilation_weights[key] = 0.0
+            self.assimilation_state[key].add_(combined)
+            self.assimilation_weights[key] = self.assimilation_weights.get(key, 0.0) + float(total_alpha_map.get(key, 0.0))
+
+    def retire_organelle(self, organelle_id: str) -> None:
+        self.organelles.pop(organelle_id, None)
+        self.router.arms.pop(organelle_id, None)
+        self.ledger.accounts.pop(organelle_id, None)
+        self.ledger.energy_accounts.pop(organelle_id, None)
+
+    def build_lora_soup_state(self, soup: dict[str, float], target_rank: int) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
+        """Construct a weighted LoRA soup state without committing it to the host.
+
+        Returns a tuple of (state_dict, alpha_sum_per_key).
+        """
         contributions: dict[str, list[tuple[float, torch.Tensor]]] = {}
+        alpha_sum: dict[str, float] = {}
         for organelle_id, alpha in soup.items():
             organelle = self.organelles.get(organelle_id)
             if organelle is None:
@@ -299,16 +319,16 @@ class HostKernel:
             for key, tensor in snapshot.items():
                 tensor_cpu = tensor.detach().cpu().clone()
                 contributions.setdefault(key, []).append((alpha, tensor_cpu))
+                alpha_sum[key] = alpha_sum.get(key, 0.0) + alpha
             account = self.ledger.accounts.get(organelle_id)
             if account is not None:
                 self.ledger.charge(organelle_id, account.balance)
+        soup_state: dict[str, torch.Tensor] = {}
         for key, parts in contributions.items():
             if not parts:
                 continue
             combined = None
-            total_alpha = 0.0
             for alpha, tensor in parts:
-                total_alpha += alpha
                 combined = tensor * alpha if combined is None else combined + tensor * alpha
             if combined is None:
                 continue
@@ -319,17 +339,8 @@ class HostKernel:
                     combined = (u[:, :rank] * s[:rank]) @ vh[:rank, :]
                 except Exception:
                     pass
-            if key not in self.assimilation_state:
-                self.assimilation_state[key] = torch.zeros_like(combined)
-                self.assimilation_weights[key] = 0.0
-            self.assimilation_state[key].add_(combined)
-            self.assimilation_weights[key] = self.assimilation_weights.get(key, 0.0) + total_alpha
-
-    def retire_organelle(self, organelle_id: str) -> None:
-        self.organelles.pop(organelle_id, None)
-        self.router.arms.pop(organelle_id, None)
-        self.ledger.accounts.pop(organelle_id, None)
-        self.ledger.energy_accounts.pop(organelle_id, None)
+            soup_state[key] = combined
+        return soup_state, alpha_sum
 
     def list_organelle_ids(self) -> list[str]:
         return list(self.organelles.keys())

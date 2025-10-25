@@ -21,7 +21,7 @@ grid:
 
 energy:
   Emax: 6.0
-  m: 0.5
+  m: 0.45
   alpha: 5.0e-15
   beta: 0.015
   gamma: 0.0005
@@ -42,13 +42,18 @@ assimilation_tuning:
   gating_snapshot_limit: 64
   holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
   holdout_sample_size: 4
-  holdout_margin: 0.05
+  holdout_margin: 0.03
   holdout_margin_step: 0.02
   holdout_max_retries: 2
   min_window: 4
   window_step: 2
   adaptive_decay: 0.82
   adaptive_floor: 0.0003
+  bootstrap_uplift_enabled: true
+  bootstrap_samples: 200
+  permutation_samples: 200
+  min_uplift_samples: 2
+  merge_audit_enabled: true
 
 evolution:
   mutation_rate: 0.35
@@ -74,3 +79,15 @@ evaluation:
 
 meta:
   enabled: false
+curriculum:
+  lp_mix: 0.1
+  lp_alpha: 0.5
+
+qd:
+  enabled: true
+comms:
+  enabled: true
+  post_cost: 0.15
+  read_cost: 0.05
+  credit_frac: 0.2
+  ttl: 8

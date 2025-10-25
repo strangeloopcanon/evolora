@@ -15,6 +15,10 @@ from transformers.utils import logging as hf_logging
 hf_logging.set_verbosity_error()
 warnings.filterwarnings("ignore", message="You are trying to modify a model with PEFT for a second time")
 warnings.filterwarnings("ignore", message="Already found a `peft_config` attribute")
+warnings.filterwarnings(
+    "ignore",
+    message=r"Adapter .* was active which is now deleted. Setting active adapter to default.",
+)
 
 from symbiont_ecology import (
     ATPLedger,
@@ -130,6 +134,15 @@ def main() -> None:
         p_value_threshold=config.evolution.assimilation_p_value,
         safety_budget=0,
     )
+    # bootstrap uplift configuration
+    try:
+        tuning = config.assimilation_tuning
+        assim.bootstrap_enabled = bool(getattr(tuning, "bootstrap_uplift_enabled", False))
+        assim.bootstrap_n = int(getattr(tuning, "bootstrap_samples", 0))
+        assim.permutation_n = int(getattr(tuning, "permutation_samples", 0))
+        assim.min_samples = int(getattr(tuning, "min_uplift_samples", 2))
+    except Exception:
+        pass
 
     sink = TelemetrySink(root=config.metrics.root, episodes_file=config.metrics.episodes_file, assimilation_file=config.metrics.assimilation_file)
     environment = GridEnvironment(
@@ -191,6 +204,12 @@ def main() -> None:
             f"| gating low-energy {gating.get('low_energy', 0)} cooldown {gating.get('cooldown', 0)} "
             f"| episodes {generation_record['episodes']}"
         )
+        # Optional trial/promotion counters for visibility
+        trials = summary.get("trials_created")
+        promos = summary.get("promotions")
+        if isinstance(trials, int) and isinstance(promos, int):
+            if trials or promos:
+                message += f" | trials {trials} promotions {promos}"
         if "evaluation" in generation_record:
             eval_info = generation_record["evaluation"]
             message += f" | eval {eval_info['accuracy']:.3f} ({eval_info['correct']}/{eval_info['total']})"
