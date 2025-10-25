@@ -319,6 +319,12 @@ class EcologyLoop:
             organelle_id: float(self.population.average_roi(organelle_id, limit=5))
             for organelle_id in self.population.population
         }
+        # Learning KPI: ROI volatility (rolling std across organelles)
+        try:
+            roi_vals = list(summary["roi_by_organelle"].values())
+            summary["roi_volatility"] = float(pstdev(roi_vals)) if len(roi_vals) >= 2 else 0.0
+        except Exception:
+            summary["roi_volatility"] = 0.0
         summary["energy_balance"] = {
             organelle_id: float(self.host.ledger.energy_balance(organelle_id))
             for organelle_id in self.population.population
@@ -1586,8 +1592,28 @@ class EcologyLoop:
         candidate_roi = max(self.population.average_roi(candidate_id, limit=5), 0.0)
         candidate_ema = float(self.environment.organism_stats.get(candidate_id, {}).get(cell, 0.0))
         stats_map[candidate_id] = {"roi": float(candidate_roi), "ema": candidate_ema}
+        # Compute simple cost bins (QD) from recent average energy to prefer similar-cost merges
+        energies: dict[str, float] = {}
+        for oid in self.population.population.keys():
+            energies[oid] = float(self.population.average_energy(oid))
+        energy_values = sorted(v for v in energies.values() if math.isfinite(v))
+        bins: list[float] = []
+        if energy_values:
+            try:
+                qs = quantiles(energy_values, n=max(2, getattr(self.config.qd, "cost_bins", 3)), method="inclusive")
+                bins = [float(x) for x in qs]
+            except Exception:
+                bins = [energy_values[len(energy_values) // 2]]
+        def cost_bin(val: float) -> int:
+            if not bins:
+                return 0
+            for i, edge in enumerate(bins):
+                if val <= edge:
+                    return i
+            return len(bins)
+        cand_bin = cost_bin(energies.get(candidate_id, 0.0))
 
-        mates: list[tuple[str, float, float]] = []
+        mates: list[tuple[str, float, float, int]] = []
         for organelle_id, per_cell in self.environment.organism_stats.items():
             if organelle_id == candidate_id:
                 continue
@@ -1595,10 +1621,12 @@ class EcologyLoop:
             if ema is None:
                 continue
             roi = self.population.average_roi(organelle_id, limit=5)
-            mates.append((organelle_id, float(ema), float(roi)))
-        mates.sort(key=lambda item: (item[1], item[2]), reverse=True)
+            mbin = cost_bin(energies.get(organelle_id, 0.0))
+            mates.append((organelle_id, float(ema), float(roi), mbin))
+        # Prefer same-bin mates; fallback to global best if insufficient
+        mates.sort(key=lambda item: (item[3] == cand_bin, item[1], item[2]), reverse=True)
         selected = mates[: max(0, soup_size - 1)]
-        for organelle_id, ema, roi in selected:
+        for organelle_id, ema, roi, _mbin in selected:
             stats_map[organelle_id] = {"roi": max(roi, 0.0), "ema": float(ema)}
         soup_ids = [candidate_id] + [entry[0] for entry in selected]
         return soup_ids, stats_map
