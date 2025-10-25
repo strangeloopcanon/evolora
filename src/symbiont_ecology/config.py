@@ -212,6 +212,11 @@ class AssimilationTuningConfig(BaseModel):
     trial_probation_gens: int = Field(5, ge=1)
     trial_promote_margin: float = Field(0.02, ge=0.0)
     trial_min_power: float = Field(0.1, ge=0.0, le=1.0)
+    # Colonies (optional)
+    colonies_enabled: bool = Field(False)
+    colony_synergy_delta: float = Field(0.1, ge=0.0)
+    colony_variance_improve: float = Field(0.2, ge=0.0)
+    colony_windows: int = Field(3, ge=1)
 
 
 class LimitConfig(BaseModel):
@@ -261,6 +266,9 @@ class EnvironmentConfig(BaseModel):
     energy_budget: float = Field(50.0, ge=0.0)
     success_reward_bonus: float = Field(0.5, ge=0.0)
     failure_cost_multiplier: float = Field(0.7, ge=0.0, le=1.0)
+    auto_batch: bool = Field(False)
+    batch_min: int = Field(1, ge=1)
+    batch_max: int = Field(4, ge=1)
 
 
 class HumanBanditConfig(BaseModel):

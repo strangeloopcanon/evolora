@@ -16,6 +16,11 @@ class Genome:
     drive_weights: dict[str, float]
     gate_bias: float
     rank: int
+    # evolved behavioural traits (defaults are neutral)
+    explore_rate: float = 0.0
+    post_rate: float = 0.0
+    read_rate: float = 0.0
+    hint_weight: float = 0.0
 
 
 @dataclass
@@ -63,6 +68,10 @@ class PopulationManager:
             drive_weights=mutated_weights,
             gate_bias=genome.gate_bias + random.gauss(0, 0.1),
             rank=mutated_rank,
+            explore_rate=max(0.0, min(1.0, genome.explore_rate + random.gauss(0, 0.05))),
+            post_rate=max(0.0, min(1.0, genome.post_rate + random.gauss(0, 0.05))),
+            read_rate=max(0.0, min(1.0, genome.read_rate + random.gauss(0, 0.05))),
+            hint_weight=max(0.0, min(1.0, genome.hint_weight + random.gauss(0, 0.05))),
         )
 
     def niche(self, genome: Genome) -> int:

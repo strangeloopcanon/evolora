@@ -151,6 +151,7 @@ Happy evolving — let’s see if this Cambrian-era colony learns something genu
   - `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed_plus.yaml --generations 150 --batch-size 2 --output artifacts_gemma_relaxed_plus_latest`
 - Analyse any run dir:
   - `.venv311/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report`
+  - Optional HTML dashboard: `.venv311/bin/python scripts/evoscope.py <run_dir>` then open `<run_dir>/index.html`
 
 During runs, the progress ticker prints what actually matters each generation:
 `Generation 090 | ROI 0.932 | merges 0 | energy floor 0.61 (ROI≥1.00) | gating low-energy 14 cooldown 1 | episodes 28 | eval 0.000 (0/12)`
