@@ -103,6 +103,7 @@ class EcologyLoop:
     trial_creations_this_gen: int = 0
     _qd_archive: dict[tuple[str, str, int], dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _synergy_window: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    colonies: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
@@ -202,21 +203,7 @@ class EcologyLoop:
                                 bucket.append(hint_text)
 
         # endogenous batch size option
-        bs = batch_size
-        try:
-            if bool(getattr(self.config.environment, "auto_batch", False)):
-                roi_sample = self.population.aggregate_roi(limit=5)
-                bmin = int(max(1, getattr(self.config.environment, "batch_min", 1)))
-                bmax = int(max(bmin, getattr(self.config.environment, "batch_max", 4)))
-                if roi_sample <= 0.5:
-                    bs = bmin
-                elif roi_sample >= 1.5:
-                    bs = bmax
-                else:
-                    frac = (roi_sample - 0.5) / 1.0
-                    bs = int(max(bmin, min(bmax, round(bmin + frac * (bmax - bmin)))))
-        except Exception:
-            bs = batch_size
+        bs = self._compute_batch_size(batch_size)
         for organelle_id in active:
             for _ in range(bs):
                 lp_mix = getattr(self.config.curriculum, "lp_mix", 0.0)
@@ -383,6 +370,8 @@ class EcologyLoop:
                 summary["synergy_samples"] = list(self._synergy_window[-5:])
         except Exception:
             pass
+        # Colonies: ensure count is present even if disabled
+        summary["colonies"] = int(len(self.colonies))
         if self.evaluation_manager and self.generation_index % self.evaluation_manager.config.cadence == 0:
             evaluation_result = self.evaluation_manager.evaluate(self.host, self.environment)
             summary["evaluation"] = evaluation_result
@@ -397,6 +386,24 @@ class EcologyLoop:
             meta_info = self.meta_evolver.step(self.generation_index, summary["avg_roi"])
             summary.update(meta_info)
         return summary
+
+    def _compute_batch_size(self, default_bs: int) -> int:
+        bs = default_bs
+        try:
+            if bool(getattr(self.config.environment, "auto_batch", False)):
+                roi_sample = self.population.aggregate_roi(limit=5)
+                bmin = int(max(1, getattr(self.config.environment, "batch_min", 1)))
+                bmax = int(max(bmin, getattr(self.config.environment, "batch_max", 4)))
+                if roi_sample <= 0.5:
+                    bs = bmin
+                elif roi_sample >= 1.5:
+                    bs = bmax
+                else:
+                    frac = (roi_sample - 0.5) / 1.0
+                    bs = int(max(bmin, min(bmax, round(bmin + frac * (bmax - bmin)))))
+        except Exception:
+            bs = default_bs
+        return bs
 
     def _settle_episode(
         self,
@@ -685,6 +692,10 @@ class EcologyLoop:
                         "sample_size": int(result.event.sample_size or 0),
                     },
                 )
+                try:
+                    self.population.grant_evidence(genome.organelle_id, 1)
+                except Exception:
+                    pass
                 continue
             probe_records: list[dict[str, object]] = []
             soup_records: list[dict[str, float]] = []
@@ -774,6 +785,31 @@ class EcologyLoop:
                     if child_id:
                         self.trial_creations_this_gen += 1
                         attempt_detail["trial_offspring_created"] = child_id
+                # Router-team acceptance gate: try a routed pair as a colony candidate
+                try:
+                    soup_ids, _stats_map = self._select_soup_members(cell, genome.organelle_id)
+                    partner = None
+                    for oid in soup_ids:
+                        if oid != genome.organelle_id:
+                            partner = oid
+                            break
+                    if partner is not None:
+                        tasks = self._sample_holdout_tasks()
+                        if tasks:
+                            team_roi = self._evaluate_team_holdout_roi(genome.organelle_id, partner, tasks)
+                            base_a = self._evaluate_holdout_roi(genome.organelle_id, tasks)
+                            base_b = self._evaluate_holdout_roi(partner, tasks)
+                            baseline = max(base_a, base_b)
+                            delta = team_roi - baseline
+                            # simple power proxy: n tasks >= 8
+                            min_power_tasks = 8
+                            if len(tasks) >= min_power_tasks and delta > float(self.config.assimilation_tuning.holdout_margin):
+                                cid = f"col_{genome.organelle_id[:4]}_{partner[:4]}"
+                                self.colonies.setdefault(cid, {"members": [genome.organelle_id, partner], "pot": 0.0, "reserve_ratio": 0.25, "created_gen": self.generation_index})
+                                self.promotions_this_gen += 1
+                                attempt_detail["team_promoted_colony"] = cid
+                except Exception:
+                    pass
             self._record_assimilation_attempt(attempt_detail)
             if self.sink:
                 event = result.event.model_copy(
@@ -1045,6 +1081,54 @@ class EcologyLoop:
             if len(self._synergy_window) > 24:
                 self._synergy_window = self._synergy_window[-24:]
 
+    def _maybe_promote_colonies(self) -> None:
+        if not bool(getattr(self.config.assimilation_tuning, "colonies_enabled", False)):
+            return
+        windows = int(getattr(self.config.assimilation_tuning, "colony_windows", 3))
+        delta = float(getattr(self.config.assimilation_tuning, "colony_synergy_delta", 0.1))
+        recent = self._synergy_window[-(windows * 4) :]
+        by_pair: dict[tuple[str, str], list[float]] = {}
+        for rec in recent:
+            a = str(rec.get("a")); b = str(rec.get("b")); s = float(rec.get("synergy", 0.0))
+            pair = (min(a, b), max(a, b))
+            by_pair.setdefault(pair, []).append(s)
+        for (a, b), vals in by_pair.items():
+            if len(vals) < windows:
+                continue
+            mean_s = sum(vals[-windows:]) / windows
+            if mean_s >= delta and (a in self.population.population) and (b in self.population.population):
+                cid = f"col_{a[:4]}_{b[:4]}"
+                if cid not in self.colonies:
+                    self.colonies[cid] = {
+                        "members": [a, b],
+                        "pot": 0.0,
+                        "reserve_ratio": 0.25,
+                        "created_gen": self.generation_index,
+                    }
+
+    def _tick_colonies(self) -> None:
+        if not self.colonies:
+            return
+        for cid, meta in list(self.colonies.items()):
+            members: list[str] = [str(x) for x in meta.get("members", [])]
+            pot = float(meta.get("pot", 0.0))
+            earn = 0.0
+            for m in members:
+                deltas = self.population.recent_energy_deltas(m, limit=4)
+                earn += sum(d for d in deltas if isinstance(d, (int, float))) * 0.10
+            pot = max(0.0, pot + earn)
+            reserve_ratio = float(meta.get("reserve_ratio", 0.25))
+            for m in members:
+                bal = self.host.ledger.energy_balance(m)
+                ticket = self.config.energy.m
+                reserve = reserve_ratio * 4.0 * ticket
+                if pot > reserve and bal < max(ticket, self.config.assimilation_tuning.energy_floor or ticket):
+                    amount = min(pot - reserve, max(ticket - bal, 0.0))
+                    if amount > 0:
+                        self.host.ledger.credit_energy(m, amount)
+                        pot -= amount
+            meta["pot"] = pot
+
     def _auto_tune_assimilation_energy(self, summary: dict[str, object]) -> None:
         tuning = self.config.assimilation_tuning
         window = 12
@@ -1184,6 +1268,27 @@ class EcologyLoop:
         roi = self.population.average_roi(genome.organelle_id, limit=5)
         info["roi"] = float(roi)
         if roi < effective_threshold:
+            # attempt evidence-bypass top-up (only if credit present)
+            try:
+                pre_credit = 0
+                credits = getattr(self.population, "evidence_credit", {})
+                if isinstance(credits, dict):
+                    pre_credit = int(credits.get(genome.organelle_id, 0) or 0)
+                if pre_credit > 0 and bool(self.population.consume_evidence(genome.organelle_id, 1)):
+                    ledger = self.host.ledger
+                    available = max(0.0, min(floor - balance, ledger.energy_cap - balance))
+                    if available > 0.0:
+                        ledger.credit_energy(genome.organelle_id, available)
+                        new_balance = ledger.energy_balance(genome.organelle_id)
+                        info["status"] = "credited"
+                        info["credited"] = float(new_balance - balance)
+                        info["after"] = float(new_balance)
+                        info["floor"] = float(floor)
+                        info["roi_threshold"] = float(roi_threshold)
+                        info["evidence_bypass"] = True
+                        return new_balance, info
+            except Exception:
+                pass
             info["status"] = "skip_low_roi"
             return balance, info
         ledger = self.host.ledger
@@ -1266,6 +1371,42 @@ class EcologyLoop:
         if not rois:
             return float("-inf")
         return sum(rois) / len(rois)
+
+    def _evaluate_team_holdout_roi(self, a_id: str, b_id: str, tasks: list[EvaluationTask]) -> float:
+        if not tasks:
+            return 0.0
+        energy_cfg = self.config.energy
+        rois: list[float] = []
+        for index, task in enumerate(tasks, start=1):
+            grid_task = task.to_grid_task(self.environment, task_id=f"team_{index:04d}")
+            best_roi = 0.0
+            for oid in (a_id, b_id):
+                result = self.host.step(
+                    prompt=grid_task.prompt,
+                    intent="team holdout",
+                    max_routes=1,
+                    allowed_organelle_ids=[oid],
+                )
+                metrics = result.responses.get(oid)
+                if metrics is None:
+                    continue
+                success, reward = grid_task.evaluate(metrics.answer)
+                revenue = grid_task.price * reward.total
+                cost = (
+                    energy_cfg.alpha * metrics.flops_estimate
+                    + energy_cfg.beta * metrics.memory_gb
+                    + energy_cfg.gamma * metrics.latency_ms
+                    + energy_cfg.lambda_p * metrics.trainable_params
+                )
+                if cost <= 0.0:
+                    roi_value = float("inf") if revenue > 0 else 0.0
+                else:
+                    roi_value = revenue / cost
+                if not math.isfinite(roi_value):
+                    roi_value = max(0.0, min(roi_value, 10.0)) if revenue > 0 else 0.0
+                best_roi = max(best_roi, float(roi_value))
+            rois.append(best_roi)
+        return float(sum(rois) / max(len(rois), 1)) if rois else 0.0
 
     def _holdout_accepts(self, candidate_id: str, mate_ids: list[str]) -> tuple[bool, dict[str, object] | None]:
         cfg = self.config.assimilation_tuning
@@ -1744,11 +1885,32 @@ class EcologyLoop:
             positives = [score for score in scores if score > 0.0]
             if positives:
                 probe_boost += sum(positives) / max(len(positives), 1)
+        method = str(getattr(self.config.assimilation_tuning, "merge_method", "naive")).lower()
+        # optional fisher-style importance weighting
+        importances: dict[str, float] = {}
+        if method == "fisher_svd":
+            for oid in soup_ids:
+                org = self.host.get_organelle(oid)
+                imp = 1.0
+                try:
+                    adapter = getattr(org, "adapter", None)
+                    if adapter is not None and hasattr(adapter, "lora_A") and hasattr(adapter, "lora_B"):
+                        a = adapter.lora_A.detach()
+                        b = adapter.lora_B.detach()
+                        imp = float(a.norm().item() * b.norm().item() + 1e-6)
+                except Exception:
+                    imp = 1.0
+                importances[oid] = imp
+            # normalize importances
+            s = sum(importances.values()) or 1.0
+            importances = {k: (v / s) for k, v in importances.items()}
         for oid in soup_ids:
             stats = stats_map.get(oid, {"roi": 0.0, "ema": 0.0})
             roi = max(stats.get("roi", 0.0), 0.0)
             ema = stats.get("ema", 0.0)
             weight = (roi + 1e-3) * (ema + 1e-3)
+            if method == "fisher_svd":
+                weight *= importances.get(oid, 1.0)
             if oid == candidate_id:
                 weight *= probe_boost
             summary.append({"organelle_id": oid, "weight": float(weight), "roi": float(roi), "ema": float(ema)})

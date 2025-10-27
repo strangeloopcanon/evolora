@@ -152,6 +152,7 @@ Happy evolving — let’s see if this Cambrian-era colony learns something genu
 - Analyse any run dir:
   - `.venv311/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report`
   - Optional HTML dashboard: `.venv311/bin/python scripts/evoscope.py <run_dir>` then open `<run_dir>/index.html`
+  - Optional animation (timeline GIF): `.venv311/bin/python scripts/evoscope_anim.py <run_dir> --gif` (writes `<run_dir>/timeline.gif`)
 
 During runs, the progress ticker prints what actually matters each generation:
 `Generation 090 | ROI 0.932 | merges 0 | energy floor 0.61 (ROI≥1.00) | gating low-energy 14 cooldown 1 | episodes 28 | eval 0.000 (0/12)`

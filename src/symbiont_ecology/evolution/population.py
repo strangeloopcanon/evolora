@@ -34,6 +34,7 @@ class PopulationManager:
     adapter_usage: dict[str, dict[str, List[float]]] = field(default_factory=dict)
     energy_delta: dict[str, List[float]] = field(default_factory=dict)
     assimilation_history: dict[tuple[str, str, str], list[dict[str, object]]] = field(default_factory=dict)
+    evidence_credit: dict[str, int] = field(default_factory=dict)
 
     def register(self, genome: Genome) -> None:
         self.population[genome.organelle_id] = genome
@@ -89,6 +90,9 @@ class PopulationManager:
 
     def record_energy_delta(self, organelle_id: str, delta: float) -> None:
         self.energy_delta.setdefault(organelle_id, []).append(delta)
+        # accumulate evidence credits on positive deltas as a weak proxy
+        if delta > 0:
+            self.evidence_credit[organelle_id] = self.evidence_credit.get(organelle_id, 0) + 0
 
     def record_roi(self, organelle_id: str, value: float) -> None:
         if not math.isfinite(value):
@@ -172,6 +176,18 @@ class PopulationManager:
         self.roi.pop(organelle_id, None)
         self.adapter_usage.pop(organelle_id, None)
         self.energy_delta.pop(organelle_id, None)
+        self.evidence_credit.pop(organelle_id, None)
+
+    # Evidence credit helpers (for endogenous power economics)
+    def grant_evidence(self, organelle_id: str, amount: int = 1) -> None:
+        self.evidence_credit[organelle_id] = self.evidence_credit.get(organelle_id, 0) + max(0, int(amount))
+
+    def consume_evidence(self, organelle_id: str, amount: int = 1) -> bool:
+        cur = self.evidence_credit.get(organelle_id, 0)
+        if cur >= amount > 0:
+            self.evidence_credit[organelle_id] = cur - amount
+            return True
+        return False
 
     def top_performers(self, limit: int = 1) -> list[Genome]:
         ranked = sorted(
