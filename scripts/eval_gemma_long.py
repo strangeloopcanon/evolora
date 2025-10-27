@@ -141,6 +141,10 @@ def main() -> None:
         assim.bootstrap_n = int(getattr(tuning, "bootstrap_samples", 0))
         assim.permutation_n = int(getattr(tuning, "permutation_samples", 0))
         assim.min_samples = int(getattr(tuning, "min_uplift_samples", 2))
+        assim.dr_enabled = bool(getattr(tuning, "dr_enabled", False))
+        assim.dr_strata = list(getattr(tuning, "dr_strata", assim.dr_strata))
+        assim.dr_min_stratum = int(getattr(tuning, "dr_min_stratum_size", assim.dr_min_stratum))
+        assim.dr_min_power = float(getattr(tuning, "dr_min_power", assim.dr_min_power))
     except Exception:
         pass
 
@@ -153,6 +157,7 @@ def main() -> None:
         seed=args.seed,
         reward_bonus=config.environment.success_reward_bonus,
         failure_cost_multiplier=config.environment.failure_cost_multiplier,
+        lp_alpha=getattr(config.curriculum, "lp_alpha", 0.5),
     )
     if args.disable_human or not config.human_bandit.enabled:
         human_bandit = None

@@ -118,6 +118,8 @@ class EnvironmentController:
         controller_cfg: ControllerConfig,
         pricing_cfg: PricingConfig,
         canary_cfg: CanaryConfig,
+        *,
+        lp_alpha: float = 0.5,
         seed: int = 1234,
     ) -> None:
         self.grid_config = grid_config
@@ -125,6 +127,7 @@ class EnvironmentController:
         self.pricing = pricing_cfg
         self.canary_cfg = canary_cfg
         self.rng = random.Random(seed)
+        self.lp_alpha = max(0.0, min(1.0, lp_alpha))
         self.cells: Dict[GridKey, GridCellState] = {}
         self.bandit_counts: Dict[GridKey, int] = {}
         self.bandit_success: Dict[GridKey, float] = {}
@@ -179,7 +182,7 @@ class EnvironmentController:
         # learning progress EMA
         delta = abs(state.success_ema - self.lp_prev_ema.get(cell, prev))
         self.lp_prev_ema[cell] = state.success_ema
-        lp_alpha = 0.5
+        lp_alpha = self.lp_alpha
         self.lp_progress[cell] = (1 - lp_alpha) * self.lp_progress.get(cell, 0.0) + lp_alpha * delta
 
     def get_state(self, cell: GridKey) -> GridCellState:
@@ -244,8 +247,16 @@ class GridEnvironment:
         seed: int = 2024,
         reward_bonus: float = 0.0,
         failure_cost_multiplier: float = 1.0,
+        lp_alpha: float = 0.5,
     ) -> None:
-        self.controller = EnvironmentController(grid_cfg, controller_cfg, pricing_cfg, canary_cfg, seed=seed)
+        self.controller = EnvironmentController(
+            grid_cfg,
+            controller_cfg,
+            pricing_cfg,
+            canary_cfg,
+            lp_alpha=lp_alpha,
+            seed=seed,
+        )
         self.rng = random.Random(seed + 7)
         self.task_counter = 0
         self.organism_stats: Dict[str, Dict[GridKey, float]] = {}

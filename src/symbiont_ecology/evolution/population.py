@@ -28,6 +28,7 @@ class PopulationManager:
     config: EvolutionConfig
     population: dict[str, Genome] = field(default_factory=dict)
     history: dict[str, List[float]] = field(default_factory=dict)
+    score_meta: dict[str, List[dict[str, object]]] = field(default_factory=dict)
     ages: dict[str, int] = field(default_factory=dict)
     energy: dict[str, List[float]] = field(default_factory=dict)
     roi: dict[str, List[float]] = field(default_factory=dict)
@@ -39,6 +40,7 @@ class PopulationManager:
     def register(self, genome: Genome) -> None:
         self.population[genome.organelle_id] = genome
         self.history.setdefault(genome.organelle_id, [])
+        self.score_meta.setdefault(genome.organelle_id, [])
         self.energy.setdefault(genome.organelle_id, [])
         self.roi.setdefault(genome.organelle_id, [])
         self.adapter_usage.setdefault(genome.organelle_id, {})
@@ -82,8 +84,15 @@ class PopulationManager:
             return 0
         return int(novelty * bins) % bins
 
-    def record_score(self, organelle_id: str, score: float) -> None:
+    def record_score(self, organelle_id: str, score: float, *, meta: dict[str, object] | None = None) -> None:
         self.history.setdefault(organelle_id, []).append(score)
+        payload: dict[str, object]
+        if meta is None:
+            payload = {"score": score}
+        else:
+            payload = dict(meta)
+            payload.setdefault("score", score)
+        self.score_meta.setdefault(organelle_id, []).append(payload)
 
     def record_energy(self, organelle_id: str, value: float) -> None:
         self.energy.setdefault(organelle_id, []).append(value)
@@ -111,6 +120,13 @@ class PopulationManager:
 
     def recent_scores(self, organelle_id: str, limit: int = 10) -> list[float]:
         return self.history.get(organelle_id, [])[-limit:]
+
+    def recent_score_records(self, organelle_id: str, limit: int = 10) -> list[dict[str, object]]:
+        records = self.score_meta.get(organelle_id, [])[-limit:]
+        if records:
+            return [dict(record) for record in records]
+        scores = self.history.get(organelle_id, [])[-limit:]
+        return [{"score": score} for score in scores]
 
     def average_score(self, organelle_id: str, limit: int = 10) -> float:
         scores = self.recent_scores(organelle_id, limit)
@@ -171,6 +187,7 @@ class PopulationManager:
     def remove(self, organelle_id: str) -> None:
         self.population.pop(organelle_id, None)
         self.history.pop(organelle_id, None)
+        self.score_meta.pop(organelle_id, None)
         self.energy.pop(organelle_id, None)
         self.ages.pop(organelle_id, None)
         self.roi.pop(organelle_id, None)

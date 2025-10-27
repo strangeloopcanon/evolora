@@ -54,6 +54,7 @@ def build_html(summary: Dict[str, Any], records: List[Dict[str, Any]], out_dir: 
 <p>Generations: {summary.get('generations')} | Avg ROI mean: {summary.get('avg_roi_mean'):.3f} | Total merges: {summary.get('total_merges')} | Trials: {summary.get('trials_total')} | Promotions: {summary.get('promotions_total')}</p>
 <p>Energy mean: {summary.get('avg_energy_mean'):.3f} | Balance mean: {summary.get('energy_balance_mean'):.3f} | Diversity samples: {summary.get('diversity_samples')}</p>
 <p>QD coverage: {summary.get('qd_coverage')} | QD archive size: {records[-1].get('qd_archive_size', 0)} | ROI volatility: {records[-1].get('roi_volatility', 0.0):.3f}</p>
+<p>LP mix active (last): {summary.get('lp_mix_active_last', 0.0):.3f} | Base mean: {summary.get('lp_mix_base_mean', 0.0):.3f} | Colonies: {records[-1].get('colonies', 0)}</p>
 <h3>Assimilation gating totals</h3>
 <ul>{gating_lines}</ul>
 <h3>Recent generations</h3>
@@ -84,4 +85,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
