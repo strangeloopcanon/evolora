@@ -35,6 +35,8 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     merges = [rec.get("merges", 0) for rec in records]
     culled = [rec.get("culled_bankrupt", 0) for rec in records]
     energy_balance_means = [rec.get("mean_energy_balance", 0.0) for rec in records]
+    lp_mix_base = [rec.get("lp_mix_base", 0.0) for rec in records]
+    lp_mix_active = [rec.get("lp_mix_active", 0.0) for rec in records]
     eval_records = [rec.get("evaluation") for rec in records if rec.get("evaluation")]
     eval_accuracy = [rec["accuracy"] for rec in eval_records]
     eval_correct = sum(rec.get("correct", 0) for rec in eval_records)
@@ -79,6 +81,7 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     latest_record = records[-1]
     latest_gating_samples = latest_record.get("assimilation_gating_samples", [])
     latest_attempts = latest_record.get("assimilation_attempts", [])
+    colonies_meta = latest_record.get("colonies_meta")
 
     qd_coverage = latest_record.get("qd_coverage")
     roi_volatility = latest_record.get("roi_volatility")
@@ -99,6 +102,9 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "energy_balance_mean": mean(energy_balance_means),
         "energy_balance_min": min(energy_balance_means),
         "energy_balance_max": max(energy_balance_means),
+        "lp_mix_base_mean": mean(lp_mix_base) if lp_mix_base else 0.0,
+        "lp_mix_active_mean": mean(lp_mix_active) if lp_mix_active else 0.0,
+        "lp_mix_active_last": lp_mix_active[-1] if lp_mix_active else 0.0,
         "active_min": min(active),
         "active_max": max(active),
         "bankrupt_min": min(bankrupt),
@@ -126,6 +132,7 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "roi_volatility": roi_volatility,
         "trials_total": total_trials,
         "promotions_total": total_promotions,
+        "colonies_meta": colonies_meta,
     }
 
 
@@ -138,6 +145,8 @@ def summarise_assimilation(path: Path) -> Dict[str, Any]:
     sample_sizes: list[int] = []
     powers: list[float] = []
     for_ci = 0
+    method_counts: Dict[str, int] = {}
+    dr_used = 0
     with path.open() as handle:
         for line in handle:
             line = line.strip()
@@ -163,6 +172,11 @@ def summarise_assimilation(path: Path) -> Dict[str, Any]:
             pw = event.get("power")
             if isinstance(pw, (int, float)):
                 powers.append(float(pw))
+            method = event.get("method")
+            if isinstance(method, str):
+                method_counts[method] = method_counts.get(method, 0) + 1
+            if bool(event.get("dr_used")):
+                dr_used += 1
     out: Dict[str, Any] = {
         "events": passes + failures,
         "passes": passes,
@@ -174,6 +188,10 @@ def summarise_assimilation(path: Path) -> Dict[str, Any]:
         out["ci_excludes_zero_rate"] = ci_excludes_zero / max(for_ci, 1)
     if powers:
         out["power_mean"] = float(mean(powers))
+    if method_counts:
+        out["methods"] = method_counts
+    if dr_used:
+        out["dr_used"] = dr_used
     return out
 
 
@@ -202,6 +220,7 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         ("bankrupt", "Bankrupt organelles"),
         ("merges", "Assimilation merges"),
         ("culled_bankrupt", "Culled organelles"),
+        ("lp_mix_active", "LP mix active"),
     ]:
         plot_line(metric, ylabel)
 
@@ -242,6 +261,9 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         f"- Energy balance mean: {summary['energy_balance_mean']:.3f} (range {summary['energy_balance_min']:.3f} – {summary['energy_balance_max']:.3f})"
     )
     lines.append(
+        f"- Curriculum lp_mix active: mean {summary['lp_mix_active_mean']:.3f} | last {summary['lp_mix_active_last']:.3f} (base mean {summary['lp_mix_base_mean']:.3f})"
+    )
+    lines.append(
         f"- Active organelles per generation: {summary['active_min']} – {summary['active_max']} (bankrupt: {summary['bankrupt_min']} – {summary['bankrupt_max']})"
     )
     lines.append(f"- Bankruptcy culls: total {summary['culled_total']} (max per generation {summary['culled_max']})")
@@ -261,6 +283,17 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         lines.append(
             f"- Assimilation tests: {assimilation['events']} (passes {assimilation['passes']}, failures {assimilation['failures']})"
         )
+        if "sample_size_mean" in assimilation:
+            lines.append(f"  - Mean sample size: {assimilation['sample_size_mean']:.1f}")
+        if "ci_excludes_zero_rate" in assimilation:
+            lines.append(f"  - CI excludes zero: {assimilation['ci_excludes_zero_rate']*100:.1f}%")
+        if "power_mean" in assimilation:
+            lines.append(f"  - Power (proxy) mean: {assimilation['power_mean']:.2f}")
+        if "methods" in assimilation:
+            method_items = ", ".join(f"{name}: {count}" for name, count in assimilation["methods"].items())
+            lines.append(f"  - Methods: {method_items}")
+        if assimilation.get("dr_used"):
+            lines.append(f"  - DR uplift applied in {assimilation['dr_used']} events")
     gating_samples = summary.get("assimilation_gating_samples") or []
     if gating_samples:
         lines.append("- Recent gating snapshots:")
@@ -352,6 +385,12 @@ def main() -> None:
         f"{summary['energy_balance_max']:.3f}",
     )
     print(
+        "Curriculum lp_mix active (mean/base/last):",
+        f"{summary['lp_mix_active_mean']:.3f}",
+        f"{summary['lp_mix_base_mean']:.3f}",
+        f"{summary['lp_mix_active_last']:.3f}",
+    )
+    print(
         "Active organelles range:", summary["active_min"], "-", summary["active_max"],
         ", bankrupt:", summary["bankrupt_min"], "-", summary["bankrupt_max"],
     )
@@ -383,6 +422,11 @@ def main() -> None:
             print("Uplift CI excludes zero (rate):", f"{assimilation_summary['ci_excludes_zero_rate']*100:.1f}%")
         if "power_mean" in assimilation_summary:
             print("Power (proxy) mean:", f"{assimilation_summary['power_mean']:.2f}")
+        if "methods" in assimilation_summary:
+            method_items = ", ".join(f"{name}: {count}" for name, count in assimilation_summary["methods"].items())
+            print("Methods:", method_items)
+        if assimilation_summary.get("dr_used"):
+            print("DR uplift events:", assimilation_summary["dr_used"])
     else:
         print("No assimilation events recorded")
     if summary.get("trials_total") or summary.get("promotions_total"):

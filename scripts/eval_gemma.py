@@ -54,6 +54,18 @@ def main() -> None:
         p_value_threshold=config.evolution.assimilation_p_value,
         safety_budget=0,
     )
+    try:
+        tuning = config.assimilation_tuning
+        assimilation.bootstrap_enabled = bool(getattr(tuning, "bootstrap_uplift_enabled", False))
+        assimilation.bootstrap_n = int(getattr(tuning, "bootstrap_samples", 0))
+        assimilation.permutation_n = int(getattr(tuning, "permutation_samples", 0))
+        assimilation.min_samples = int(getattr(tuning, "min_uplift_samples", 2))
+        assimilation.dr_enabled = bool(getattr(tuning, "dr_enabled", False))
+        assimilation.dr_strata = list(getattr(tuning, "dr_strata", assimilation.dr_strata))
+        assimilation.dr_min_stratum = int(getattr(tuning, "dr_min_stratum_size", assimilation.dr_min_stratum))
+        assimilation.dr_min_power = float(getattr(tuning, "dr_min_power", assimilation.dr_min_power))
+    except Exception:
+        pass
 
     sink = TelemetrySink(
         root=config.metrics.root,
@@ -69,6 +81,7 @@ def main() -> None:
         seed=42,
         reward_bonus=config.environment.success_reward_bonus,
         failure_cost_multiplier=config.environment.failure_cost_multiplier,
+        lp_alpha=getattr(config.curriculum, "lp_alpha", 0.5),
     )
 
     human_bandit = None

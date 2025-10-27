@@ -56,6 +56,10 @@ class AssimilationEvent(BaseModel):
     cell: dict[str, str] | None = None
     soup: list[dict[str, float]] = Field(default_factory=list)
     probes: list[dict[str, object]] = Field(default_factory=list)
+    method: str = "z_test"
+    dr_used: bool = False
+    dr_strata: list[str] = Field(default_factory=list)
+    dr_sample_sizes: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
 class LiveEvalSummary(BaseModel):

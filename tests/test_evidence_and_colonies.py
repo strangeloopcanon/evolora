@@ -67,14 +67,17 @@ def test_colony_promotion_and_tick() -> None:
     # inject synergy samples across windows
     loop._synergy_window.extend(
         [
-            {"a": a, "b": b, "synergy": 0.2},
-            {"a": a, "b": b, "synergy": 0.15},
-            {"a": a, "b": b, "synergy": 0.18},
+            {"a": a, "b": b, "synergy": 0.2, "team": 1.20, "solo_a": 0.9, "solo_b": 0.7},
+            {"a": a, "b": b, "synergy": 0.17, "team": 1.21, "solo_a": 0.8, "solo_b": 0.95},
+            {"a": a, "b": b, "synergy": 0.19, "team": 1.19, "solo_a": 1.05, "solo_b": 0.85},
         ]
     )
     loop._maybe_promote_colonies()
     assert loop.colonies, "Expected a colony to be created"
     cid = next(iter(loop.colonies.keys()))
+    meta = loop.colonies[cid]
+    meta["holdout_passes"] = meta.get("required_passes", 2)
+    meta["review_interval"] = 999
     # seed positive energy deltas for members
     loop.population.record_energy_delta(a, 0.5)
     loop.population.record_energy_delta(b, 0.4)
@@ -83,3 +86,31 @@ def test_colony_promotion_and_tick() -> None:
     pot_after = float(loop.colonies[cid].get("pot", 0.0))
     assert pot_after >= pot_before
 
+
+def test_colony_dissolves_on_holdout_failure() -> None:
+    loop = make_loop(colonies=True)
+    ids = list(loop.population.population.keys())
+    a, b = ids[0], ids[1]
+    loop._synergy_window.extend(
+        [
+            {"a": a, "b": b, "synergy": 0.2, "team": 1.22, "solo_a": 0.85, "solo_b": 0.75},
+            {"a": a, "b": b, "synergy": 0.18, "team": 1.21, "solo_a": 0.8, "solo_b": 1.0},
+            {"a": a, "b": b, "synergy": 0.19, "team": 1.20, "solo_a": 1.05, "solo_b": 0.9},
+        ]
+    )
+    loop._maybe_promote_colonies()
+    cid = next(iter(loop.colonies.keys()))
+    meta = loop.colonies[cid]
+    meta["holdout_passes"] = 0
+    meta["holdout_failures"] = 0
+    meta["review_interval"] = 1
+    meta["last_review"] = loop.generation_index - 2
+    loop._evaluate_team_holdout_roi = lambda *args, **kwargs: 0.1  # type: ignore
+    loop._evaluate_holdout_roi = lambda *args, **kwargs: 0.2  # type: ignore
+    loop._sample_holdout_tasks = lambda: ["dummy"] * 8  # type: ignore
+    loop._tick_colonies()
+    assert cid in loop.colonies
+    meta = loop.colonies[cid]
+    meta["last_review"] = loop.generation_index - 2
+    loop._tick_colonies()
+    assert cid not in loop.colonies

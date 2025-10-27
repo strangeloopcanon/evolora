@@ -52,6 +52,10 @@ assimilation_tuning:
   bootstrap_samples: 200
   permutation_samples: 200
   min_uplift_samples: 4
+  dr_enabled: true
+  dr_strata: [family, depth]
+  dr_min_stratum_size: 3
+  dr_min_power: 0.25
   merge_audit_enabled: true
   merge_method: fisher_svd
   merge_mode: hybrid
@@ -60,10 +64,14 @@ assimilation_tuning:
   trial_stipend: 1.0
   trial_probation_gens: 12
   trial_promote_margin: 0.03
+  trial_min_power: 0.2
   colonies_enabled: true
   colony_synergy_delta: 0.08
   colony_variance_improve: 0.20
   colony_windows: 4
+  colony_review_interval: 6
+  colony_required_passes: 2
+  colony_max_failures: 2
 
 evolution:
   mutation_rate: 0.32
@@ -87,6 +95,10 @@ meta:
 curriculum:
   lp_mix: 0.2
   lp_alpha: 0.5
+  alp_auto_mix: true
+  lp_mix_min: 0.1
+  lp_mix_max: 0.6
+  lp_window: 6
 
 controller:
   tau: 0.38

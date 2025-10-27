@@ -159,6 +159,8 @@ def test_assimilation_records_multi_soup_and_hf(tmp_path) -> None:
     assert candidate_id in member_ids
     assert len(member_ids) >= 2
     assert event.probes, "human-feedback probes should be recorded"
+    assert isinstance(event.method, str)
+    assert isinstance(event.dr_used, bool)
 
 
 def test_population_tracks_assimilation_history() -> None:
@@ -171,3 +173,29 @@ def test_population_tracks_assimilation_history() -> None:
     history = population.assimilation_records(genome.organelle_id, ("math", "short"))
     assert history
     assert history[-1]["generation"] == 1
+
+
+def test_assimilation_dr_alignment() -> None:
+    tester = AssimilationTester(0.0, 0.5, 0)
+    tester.dr_enabled = True
+    tester.dr_strata = ["family"]
+    tester.dr_min_stratum = 1
+    control = [0.1, 0.2, 0.4]
+    treatment = [0.2, 0.3, 0.5]
+    control_meta = [{"family": "math"}, {"family": "logic"}, {"family": "math"}]
+    treatment_meta = [{"family": "math"}, {"family": "logic"}, {"family": "math"}]
+    result = tester.evaluate(
+        "org",
+        control,
+        treatment,
+        safety_hits=0,
+        energy_cost=0.1,
+        energy_balance=1.0,
+        energy_top_up=None,
+        control_meta=control_meta,
+        treatment_meta=treatment_meta,
+    )
+    assert result.event.dr_used is True
+    assert "dr" in result.event.method
+    assert result.event.sample_size == 3
+    assert result.event.dr_sample_sizes

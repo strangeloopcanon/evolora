@@ -80,6 +80,10 @@ class CurriculumConfig(BaseModel):
     lp_alpha: float = Field(
         0.5, ge=0.0, le=1.0, description="Smoothing for learning progress EMA per cell"
     )
+    alp_auto_mix: bool = Field(False, description="Automatically tune lp_mix based on learning progress dispersion")
+    lp_mix_min: float = Field(0.05, ge=0.0, le=1.0)
+    lp_mix_max: float = Field(0.6, ge=0.0, le=1.0)
+    lp_window: int = Field(5, ge=1)
 
 
 class EnergyConfig(BaseModel):
@@ -190,6 +194,15 @@ class AssimilationTuningConfig(BaseModel):
     bootstrap_samples: int = Field(200, ge=10)
     permutation_samples: int = Field(200, ge=10)
     min_uplift_samples: int = Field(2, ge=1)
+    dr_enabled: bool = Field(
+        False, description="Use stratified doubly-robust uplift estimator when metadata is available."
+    )
+    dr_strata: list[str] = Field(
+        default_factory=lambda: ["family", "depth"],
+        description="Task metadata fields used for stratification during DR uplift estimation.",
+    )
+    dr_min_stratum_size: int = Field(2, ge=1, description="Minimum paired samples per stratum to contribute to uplift")
+    dr_min_power: float = Field(0.2, ge=0.0, le=1.0, description="Minimum statistical power required when DR estimator is used")
     merge_audit_enabled: bool = Field(False)
     energy_topup_roi_bonus: float = Field(
         0.0,
@@ -221,6 +234,9 @@ class AssimilationTuningConfig(BaseModel):
     colony_synergy_delta: float = Field(0.1, ge=0.0)
     colony_variance_improve: float = Field(0.2, ge=0.0)
     colony_windows: int = Field(3, ge=1)
+    colony_review_interval: int = Field(6, ge=1)
+    colony_required_passes: int = Field(2, ge=1)
+    colony_max_failures: int = Field(2, ge=1)
 
 
 class LimitConfig(BaseModel):
