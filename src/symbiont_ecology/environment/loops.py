@@ -107,11 +107,17 @@ class EcologyLoop:
     _lp_mix_history: list[float] = field(default_factory=list, init=False, repr=False)
     _last_lp_mix: float = field(default=0.0, init=False, repr=False)
     _base_lp_mix: float = field(default=0.0, init=False, repr=False)
+    _tau_relief: dict[GridKey, float] = field(default_factory=dict, init=False, repr=False)
+    _tau_fail_counts: dict[GridKey, int] = field(default_factory=dict, init=False, repr=False)
+    _roi_relief: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _topup_fail_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _assim_attempt_total: int = field(default=0, init=False, repr=False)
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
         self.promotions_this_gen = 0
         self.trial_creations_this_gen = 0
+        self._assim_attempt_total = 0
         if self.morphogenesis is None:
             self.morphogenesis = MorphogenesisController(config=self.config, host=self.host)
         if self.config.evaluation.enabled and self.evaluation_manager is None:
@@ -402,6 +408,23 @@ class EcologyLoop:
             pass
         # Colonies: ensure count is present even if disabled
         summary["colonies"] = int(len(self.colonies))
+        summary["assimilation_attempt_total"] = int(getattr(self, "_assim_attempt_total", 0))
+        if self._tau_relief:
+            relief_snapshot = {
+                f"{cell[0]}:{cell[1]}": round(float(relief), 3)
+                for cell, relief in list(self._tau_relief.items())[:8]
+                if relief > 0.0
+            }
+            if relief_snapshot:
+                summary["tau_relief_active"] = relief_snapshot
+        if self._roi_relief:
+            roi_snapshot = {
+                organelle: round(float(relief), 3)
+                for organelle, relief in list(self._roi_relief.items())[:8]
+                if relief > 0.0
+            }
+            if roi_snapshot:
+                summary["roi_relief_active"] = roi_snapshot
         if self.evaluation_manager and self.generation_index % self.evaluation_manager.config.cadence == 0:
             evaluation_result = self.evaluation_manager.evaluate(self.host, self.environment)
             summary["evaluation"] = evaluation_result
@@ -569,6 +592,7 @@ class EcologyLoop:
         per_cell_interval = self.config.assimilation_tuning.per_cell_interval
         max_cell_merges = self.config.assimilation_tuning.max_merges_per_cell
         for genome in list(self.population.population.values()):
+            self._assim_attempt_total += 1
             if self.environment.canary_failed(genome.organelle_id):
                 gating["canary_failed"] += 1
                 self._record_assimilation_gate(
@@ -634,6 +658,9 @@ class EcologyLoop:
                 tau = min(0.58, tau + 0.06)
             elif family == "json_repair":
                 tau = min(0.57, tau + 0.05)
+            relief = float(self._tau_relief.get(cell, 0.0))
+            if relief > 0.0:
+                tau = max(0.2, tau - relief)
             uplift_gate = ema - tau
             if uplift_gate < self.config.evolution.assimilation_threshold:
                 self.assimilation_cooldown[key] = self.generation_index
@@ -647,8 +674,10 @@ class EcologyLoop:
                         "tau": self.config.controller.tau,
                         "uplift_gate": uplift_gate,
                         "threshold": self.config.evolution.assimilation_threshold,
+                        "relief": relief,
                     },
                 )
+                self._register_tau_failure(cell)
                 continue
             if merges_per_cell.get(cell, 0) >= max_cell_merges:
                 gating["cell_merges_exceeded"] += 1
@@ -783,6 +812,8 @@ class EcologyLoop:
                 "treatment_std": result.event.treatment_std,
                 "energy_balance": balance,
                 "top_up": dict(topup_info),
+                "tau_relief": float(relief),
+                "roi_relief": float(self._roi_relief.get(genome.organelle_id, 0.0)),
                 "method": result.event.method,
                 "dr_used": bool(result.event.dr_used),
                 "strata": dict(result.event.dr_sample_sizes),
@@ -791,6 +822,7 @@ class EcologyLoop:
             if not result.decision:
                 self.assim_fail_streak += 1
                 self._maybe_decay_assimilation_thresholds()
+                self._register_tau_failure(cell)
             if result.decision and (capped is None or merges < capped):
                 soup_ids, stats_map = self._select_soup_members(cell, genome.organelle_id)
                 holdout_ok, holdout_info = self._holdout_accepts(
@@ -811,6 +843,7 @@ class EcologyLoop:
                             "holdout": holdout_info or {},
                         },
                     )
+                    self._register_tau_failure(cell)
                 elif self._global_probe(genome.organelle_id, cell, gating):
                     probe_records = self._run_hf_probes(genome.organelle_id)
                     soup_records = self._apply_lora_soup_merge(
@@ -837,9 +870,11 @@ class EcologyLoop:
                     merges_per_cell[cell] = merges_per_cell.get(cell, 0) + 1
                     decision_final = True
                     self.assim_fail_streak = 0
+                    self._register_tau_success(cell)
                     attempt_detail["global_probe_passed"] = True
                 else:
                     attempt_detail["global_probe_passed"] = False
+                    self._register_tau_failure(cell)
             else:
                 attempt_detail["holdout_passed"] = False
                 attempt_detail["global_probe_passed"] = False
@@ -1086,6 +1121,54 @@ class EcologyLoop:
         self.assim_attempt_samples.append(sample)
         if len(self.assim_attempt_samples) > limit:
             self.assim_attempt_samples = self.assim_attempt_samples[-limit:]
+
+    def _register_tau_failure(self, cell: GridKey) -> None:
+        window = int(getattr(self.config.assimilation_tuning, "tau_relief_window", 12))
+        step = float(getattr(self.config.assimilation_tuning, "tau_relief_step", 0.01))
+        max_relief = float(getattr(self.config.assimilation_tuning, "tau_relief_max", 0.15))
+        if window <= 0 or step <= 0.0 or max_relief <= 0.0:
+            return
+        count = self._tau_fail_counts.get(cell, 0) + 1
+        self._tau_fail_counts[cell] = count
+        if count >= window:
+            relief = min(max_relief, self._tau_relief.get(cell, 0.0) + step)
+            self._tau_relief[cell] = relief
+            self._tau_fail_counts[cell] = 0
+
+    def _register_tau_success(self, cell: GridKey) -> None:
+        if cell not in self._tau_relief:
+            self._tau_fail_counts.pop(cell, None)
+            return
+        step = float(getattr(self.config.assimilation_tuning, "tau_relief_step", 0.01))
+        relief = max(0.0, self._tau_relief.get(cell, 0.0) - step)
+        if relief <= 1e-6:
+            self._tau_relief.pop(cell, None)
+        else:
+            self._tau_relief[cell] = relief
+        self._tau_fail_counts.pop(cell, None)
+
+    def _register_roi_skip(self, organelle_id: str) -> None:
+        window = int(getattr(self.config.assimilation_tuning, "roi_relief_window", 8))
+        step = float(getattr(self.config.assimilation_tuning, "roi_relief_step", 0.05))
+        max_relief = float(getattr(self.config.assimilation_tuning, "roi_relief_max", 0.5))
+        if window <= 0 or step <= 0.0 or max_relief <= 0.0:
+            return
+        count = self._topup_fail_counts.get(organelle_id, 0) + 1
+        self._topup_fail_counts[organelle_id] = count
+        if count >= window:
+            relief = min(max_relief, self._roi_relief.get(organelle_id, 0.0) + step)
+            self._roi_relief[organelle_id] = relief
+            self._topup_fail_counts[organelle_id] = 0
+
+    def _register_roi_success(self, organelle_id: str) -> None:
+        if organelle_id in self._roi_relief:
+            step = float(getattr(self.config.assimilation_tuning, "roi_relief_step", 0.05))
+            relief = max(0.0, self._roi_relief.get(organelle_id, 0.0) - step)
+            if relief <= 1e-6:
+                self._roi_relief.pop(organelle_id, None)
+            else:
+                self._roi_relief[organelle_id] = relief
+        self._topup_fail_counts.pop(organelle_id, None)
 
     def _update_qd_archive(self) -> int:
         if not getattr(self.config.qd, "enabled", False):
@@ -1370,6 +1453,7 @@ class EcologyLoop:
         floor = getattr(tuning, "energy_floor", 0.0)
         roi_threshold = getattr(tuning, "energy_floor_roi", 0.0)
         roi_bonus = getattr(tuning, "energy_topup_roi_bonus", 0.0)
+        relief = float(self._roi_relief.get(genome.organelle_id, 0.0))
         # dynamic easing: variance and fail streak make top-ups slightly easier to build evidence
         try:
             recent = self.population.roi.get(genome.organelle_id, [])[-8:]
@@ -1378,7 +1462,7 @@ class EcologyLoop:
             roi_std = 0.0
         streak = max(0, int(getattr(self, "assim_fail_streak", 0)))
         dynamic_bonus = min(1.5, float(roi_bonus) + 0.15 * float(roi_std) + 0.02 * float(streak))
-        effective_threshold = max(0.0, float(roi_threshold) - dynamic_bonus)
+        effective_threshold = max(0.0, float(roi_threshold) - dynamic_bonus - relief)
         info: dict[str, float | str] = {
             "status": "disabled" if floor <= 0.0 else "pending",
             "before": float(balance),
@@ -1389,6 +1473,7 @@ class EcologyLoop:
             "credited": 0.0,
             "roi_std": float(roi_std),
             "fail_streak": float(streak),
+            "relief": relief,
         }
         if floor <= 0.0:
             return balance, info
@@ -1417,10 +1502,12 @@ class EcologyLoop:
                         info["floor"] = float(floor)
                         info["roi_threshold"] = float(roi_threshold)
                         info["evidence_bypass"] = True
+                        self._register_roi_success(genome.organelle_id)
                         return new_balance, info
             except Exception:
                 pass
             info["status"] = "skip_low_roi"
+            self._register_roi_skip(genome.organelle_id)
             return balance, info
         ledger = self.host.ledger
         available = max(0.0, min(floor - balance, ledger.energy_cap - balance))
@@ -1434,6 +1521,7 @@ class EcologyLoop:
         info["after"] = float(new_balance)
         info["floor"] = float(floor)
         info["roi_threshold"] = float(roi_threshold)
+        self._register_roi_success(genome.organelle_id)
         return new_balance, info
 
     def _load_holdout_tasks(self) -> list[EvaluationTask]:

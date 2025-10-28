@@ -12,6 +12,41 @@ from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.population import Genome
 
 
+def _make_basic_loop(tmp_path):
+    config = EcologyConfig()
+    config.grid = GridConfig(families=["math"], depths=["short"])
+    config.metrics.root = tmp_path
+    ledger = ATPLedger()
+    router = BanditRouter()
+    host = HostKernel(config=config, router=router, ledger=ledger)
+    host.freeze_host()
+    population = PopulationManager(config.evolution)
+    organelle_id = host.spawn_organelle(rank=2)
+    population.register(Genome(organelle_id=organelle_id, drive_weights={}, gate_bias=0.0, rank=2))
+    environment = GridEnvironment(
+        grid_cfg=config.grid,
+        controller_cfg=config.controller,
+        pricing_cfg=config.pricing,
+        canary_cfg=config.canary,
+        seed=9,
+    )
+    assimilation = AssimilationTester(
+        uplift_threshold=config.evolution.assimilation_threshold,
+        p_value_threshold=config.evolution.assimilation_p_value,
+        safety_budget=0,
+    )
+    loop = EcologyLoop(
+        config=config,
+        host=host,
+        environment=environment,
+        population=population,
+        assimilation=assimilation,
+        human_bandit=None,
+        sink=None,
+    )
+    return loop, organelle_id
+
+
 def test_assimilation_uses_global_probe_and_soup(tmp_path) -> None:
     config = EcologyConfig()
     config.grid = GridConfig(families=["math"], depths=["short"])
@@ -173,6 +208,35 @@ def test_population_tracks_assimilation_history() -> None:
     history = population.assimilation_records(genome.organelle_id, ("math", "short"))
     assert history
     assert history[-1]["generation"] == 1
+
+
+def test_tau_relief_accumulates_and_decays(tmp_path) -> None:
+    loop, _ = _make_basic_loop(tmp_path)
+    cell = ("math", "short")
+    window = loop.config.assimilation_tuning.tau_relief_window
+    for _ in range(window):
+        loop._register_tau_failure(cell)
+    assert loop._tau_relief.get(cell, 0.0) > 0.0
+    relief_before = loop._tau_relief[cell]
+    loop._register_tau_success(cell)
+    assert loop._tau_relief.get(cell, 0.0) < relief_before
+    assert loop._tau_fail_counts.get(cell) is None
+
+
+def test_roi_relief_guides_topup(tmp_path) -> None:
+    loop, organelle_id = _make_basic_loop(tmp_path)
+    tuning = loop.config.assimilation_tuning
+    tuning.energy_floor = 1.0
+    tuning.energy_floor_roi = 1.0
+    loop.population.roi[organelle_id] = [0.96, 0.97, 0.95, 0.96]
+    for _ in range(tuning.roi_relief_window):
+        loop._register_roi_skip(organelle_id)
+    assert loop._roi_relief.get(organelle_id, 0.0) > 0.0
+    genome = loop.population.population[organelle_id]
+    balance, info = loop._maybe_top_up_energy(genome, 0.2)
+    assert info["status"] == "credited"
+    assert balance > 0.2
+    assert loop._roi_relief.get(organelle_id, 0.0) <= info["relief"]
 
 
 def test_assimilation_dr_alignment() -> None:

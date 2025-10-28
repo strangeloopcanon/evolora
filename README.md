@@ -26,6 +26,7 @@ If the colony keeps earning more than it spends, the population should drift tow
 - Doubly-robust assimilation uplift with stratified holdout telemetry (tracks method, power, strata).
 - Auto-tuned learning-progress curriculum (lp_mix adapts each generation, smoothed window + plots).
 - Colony promotion now requires sustained synergy plus holdout wins; colonies dissolve after repeated regressions.
+- Adaptive assimilation relief: controller τ and ROI floors decay when merges stall, logging total attempts per generation.
 
 ## Evolution Glossary
 | Term | In-code meaning | Evolution analogy |
