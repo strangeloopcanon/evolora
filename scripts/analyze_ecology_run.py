@@ -268,6 +268,8 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
     )
     lines.append(f"- Bankruptcy culls: total {summary['culled_total']} (max per generation {summary['culled_max']})")
     lines.append(f"- Assimilation merges (per summary): {summary['total_merges']}")
+    if summary.get("assimilation_attempt_total"):
+        lines.append(f"- Assimilation attempts (all stages): {summary['assimilation_attempt_total']}")
     if summary["assimilation_gating_total"]:
         lines.append("- Assimilation gating totals:")
         for key, value in summary["assimilation_gating_total"].items():
@@ -294,6 +296,16 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
             lines.append(f"  - Methods: {method_items}")
         if assimilation.get("dr_used"):
             lines.append(f"  - DR uplift applied in {assimilation['dr_used']} events")
+    else:
+        lines.append("- Assimilation tests: none recorded")
+    if summary.get("tau_relief_active"):
+        lines.append("- Tau relief (per cell):")
+        for cell, value in summary["tau_relief_active"].items():
+            lines.append(f"  - {cell}: {value}")
+    if summary.get("roi_relief_active"):
+        lines.append("- ROI relief (per organelle):")
+        for oid, value in summary["roi_relief_active"].items():
+            lines.append(f"  - {oid}: {value}")
     gating_samples = summary.get("assimilation_gating_samples") or []
     if gating_samples:
         lines.append("- Recent gating snapshots:")
@@ -431,6 +443,12 @@ def main() -> None:
         print("No assimilation events recorded")
     if summary.get("trials_total") or summary.get("promotions_total"):
         print("Trials created:", summary.get("trials_total", 0), "Promotions:", summary.get("promotions_total", 0))
+    if summary.get("assimilation_attempt_total"):
+        print("Assimilation attempts (all stages):", summary["assimilation_attempt_total"])
+    if summary.get("tau_relief_active"):
+        print("Tau relief active:", summary["tau_relief_active"])
+    if summary.get("roi_relief_active"):
+        print("ROI relief active:", summary["roi_relief_active"])
 
     if args.plots:
         ensure_plots(gen_records, run_dir / "visuals")

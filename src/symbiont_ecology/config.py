@@ -237,6 +237,12 @@ class AssimilationTuningConfig(BaseModel):
     colony_review_interval: int = Field(6, ge=1)
     colony_required_passes: int = Field(2, ge=1)
     colony_max_failures: int = Field(2, ge=1)
+    tau_relief_window: int = Field(12, ge=1)
+    tau_relief_step: float = Field(0.01, ge=0.0)
+    tau_relief_max: float = Field(0.15, ge=0.0)
+    roi_relief_window: int = Field(8, ge=1)
+    roi_relief_step: float = Field(0.05, ge=0.0)
+    roi_relief_max: float = Field(0.5, ge=0.0)
 
 
 class LimitConfig(BaseModel):
