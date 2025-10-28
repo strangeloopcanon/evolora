@@ -28,6 +28,28 @@ If the colony keeps earning more than it spends, the population should drift tow
 - Colony promotion now requires sustained synergy plus holdout wins; colonies dissolve after repeated regressions.
 - Adaptive assimilation relief: controller τ and ROI floors decay when merges stall, logging total attempts per generation.
 
+## How Learning Emerges (Core Hypothesis)
+
+We freeze the base model (Gemma‑270M) and let many tiny LoRA adapters (“organelles”) evolve on top of it. They earn energy by solving tasks and spend energy to run. Selection pressure (energy, pricing, curriculum) and telemetry (ROI, holdouts, probes) create a closed loop where useful behaviours persist and poor ones go extinct—without back‑prop through the base.
+
+What actually changes the model’s behaviour
+- Reward‑modulated LoRA updates: after each episode, the adapter nudges toward activations that produced higher reward‑on‑cost and away from costly failures.
+- Survival economics: energy tickets force a positive ROI; bankrupt organelles are culled and replaced.
+- Curriculum pressure: a bandit + learning‑progress (ALP) mix routes tasks to where progress is steepest, steadily increasing difficulty and diversity.
+- Assimilation: when an organelle’s uplift is statistically real on holdouts (doubly‑robust test), we merge its LoRA (optionally Fisher‑aware soup) or promote a trial offspring; successful children become first‑class organisms.
+
+Beyond a single LoRA
+- Communication: a paid message board lets organelles post/read hints (comms costs are energy‑governed). As comms traits evolve, a shared “language” can emerge if it increases team ROI.
+- Colonies: when pairs consistently beat their solo baselines and reduce variance, they can pool energy under cautious reserve policies and reproduce as a team.
+- Traits and mutation: inheritable traits (explore/read/post rates, budgets) and lightweight mutation operators (rank tweaks, low‑rank rotations) maintain diversity and exploration alongside Hebbian learning.
+
+Does the environment change?
+- Yes by design. Prices adapt to success rates, the curriculum shifts to high‑progress cells, and the economy throttles or boosts experimentation via energy floors/top‑ups. This makes the world a moving target, so “learning” means adapting fast enough to remain profitable and pass holdouts.
+
+Population and diversity
+- Population size is bounded (default 4–16) and managed by culling/replication; initial organelles differ via random seeds/ranks and rapidly diverge due to reward‑modulated updates and mutation. Diversity guardrails (energy Gini cap, species share caps, QD archive) prevent monoculture, preserving niches where specialists can evolve.
+
+
 ## Evolution Glossary
 | Term | In-code meaning | Evolution analogy |
 | --- | --- | --- |
