@@ -318,6 +318,31 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
             plt.savefig(output_dir / f"cells_{metric}.png")
             plt.close()
 
+    # LP progress heatmap if available
+    if records[0].get("lp_progress"):
+        keys = sorted(records[0]["lp_progress"].keys())
+        matrix = []
+        for rec in records:
+            row = []
+            lp = rec.get("lp_progress", {})
+            for k in keys:
+                try:
+                    row.append(float(lp.get(k, 0.0)))
+                except Exception:
+                    row.append(0.0)
+            matrix.append(row)
+        plt.figure(figsize=(max(6, len(keys)), 4))
+        plt.imshow(matrix, aspect="auto", origin="lower", cmap="magma")
+        plt.colorbar(label="LP")
+        plt.yticks(range(len(records)), generations)
+        plt.xticks(range(len(keys)), keys, rotation=45, ha="right")
+        plt.xlabel("Cell")
+        plt.ylabel("Generation")
+        plt.title("Learning Progress (LP) heatmap")
+        plt.tight_layout()
+        plt.savefig(output_dir / "lp_progress.png")
+        plt.close()
+
 
 def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_path: Path) -> None:
     lines = ["# Ecology Run Analysis", ""]

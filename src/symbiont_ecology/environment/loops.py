@@ -387,6 +387,15 @@ class EcologyLoop:
                 for (family, depth), state in self.environment.controller.cells.items()
             },
         }
+        # Learning progress snapshot per cell (for analyzer LP heatmaps)
+        try:
+            lp_map = {
+                f"{family}:{depth}": float(self.environment.controller.lp_progress.get((family, depth), 0.0))
+                for (family, depth) in self.environment.controller.cells.keys()
+            }
+            summary["lp_progress"] = lp_map
+        except Exception:
+            pass
         if bool(getattr(self.config.policy, "enabled", False)):
             summary["policy_applied"] = int(len(self._active_policies) > 0)
             if self._active_policies:
@@ -995,6 +1004,38 @@ class EcologyLoop:
                 except Exception:
                     pass
                 continue
+            # DR small-n refinement: if DR used but effective sample is too small, defer
+            try:
+                if bool(result.event.dr_used):
+                    dr_sizes = result.event.dr_sample_sizes or {}
+                    min_stratum = int(getattr(self.config.assimilation_tuning, "dr_min_stratum_size", 2))
+                    contributing = 0
+                    for _k, s in dr_sizes.items():
+                        try:
+                            if int(s.get("paired", 0)) >= min_stratum:
+                                contributing += 1
+                        except Exception:
+                            continue
+                    sample_n = int(result.event.sample_size or 0)
+                    if contributing < 1 or sample_n < max(2 * min_stratum, 6):
+                        gating["low_power"] += 1
+                        self._record_assimilation_gate(
+                            reason="low_power_dr",
+                            organelle_id=genome.organelle_id,
+                            details={
+                                "generation": self.generation_index,
+                                "contributing_strata": int(contributing),
+                                "min_stratum": int(min_stratum),
+                                "sample_size": sample_n,
+                            },
+                        )
+                        try:
+                            self.population.grant_evidence(genome.organelle_id, 1)
+                        except Exception:
+                            pass
+                        continue
+            except Exception:
+                pass
             probe_records: list[dict[str, object]] = []
             soup_records: list[dict[str, float]] = []
             holdout_info: dict[str, object] | None = None
@@ -1530,6 +1571,23 @@ class EcologyLoop:
                     meta["holdout_passes"] = int(meta.get("holdout_passes", 0)) + 1
                 else:
                     meta["holdout_failures"] = int(meta.get("holdout_failures", 0)) + 1
+                # Shrink instead of dissolve when feasible
+                try:  # pragma: no cover - exercised in long runs
+                    min_size = int(getattr(cfg, "colony_min_size", 2))
+                except Exception:  # pragma: no cover
+                    min_size = 2
+                if (
+                    len(members) > min_size
+                    and float(meta.get("last_delta", 0.0)) < 0.0
+                    and int(meta.get("holdout_failures", 0)) >= 1
+                ):
+                    try:  # pragma: no cover
+                        worst = min(members, key=lambda oid: self.population.average_roi(oid, limit=5))
+                        members.remove(worst)
+                        meta["members"] = members
+                        meta["holdout_failures"] = max(0, int(meta.get("holdout_failures", 0)) - 1)
+                    except Exception:  # pragma: no cover
+                        pass
                 if int(meta.get("holdout_failures", 0)) >= max_failures:
                     self.colonies.pop(cid, None)
                     continue
