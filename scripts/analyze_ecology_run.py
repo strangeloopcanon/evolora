@@ -82,6 +82,21 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     latest_gating_samples = latest_record.get("assimilation_gating_samples", [])
     latest_attempts = latest_record.get("assimilation_attempts", [])
     colonies_meta = latest_record.get("colonies_meta")
+    # Colonies timeline
+    colonies_count_series = [int(rec.get("colonies", 0) or 0) for rec in records]
+    colonies_avg_size_series: List[float] = []
+    for rec in records:
+        meta = rec.get("colonies_meta") or {}
+        if isinstance(meta, dict) and meta:
+            sizes = []
+            for v in meta.values():
+                try:
+                    sizes.append(len(v.get("members", [])))
+                except Exception:
+                    continue
+            colonies_avg_size_series.append(sum(sizes) / max(1, len(sizes)))
+        else:
+            colonies_avg_size_series.append(0.0)
 
     qd_coverage = latest_record.get("qd_coverage")
     roi_volatility = latest_record.get("roi_volatility")
@@ -158,6 +173,8 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "trials_total": total_trials,
         "promotions_total": total_promotions,
         "colonies_meta": colonies_meta,
+        "colonies_count_series": colonies_count_series,
+        "colonies_avg_size_mean": (sum(colonies_avg_size_series) / max(1, len(colonies_avg_size_series))) if colonies_avg_size_series else 0.0,
         "policy_applied_total": policy_applied,
         "policy_roi_mean_when_applied": (sum(roi_when_policy) / max(1, len(roi_when_policy))) if roi_when_policy else 0.0,
         "policy_roi_mean_when_not": (sum(roi_when_no_policy) / max(1, len(roi_when_no_policy))) if roi_when_no_policy else 0.0,
@@ -254,6 +271,31 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         ("lp_mix_active", "LP mix active"),
     ]:
         plot_line(metric, ylabel)
+
+    # Colonies plots
+    colonies = [int(rec.get("colonies", 0) or 0) for rec in records]
+    plt.figure(figsize=(8, 4))
+    plt.plot(generations, colonies, marker="o", linewidth=1)
+    plt.xlabel("Generation"); plt.ylabel("Colonies count"); plt.title("Colonies over generations")
+    plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_count.png"); plt.close()
+
+    avg_sizes: List[float] = []
+    for rec in records:
+        meta = rec.get("colonies_meta") or {}
+        if isinstance(meta, dict) and meta:
+            sizes: List[int] = []
+            for v in meta.values():
+                try:
+                    sizes.append(len(v.get("members", [])))
+                except Exception:
+                    pass
+            avg_sizes.append(sum(sizes) / max(1, len(sizes)))
+        else:
+            avg_sizes.append(0.0)
+    plt.figure(figsize=(8, 4))
+    plt.plot(generations, avg_sizes, marker="o", linewidth=1)
+    plt.xlabel("Generation"); plt.ylabel("Avg colony size"); plt.title("Colony size over generations")
+    plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_avg_size.png"); plt.close()
 
     # Heatmaps for per-cell metrics if available
     if records[0].get("cells"):
@@ -458,6 +500,10 @@ def main() -> None:
         print("Assimilation gating totals:")
         for key, value in summary["assimilation_gating_total"].items():
             print(f"  {key}: {value}")
+    if summary.get("colonies_count_series"):
+        series = summary["colonies_count_series"]
+        print("Colonies count (min-max):", min(series), "-", max(series))
+        print("Avg colony size (mean):", f"{summary['colonies_avg_size_mean']:.2f}")
     if summary.get("policy_applied_total"):
         print("Policy usage: gens with policy:", summary["policy_applied_total"], "/", summary["generations"])
         print(
@@ -522,3 +568,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # Colonies timeline summary
+    if summary.get("colonies_count_series"):
+        lines.append("- Colonies timeline:")
+        series = summary["colonies_count_series"]
+        lines.append(f"  - count (min-max): {min(series)} – {max(series)}")
+        lines.append(f"  - avg size (mean): {summary['colonies_avg_size_mean']:.2f}")
