@@ -111,7 +111,9 @@ class EcologyLoop:
     _tau_fail_counts: dict[GridKey, int] = field(default_factory=dict, init=False, repr=False)
     _roi_relief: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     _topup_fail_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _active_policies: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _assim_attempt_total: int = field(default=0, init=False, repr=False)
+    _policy_cost_total: float = field(default=0.0, init=False, repr=False)
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
@@ -172,6 +174,25 @@ class EcologyLoop:
             self.population.record_energy(organelle_id, 0.0)
             self.population.record_roi(organelle_id, 0.0)
 
+        # Prepare colony comms budgets (bandwidth + per-gen caps)
+        if self.colonies:
+            bw_frac = float(getattr(self.config.assimilation_tuning, "colony_bandwidth_frac", 0.02))
+            post_cap = int(getattr(self.config.assimilation_tuning, "colony_post_cap", 2))
+            read_cap = int(getattr(self.config.assimilation_tuning, "colony_read_cap", 3))
+            for cid, meta in self.colonies.items():
+                pot = float(meta.get("pot", 0.0))
+                meta["bandwidth_left"] = max(0.0, min(pot, bw_frac * pot))
+                meta["posts_left"] = post_cap
+                meta["reads_left"] = read_cap
+
+        # Optional: organism policy step (JSON intents)
+        if bool(getattr(self.config.policy, "enabled", False)):
+            for organelle_id in active:
+                try:
+                    self._request_and_apply_policy(organelle_id)
+                except Exception:
+                    pass
+
         # Optional: communication read step once per active organelle
         comms_enabled = getattr(self.config.comms, "enabled", False)
         post_cost = float(getattr(self.config.comms, "post_cost", 0.2))
@@ -184,15 +205,34 @@ class EcologyLoop:
                 genome = self.population.population.get(organelle_id)
                 if genome is not None and isinstance(getattr(genome, "read_rate", 0.0), float):
                     read_attempts = max(0, min(2, int(round(2 * max(0.0, min(1.0, genome.read_rate))))))
-                messages = self.environment.read_messages(max_items=max(0, read_attempts))
+                # colony gating for reads
+                max_reads = read_attempts
+                member_colony = None
+                if self.colonies:
+                    for cid, meta in self.colonies.items():
+                        if organelle_id in meta.get("members", []):
+                            member_colony = (cid, meta)
+                            break
+                if member_colony is not None:
+                    _cid, _meta = member_colony
+                    max_reads = min(max_reads, int(_meta.get("reads_left", read_attempts)))
+                messages = self.environment.read_messages(max_items=max(0, max_reads))
                 for msg in messages:
                     # charge reader if enough energy
                     bal = self.host.ledger.energy_balance(organelle_id)
-                    if bal >= read_cost:
+                    colony_ok = True
+                    if member_colony is not None:
+                        _cid, _meta = member_colony
+                        colony_ok = float(_meta.get("bandwidth_left", 0.0)) >= read_cost and int(_meta.get("reads_left", 1)) > 0
+                    if bal >= read_cost and colony_ok:
                         try:
                             self.host.ledger.consume_energy(organelle_id, read_cost)
                         except Exception:
                             pass
+                        if member_colony is not None:
+                            _cid, _meta = member_colony
+                            _meta["bandwidth_left"] = max(0.0, float(_meta.get("bandwidth_left", 0.0)) - read_cost)
+                            _meta["reads_left"] = max(0, int(_meta.get("reads_left", 1)) - 1)
                         # credit poster
                         poster = msg.get("organelle_id")
                         if isinstance(poster, str):
@@ -217,9 +257,15 @@ class EcologyLoop:
         self._base_lp_mix = base_lp_mix
         lp_mix_value = self._resolve_lp_mix(base_lp_mix)
         for organelle_id in active:
-            for _ in range(bs):
+            # policy-driven per-org batch multiplier
+            per_org_bs = bs
+            pol = self._active_policies.get(organelle_id, {})
+            if isinstance(pol.get("budget_frac"), (int, float)):
+                frac = max(0.25, min(2.0, float(pol["budget_frac"])) )
+                per_org_bs = max(1, int(round(bs * frac)))
+            for _ in range(per_org_bs):
                 task = (
-                    self._sample_task_lp(lp_mix_value)
+                    self._sample_task_with_policy(lp_mix_value, organelle_id)
                     if lp_mix_value > 0.0
                     else self.environment.sample_task()
                 )
@@ -285,15 +331,36 @@ class EcologyLoop:
                 if genome is not None and isinstance(getattr(genome, "post_rate", 0.0), float):
                     post_ok = max(0.0, min(1.0, genome.post_rate)) > 0.0
                 # Only post if enough energy and trait allows
-                if post_ok and self.host.ledger.energy_balance(top_org) >= post_cost:
+                colony_ok = True
+                member_colony = None
+                if self.colonies:
+                    for cid, meta in self.colonies.items():
+                        if top_org in meta.get("members", []):
+                            member_colony = (cid, meta)
+                            break
+                if member_colony is not None:
+                    _cid, _meta = member_colony
+                    colony_ok = float(_meta.get("bandwidth_left", 0.0)) >= post_cost and int(_meta.get("posts_left", 1)) > 0
+                if post_ok and colony_ok and self.host.ledger.energy_balance(top_org) >= post_cost:
                     self.host.ledger.consume_energy(top_org, post_cost)
                     hint = "Hint: count words ignoring punctuation and double spaces."
                     self.environment.post_message(top_org, hint, cost=post_cost, ttl=int(getattr(self.config.comms, "ttl", 10)))
+                    if member_colony is not None:
+                        _cid, _meta = member_colony
+                        _meta["bandwidth_left"] = max(0.0, float(_meta.get("bandwidth_left", 0.0)) - post_cost)
+                        _meta["posts_left"] = max(0, int(_meta.get("posts_left", 1)) - 1)
             except Exception:
                 pass
         merges = self._attempt_assimilation(capped=self.config.evolution.max_merges_per_gen)
         # review trial offspring for potential promotion or cull
         self._review_trial_offspring()
+        # Colonies: promotion and upkeep (pooled pot, reserve top-ups)
+        try:
+            if bool(getattr(self.config.assimilation_tuning, "colonies_enabled", False)):
+                self._maybe_promote_colonies()
+                self._tick_colonies()
+        except Exception:
+            pass
         if merges > 0:
             self.no_merge_counter = 0
         else:
@@ -320,6 +387,31 @@ class EcologyLoop:
                 for (family, depth), state in self.environment.controller.cells.items()
             },
         }
+        if bool(getattr(self.config.policy, "enabled", False)):
+            summary["policy_applied"] = int(len(self._active_policies) > 0)
+            if self._active_policies:
+                # Aggregate simple field usage and a couple of numeric knobs
+                field_counts: dict[str, int] = {}
+                budgets: list[float] = []
+                reserves: list[float] = []
+                for pol in self._active_policies.values():
+                    if isinstance(pol, dict):
+                        for k in pol.keys():
+                            field_counts[k] = field_counts.get(k, 0) + 1
+                        bf = pol.get("budget_frac")
+                        rr = pol.get("reserve_ratio")
+                        if isinstance(bf, (int, float)):
+                            budgets.append(float(bf))
+                        if isinstance(rr, (int, float)):
+                            reserves.append(float(rr))
+                if field_counts:
+                    summary["policy_fields_used"] = field_counts
+                if budgets:
+                    summary["policy_budget_frac_avg"] = float(sum(budgets) / max(1, len(budgets)))
+                if reserves:
+                    summary["policy_reserve_ratio_avg"] = float(sum(reserves) / max(1, len(reserves)))
+                if getattr(self, "_policy_cost_total", 0.0) > 0.0:
+                    summary["policy_cost_total"] = float(self._policy_cost_total)
         # QD coverage (family-depth cells with observed stats)
         try:
             if getattr(self.config.qd, "enabled", False):
@@ -556,6 +648,15 @@ class EcologyLoop:
             },
         )
         self.logs.append(episode)
+        # Keep a bounded in-memory cache to avoid RAM growth on long runs
+        try:
+            limit = int(getattr(self.config.metrics, "in_memory_log_limit", 256))
+        except Exception:
+            limit = 256
+        if limit <= 0:
+            self.logs = []
+        elif len(self.logs) > limit:
+            self.logs = self.logs[-limit:]
         if self.sink:
             self.sink.log_episode(episode)
 
@@ -567,6 +668,96 @@ class EcologyLoop:
             return self.environment.sample_task_from_cell(cell, canary=use_canary)
         except Exception:
             return self.environment.sample_task()
+
+    def _sample_task_with_policy(self, lp_mix: float, organelle_id: str) -> GridTask:
+        pol = self._active_policies.get(organelle_id)
+        if pol and isinstance(pol.get("cell_pref"), dict):
+            try:
+                fam = str(pol["cell_pref"].get("family"))
+                dep = str(pol["cell_pref"].get("depth"))
+                bias = float(getattr(self.config.policy, "bias_strength", 0.3))
+                if 0.0 < bias <= 1.0 and self.environment.rng.random() < bias:
+                    return self.environment.sample_task_from_cell((fam, dep))
+            except Exception:
+                pass
+        return self._sample_task_lp(lp_mix)
+
+    @staticmethod
+    def _parse_policy_json(text: str, allowed: list[str]) -> dict[str, object]:
+        import json as _json
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        try:
+            data = _json.loads(text[start : end + 1])
+            if not isinstance(data, dict):
+                return {}
+            return {k: v for k, v in data.items() if k in allowed}
+        except Exception:
+            return {}
+
+    def _request_and_apply_policy(self, organelle_id: str) -> None:
+        prompt = (
+            "You are an agent that emits a tiny JSON policy.\n"
+            "Only output a single JSON object on one line with fields from this set: \n"
+            "{cell_pref:{family,depth}, budget_frac, explore_rate, reserve_ratio, read, post, partner_id, trial, gate_bias_delta}.\n"
+            "Do not include any explanations."
+        )
+        result = self.host.step(
+            prompt=prompt,
+            intent="choose policy",
+            max_routes=1,
+            allowed_organelle_ids=[organelle_id],
+        )
+        metrics = result.responses.get(organelle_id)
+        if metrics is None:
+            return
+        answer = result.envelope.observation.state.get("answer", "")
+        allowed = list(getattr(self.config.policy, "allowed_fields", []))
+        pol = self._parse_policy_json(str(answer), allowed)
+        if not pol:
+            return
+        # Energy charging for policy request (micro-cost)
+        try:
+            micro = float(getattr(self.config.policy, "energy_cost", 0.0))
+        except Exception:
+            micro = 0.0
+        if micro > 0.0:
+            # Optional scaling by token usage
+            try:
+                if bool(getattr(self.config.policy, "charge_tokens", False)):
+                    cap = max(1, int(getattr(self.config.policy, "token_cap", 64)))
+                    scale = min(1.0, float(metrics.tokens) / float(cap))
+                    micro = micro * max(0.0, min(1.0, scale))
+            except Exception:
+                pass
+            try:
+                if self.host.ledger.energy_balance(organelle_id) >= micro:
+                    self.host.ledger.consume_energy(organelle_id, micro)
+                    self._policy_cost_total += float(micro)
+            except Exception:
+                pass
+        self._active_policies[organelle_id] = pol
+        # Apply immediate effects
+        # gate_bias_delta
+        try:
+            if isinstance(pol.get("gate_bias_delta"), (int, float)):
+                genome = self.population.population.get(organelle_id)
+                if genome is not None:
+                    genome.gate_bias += float(pol["gate_bias_delta"]) * 0.1
+        except Exception:
+            pass
+        # comms preferences
+        try:
+            genome = self.population.population.get(organelle_id)
+            if genome is not None:
+                if isinstance(pol.get("read"), bool):
+                    genome.read_rate = 1.0 if pol["read"] else 0.0
+                if isinstance(pol.get("post"), bool):
+                    genome.post_rate = 1.0 if pol["post"] else 0.0
+        except Exception:
+            pass
 
     def _attempt_assimilation(self, capped: int | None = None) -> int:
         removable: list[str] = []
@@ -592,6 +783,19 @@ class EcologyLoop:
         per_cell_interval = self.config.assimilation_tuning.per_cell_interval
         max_cell_merges = self.config.assimilation_tuning.max_merges_per_cell
         for genome in list(self.population.population.values()):
+            # Policy reserve gate: skip assimilation if reserve active
+            pol = self._active_policies.get(genome.organelle_id)
+            if pol and isinstance(pol.get("reserve_ratio"), (int, float)):
+                rr = float(pol["reserve_ratio"]) if pol["reserve_ratio"] is not None else 0.0
+                rr = max(getattr(self.config.policy, "reserve_min", 0.0), min(getattr(self.config.policy, "reserve_max", 0.75), rr))
+                reserve = rr * 4.0 * self.config.energy.m
+                if self.host.ledger.energy_balance(genome.organelle_id) < reserve:
+                    self._record_assimilation_gate(
+                        reason="reserve_active",
+                        organelle_id=genome.organelle_id,
+                        details={"reserve": reserve, "balance": self.host.ledger.energy_balance(genome.organelle_id)},
+                    )
+                    continue
             self._assim_attempt_total += 1
             if self.environment.canary_failed(genome.organelle_id):
                 gating["canary_failed"] += 1
@@ -1342,6 +1546,27 @@ class EcologyLoop:
                             self.host.ledger.credit_energy(m, amount)
                             pot -= amount
             meta["pot"] = pot
+            # Attempt cautious expansion to a 3rd member if synergy persists
+            try:
+                max_size = int(getattr(cfg, "colony_max_size", 3))
+                if len(members) < max_size and int(meta.get("holdout_passes", 0)) >= required_passes:
+                    # Pick a candidate outside the colony with highest recent ROI
+                    candidates = [oid for oid in self.population.population.keys() if oid not in members]
+                    if candidates:
+                        best_cand = max(candidates, key=lambda oid: self.population.average_roi(oid, limit=5))
+                        tasks = self._sample_holdout_tasks()
+                        if tasks:
+                            current = self._evaluate_multi_team_holdout_roi(members, tasks)
+                            expanded = self._evaluate_multi_team_holdout_roi(members + [best_cand], tasks)
+                            delta = expanded - current
+                            margin = float(getattr(cfg, "holdout_margin", 0.03))
+                            if delta >= margin:
+                                members.append(best_cand)
+                                meta["members"] = members
+                                meta["last_review"] = self.generation_index
+                                meta["last_delta"] = float(delta)
+            except Exception:
+                pass
 
     def _auto_tune_assimilation_energy(self, summary: dict[str, object]) -> None:
         tuning = self.config.assimilation_tuning
@@ -1627,6 +1852,42 @@ class EcologyLoop:
             rois.append(best_roi)
         return float(sum(rois) / max(len(rois), 1)) if rois else 0.0
 
+    def _evaluate_multi_team_holdout_roi(self, member_ids: list[str], tasks: list[EvaluationTask]) -> float:
+        if not tasks or not member_ids:
+            return 0.0
+        energy_cfg = self.config.energy
+        rois: list[float] = []
+        for index, task in enumerate(tasks, start=1):
+            grid_task = task.to_grid_task(self.environment, task_id=f"team_{index:04d}")
+            best_roi = 0.0
+            for oid in member_ids:
+                result = self.host.step(
+                    prompt=grid_task.prompt,
+                    intent="team holdout",
+                    max_routes=1,
+                    allowed_organelle_ids=[oid],
+                )
+                metrics = result.responses.get(oid)
+                if metrics is None:
+                    continue
+                success, reward = grid_task.evaluate(metrics.answer)
+                revenue = grid_task.price * reward.total
+                cost = (
+                    energy_cfg.alpha * metrics.flops_estimate
+                    + energy_cfg.beta * metrics.memory_gb
+                    + energy_cfg.gamma * metrics.latency_ms
+                    + energy_cfg.lambda_p * metrics.trainable_params
+                )
+                if cost <= 0.0:
+                    roi_value = float("inf") if revenue > 0 else 0.0
+                else:
+                    roi_value = revenue / cost
+                if not math.isfinite(roi_value):
+                    roi_value = max(0.0, min(roi_value, 10.0)) if revenue > 0 else 0.0
+                best_roi = max(best_roi, float(roi_value))
+            rois.append(best_roi)
+        return float(sum(rois) / max(len(rois), 1)) if rois else 0.0
+
     def _holdout_accepts(self, candidate_id: str, mate_ids: list[str]) -> tuple[bool, dict[str, object] | None]:
         cfg = self.config.assimilation_tuning
         retries = 0
@@ -1777,6 +2038,7 @@ class EcologyLoop:
         low_power = int(gating.get("low_power", 0) or 0)
         uplift_below = int(gating.get("uplift_below_threshold", 0) or 0)
         topup_blocked = int(gating.get("topup_roi_blocked", 0) or 0)
+        insufficient = int(gating.get("insufficient_scores", 0) or 0)
         promotions = int(summary.get("promotions", 0) or 0)
         merges = int(summary.get("merges", 0) or 0)
         # Initialize baselines once
@@ -1794,6 +2056,15 @@ class EcologyLoop:
         # Decide whether to nudge up evidence or relax back
         stall = (self.assim_fail_streak >= 8) or (low_power >= 2 and promotions == 0 and merges == 0) or (topup_blocked >= 5)
         changed: dict[str, float] = {}
+        # Optional: auto-tune min_window downward when insufficient_scores dominates
+        if bool(getattr(tuning, "window_autotune", False)) and insufficient >= 50:
+            mw = int(getattr(tuning, "min_window", 4))
+            lower = int(getattr(tuning, "min_window_min", 6))
+            if mw > lower:
+                new_mw = max(lower, mw - 2)
+                if new_mw % 2 == 1:
+                    new_mw -= 1
+                tuning.min_window = max(lower, new_mw)
         if stall:
             # Increase evidence and budget within bounds
             mw = int(getattr(tuning, "min_window", 4))

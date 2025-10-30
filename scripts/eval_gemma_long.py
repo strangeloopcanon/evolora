@@ -111,8 +111,11 @@ def main() -> None:
     if args.batch_size is not None:
         config.environment.synthetic_batch_size = args.batch_size
 
-    config.host.backbone_model = "google/gemma-3-270m-it"
-    config.host.tokenizer = "google/gemma-3-270m-it"
+    # Respect model IDs provided by the experiment config; only default if unset
+    if not getattr(config.host, "backbone_model", None):
+        config.host.backbone_model = "google/gemma-3-270m-it"
+    if not getattr(config.host, "tokenizer", None):
+        config.host.tokenizer = config.host.backbone_model
 
     if args.device is not None:
         config.host.device = args.device

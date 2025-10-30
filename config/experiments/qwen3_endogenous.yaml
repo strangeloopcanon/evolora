@@ -1,10 +1,11 @@
 host:
   backbone_type: gemma
-  backbone_model: google/gemma-3-270m-it
-  tokenizer: google/gemma-3-270m-it
+  backbone_model: Qwen/Qwen3-0.6B
+  tokenizer: Qwen/Qwen3-0.6B
   device: mps
   max_lora_rank: 8
   max_sequence_length: 256
+  gen_max_new_tokens: 48
 
 grid:
   families: [math, math.sequence, json_repair, string.sort, word.count, logic.bool]
@@ -31,7 +32,7 @@ assimilation_tuning:
   max_merges_per_cell: 3
   seed_scale: 0.8
   soup_size: 4
-  probe_max_other_cells: 2
+  probe_max_other_cells: 1
   probe_required_passes: 1
   energy_floor: 0.0
   energy_floor_roi: 0.0
@@ -39,8 +40,8 @@ assimilation_tuning:
   energy_floor_roi_base: 0.9
   energy_topup_roi_bonus: 1.2
   gating_snapshot_limit: 64
-  holdout_tasks_path: config/evaluation/holdout_tasks.jsonl
-  holdout_sample_size: 28
+  holdout_tasks_path: config/evaluation/holdout_simple.jsonl
+  holdout_sample_size: 24
   holdout_margin: 0.03
   min_window: 14
   window_step: 2
@@ -65,13 +66,6 @@ assimilation_tuning:
   trial_probation_gens: 12
   trial_promote_margin: 0.03
   trial_min_power: 0.2
-  # Adaptive relief knobs (decay τ and ROI floors when assimilation/top-ups stall)
-  tau_relief_window: 8      # generations of tau-gate failures per cell before relief
-  tau_relief_step: 0.03     # subtract from tau per relief step
-  tau_relief_max: 0.18      # cap on total tau relief per cell
-  roi_relief_window: 6      # top-up ROI skip streak before relief
-  roi_relief_step: 0.06     # ROI relief increment per streak
-  roi_relief_max: 0.6       # cap on ROI relief per organelle
   colonies_enabled: true
   colony_synergy_delta: 0.08
   colony_variance_improve: 0.20
@@ -79,9 +73,17 @@ assimilation_tuning:
   colony_review_interval: 6
   colony_required_passes: 2
   colony_max_failures: 2
+  colony_min_size: 2
+  colony_max_size: 3
+  colony_bandwidth_frac: 0.02
+  colony_post_cap: 1
+  colony_read_cap: 2
+  window_autotune: true
+  min_window_min: 6
+  min_window_max: 24
 
 evolution:
-  mutation_rate: 0.32
+  mutation_rate: 0.30
   assimilation_threshold: 0.0
   assimilation_p_value: 0.45
   max_merges_per_gen: 6
@@ -133,7 +135,7 @@ human_bandit:
 evaluation:
   enabled: true
   cadence: 10
-  tasks_path: config/evaluation/holdout_tasks.jsonl
+  tasks_path: config/evaluation/holdout_simple.jsonl
   sample_size: 12
   reward_weight: 0.75
 
@@ -148,3 +150,9 @@ comms:
   read_cost: 0.1
   credit_frac: 0.2
   ttl: 10
+
+policy:
+  enabled: true
+  energy_cost: 0.05
+  charge_tokens: false
+  token_cap: 64

@@ -26,6 +26,7 @@ class HostConfig(BaseModel):
     max_sequence_length: int = Field(256, ge=8)
     temperature: float = Field(0.0, ge=0.0, le=1.0)
     top_p: float = Field(1.0, ge=0.0, le=1.0)
+    gen_max_new_tokens: int = Field(48, ge=1, le=512, description="Max new tokens to generate per answer")
 
 
 class OrganismConfig(BaseModel):
@@ -237,12 +238,22 @@ class AssimilationTuningConfig(BaseModel):
     colony_review_interval: int = Field(6, ge=1)
     colony_required_passes: int = Field(2, ge=1)
     colony_max_failures: int = Field(2, ge=1)
+    # Colony adaptation (size & bandwidth)
+    colony_min_size: int = Field(2, ge=1)
+    colony_max_size: int = Field(3, ge=1)
+    colony_bandwidth_frac: float = Field(0.02, ge=0.0, le=1.0, description="Fraction of colony pot usable for comms per generation")
+    colony_post_cap: int = Field(2, ge=0)
+    colony_read_cap: int = Field(3, ge=0)
     tau_relief_window: int = Field(12, ge=1)
     tau_relief_step: float = Field(0.01, ge=0.0)
     tau_relief_max: float = Field(0.15, ge=0.0)
     roi_relief_window: int = Field(8, ge=1)
     roi_relief_step: float = Field(0.05, ge=0.0)
     roi_relief_max: float = Field(0.5, ge=0.0)
+    # Window auto-tune
+    window_autotune: bool = Field(False, description="Auto-adjust assimilation evidence window to reduce insufficient_scores")
+    min_window_min: int = Field(6, ge=2)
+    min_window_max: int = Field(24, ge=2)
 
 
 class LimitConfig(BaseModel):
@@ -284,6 +295,31 @@ class CommsConfig(BaseModel):
     credit_frac: float = Field(0.2, ge=0.0, le=1.0)
     ttl: int = Field(10, ge=1)
 
+class PolicyConfig(BaseModel):
+    enabled: bool = Field(False, description="If true, each organism may propose a JSON policy once per generation")
+    token_cap: int = Field(64, ge=4, le=256, description="Soft cap for policy prompt; still charged to energy")
+    energy_cost: float = Field(0.05, ge=0.0, description="Fixed micro-cost charged when a policy is requested")
+    charge_tokens: bool = Field(
+        False,
+        description="If true, scale policy energy cost by used tokens / token_cap (capped at 1.0)",
+    )
+    allowed_fields: list[str] = Field(
+        default_factory=lambda: [
+            "cell_pref",
+            "budget_frac",
+            "explore_rate",
+            "reserve_ratio",
+            "read",
+            "post",
+            "partner_id",
+            "trial",
+            "gate_bias_delta",
+        ]
+    )
+    bias_strength: float = Field(0.3, ge=0.0, le=1.0, description="Probability to honor cell_pref over controller routing")
+    reserve_min: float = Field(0.0, ge=0.0, le=1.0)
+    reserve_max: float = Field(0.75, ge=0.0, le=1.0)
+
 
 class EnvironmentConfig(BaseModel):
     synthetic_batch_size: int = Field(8, ge=1)
@@ -308,6 +344,7 @@ class MetricsConfig(BaseModel):
     root: Path = Field(Path("artifacts"))
     episodes_file: str = "episodes.jsonl"
     assimilation_file: str = "assimilation.jsonl"
+    in_memory_log_limit: int = Field(256, ge=0, description="Max episodes kept in memory per run (0 = disable in‑memory cache)")
 
 
 class EcologyConfig(BaseModel):
@@ -333,6 +370,7 @@ class EcologyConfig(BaseModel):
     diversity: DiversityConfig = Field(default_factory=DiversityConfig)  # type: ignore[arg-type]
     qd: QDConfig = Field(default_factory=QDConfig)  # type: ignore[arg-type]
     comms: CommsConfig = Field(default_factory=CommsConfig)  # type: ignore[arg-type]
+    policy: PolicyConfig = Field(default_factory=PolicyConfig)  # type: ignore[arg-type]
 
 
 __all__ = [
@@ -359,64 +397,69 @@ __all__ = [
 
 
 def load_ecology_config(path: Path | str) -> EcologyConfig:
-    """Load an ecology configuration from a YAML file."""
+    """Load an ecology configuration from a YAML file.
+
+    Strategy:
+    - Try omegaconf for full YAML support.
+    - If omegaconf is missing OR parsing fails (malformed YAML), fall back to a
+      minimal, robust parser that supports the simple two-level structure used in tests.
+    """
     # Preferred path: omegaconf (rich YAML with interpolation)
     try:
         from omegaconf import OmegaConf  # type: ignore
-        conf = OmegaConf.load(Path(path))
-        data = OmegaConf.to_container(conf, resolve=True)
-        return EcologyConfig.model_validate(data)
+        try:
+            conf = OmegaConf.load(Path(path))
+            data = OmegaConf.to_container(conf, resolve=True)
+            return EcologyConfig.model_validate(data)
+        except Exception:
+            # Parsing failed; defer to the lightweight fallback below
+            pass
     except ImportError:
-        # Fallback: minimal YAML-ish parser for simple two-level configs used in tests
-        # Avoids adding heavy deps in constrained environments.
-        text = Path(path).read_text()
-        result: dict[str, dict[str, object]] = {}
-        current: dict[str, object] | None = None
-        current_key: str | None = None
-        for raw in text.splitlines():
-            line = raw.rstrip()
-            if not line or line.lstrip().startswith("#"):
-                continue
-            if not line.startswith(" ") and ":" in line:
-                # New top-level section
-                key = line.split(":", 1)[0].strip()
-                current = {}
-                result[key] = current
-                current_key = key
-                continue
-            if current is None:
-                # Malformed; skip
-                continue
-            # Expect an indented key: value
-            parts = line.strip().split(":", 1)
-            if len(parts) != 2:
-                continue
-            k, v = parts[0].strip(), parts[1].strip()
-            # Parse simple list syntax: [a, b, c]
-            if v.startswith("[") and v.endswith("]"):
-                inner = v[1:-1].strip()
-                items: list[object] = []
-                if inner:
-                    for tok in inner.split(","):
-                        # treat list items as strings; most list fields are enums/labels
-                        item = tok.strip()
-                        items.append(item)
-                current[k] = items
+        # No omegaconf available; use fallback parser below
+        pass
+
+    # Fallback: minimal YAML-ish parser for simple two-level configs used in tests
+    # Avoids adding heavy deps in constrained environments and tolerates minor formatting issues.
+    text = Path(path).read_text()
+    result: dict[str, dict[str, object]] = {}
+    current: dict[str, object] | None = None
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" ") and ":" in line:
+            # New top-level section
+            key = line.split(":", 1)[0].strip()
+            current = {}
+            result[key] = current
+            continue
+        if current is None:
+            # Malformed; skip stray lines before any section
+            continue
+        # Expect an indented key: value
+        parts = line.strip().split(":", 1)
+        if len(parts) != 2:
+            continue
+        k, v = parts[0].strip(), parts[1].strip()
+        # Parse simple list syntax: [a, b, c]
+        if v.startswith("[") and v.endswith("]"):
+            inner = v[1:-1].strip()
+            items: list[object] = []
+            if inner:
+                for tok in inner.split(","):
+                    # For lists, keep items as strings to satisfy typed fields like GridConfig.families
+                    items.append(tok.strip())
+            current[k] = items
+        else:
+            # Scalar: try bool/int/float else string
+            vv = v.strip()
+            if vv.lower() in ("true", "false"):
+                current[k] = vv.lower() == "true"
+            elif vv.replace(".", "", 1).isdigit():
+                current[k] = float(vv) if "." in vv else int(vv)
             else:
-                # Scalar: try int/float else string
-                val: object
-                vv = v.strip()
-                try:
-                    if vv.lower() in ("true", "false"):
-                        val = vv.lower() == "true"
-                    elif vv.replace(".", "", 1).isdigit():
-                        val = float(vv) if "." in vv else int(vv)
-                    else:
-                        val = vv
-                except Exception:
-                    val = vv
-                current[k] = val
-        return EcologyConfig.model_validate(result)
+                current[k] = vv
+    return EcologyConfig.model_validate(result)
 
 
 __all__.append("load_ecology_config")

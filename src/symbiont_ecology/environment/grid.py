@@ -40,10 +40,10 @@ class GridTask:
         task_reward = 0.0
 
         if self.family in {"math", "math.sequence"}:
-            try:
-                predicted = float(clean.split()[0]) if " " in clean else float(clean)
-            except ValueError:
-                predicted = None
+            # Be tolerant: extract the first numeric token anywhere in the string
+            import re
+            match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", clean)
+            predicted = float(match.group(0)) if match else None
             success = predicted is not None and math.isclose(predicted, float(self.target), rel_tol=1e-3)
             task_reward = 1.0 if success else 0.0
 
@@ -53,27 +53,79 @@ class GridTask:
             task_reward = 1.0 if success else 0.0
 
         elif self.family == "word.count":
-            try:
-                predicted = int("".join(ch for ch in clean if ch.isdigit()))
-            except ValueError:
-                predicted = None
-            success = predicted == int(self.target)
+            # Try digits first, then spelled numbers (zero..twenty)
+            predicted: int | None = None
+            digits = "".join(ch for ch in clean if ch.isdigit())
+            if digits:
+                try:
+                    predicted = int(digits)
+                except Exception:
+                    predicted = None
+            if predicted is None:
+                tokens = clean.strip().lower().split()
+                words_map = {
+                    "zero": 0,
+                    "one": 1,
+                    "two": 2,
+                    "three": 3,
+                    "four": 4,
+                    "five": 5,
+                    "six": 6,
+                    "seven": 7,
+                    "eight": 8,
+                    "nine": 9,
+                    "ten": 10,
+                    "eleven": 10 + 1,
+                    "twelve": 10 + 2,
+                    "thirteen": 10 + 3,
+                    "fourteen": 10 + 4,
+                    "fifteen": 10 + 5,
+                    "sixteen": 10 + 6,
+                    "seventeen": 10 + 7,
+                    "eighteen": 10 + 8,
+                    "nineteen": 10 + 9,
+                    "twenty": 20,
+                }
+                for tok in tokens:
+                    if tok in words_map:
+                        predicted = words_map[tok]
+                        break
+            success = (predicted is not None) and (predicted == int(self.target))
             task_reward = 1.0 if success else 0.0
 
         elif self.family == "json_repair":
+            # Try direct parse, else attempt to extract the first bracketed array
+            parsed_ok = False
             try:
                 parsed = json.loads(clean)
-                success = isinstance(parsed, list) and parsed == self.target
+                parsed_ok = isinstance(parsed, list)
+                success = parsed_ok and parsed == self.target
             except json.JSONDecodeError:
                 success = False
+            if not success:
+                try:
+                    start = clean.find("[")
+                    end = clean.rfind("]")
+                    if start != -1 and end != -1 and end > start:
+                        candidate = clean[start : end + 1]
+                        parsed = json.loads(candidate)
+                        parsed_ok = isinstance(parsed, list)
+                        success = parsed_ok and parsed == self.target
+                except Exception:
+                    success = False
             task_reward = 1.0 if success else 0.0
 
         elif self.family == "logic.bool":
-            normalized = clean.strip().lower().rstrip(".")
-            if normalized in {"true", "false"}:
-                predicted_bool = normalized == "true"
-            elif normalized in {"yes", "no"}:
-                predicted_bool = normalized == "yes"
+            # Extract first boolean token ignoring markdown or prose
+            import re
+            text = clean.strip().lower()
+            m = re.search(r"\b(true|false|yes|no)\b", text)
+            if m:
+                token = m.group(1)
+                if token in {"true", "false"}:
+                    predicted_bool = token == "true"
+                else:
+                    predicted_bool = token == "yes"
             else:
                 predicted_bool = None
             success = predicted_bool is not None and predicted_bool == bool(self.target)

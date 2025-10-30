@@ -85,6 +85,31 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     qd_coverage = latest_record.get("qd_coverage")
     roi_volatility = latest_record.get("roi_volatility")
+    policy_applied = sum(1 for rec in records if rec.get("policy_applied"))
+    # Policy-conditioned ROI
+    roi_when_policy: List[float] = []
+    roi_when_no_policy: List[float] = []
+    fields_agg: Dict[str, int] = {}
+    budget_vals: List[float] = []
+    reserve_vals: List[float] = []
+    for rec, r in zip(records, roi):
+        if rec.get("policy_applied"):
+            roi_when_policy.append(float(r))
+            fields = rec.get("policy_fields_used") or {}
+            if isinstance(fields, dict):
+                for k, v in fields.items():
+                    try:
+                        fields_agg[k] = fields_agg.get(k, 0) + int(v)
+                    except Exception:
+                        continue
+            bf = rec.get("policy_budget_frac_avg")
+            rr = rec.get("policy_reserve_ratio_avg")
+            if isinstance(bf, (int, float)):
+                budget_vals.append(float(bf))
+            if isinstance(rr, (int, float)):
+                reserve_vals.append(float(rr))
+        else:
+            roi_when_no_policy.append(float(r))
     # Trials/promotions totals
     total_trials = sum(int(rec.get("trials_created", 0) or 0) for rec in records)
     total_promotions = sum(int(rec.get("promotions", 0) or 0) for rec in records)
@@ -133,6 +158,12 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "trials_total": total_trials,
         "promotions_total": total_promotions,
         "colonies_meta": colonies_meta,
+        "policy_applied_total": policy_applied,
+        "policy_roi_mean_when_applied": (sum(roi_when_policy) / max(1, len(roi_when_policy))) if roi_when_policy else 0.0,
+        "policy_roi_mean_when_not": (sum(roi_when_no_policy) / max(1, len(roi_when_no_policy))) if roi_when_no_policy else 0.0,
+        "policy_fields_used_total": fields_agg,
+        "policy_budget_frac_mean": (sum(budget_vals) / max(1, len(budget_vals))) if budget_vals else 0.0,
+        "policy_reserve_ratio_mean": (sum(reserve_vals) / max(1, len(reserve_vals))) if reserve_vals else 0.0,
     }
 
 
@@ -274,6 +305,21 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         lines.append("- Assimilation gating totals:")
         for key, value in summary["assimilation_gating_total"].items():
             lines.append(f"  - {key}: {value}")
+    if summary.get("policy_applied_total"):
+        lines.append(
+            f"- Policy usage: {summary['policy_applied_total']}/{summary['generations']} generations"
+        )
+        lines.append(
+            f"  - ROI when policy on/off: {summary['policy_roi_mean_when_applied']:.3f} / {summary['policy_roi_mean_when_not']:.3f}"
+        )
+        fields_total = summary.get("policy_fields_used_total") or {}
+        if fields_total:
+            items = ", ".join(f"{k}:{v}" for k, v in fields_total.items())
+            lines.append(f"  - Fields used (total): {items}")
+        if summary.get("policy_budget_frac_mean"):
+            lines.append(f"  - budget_frac mean: {summary['policy_budget_frac_mean']:.2f}")
+        if summary.get("policy_reserve_ratio_mean"):
+            lines.append(f"  - reserve_ratio mean: {summary['policy_reserve_ratio_mean']:.2f}")
     latest = summary.get("assimilation_energy_floor_latest")
     if latest:
         floor = float(latest.get("energy_floor", 0.0))
@@ -412,6 +458,21 @@ def main() -> None:
         print("Assimilation gating totals:")
         for key, value in summary["assimilation_gating_total"].items():
             print(f"  {key}: {value}")
+    if summary.get("policy_applied_total"):
+        print("Policy usage: gens with policy:", summary["policy_applied_total"], "/", summary["generations"])
+        print(
+            "ROI when policy on/off:",
+            f"{summary['policy_roi_mean_when_applied']:.3f}",
+            f"/ {summary['policy_roi_mean_when_not']:.3f}",
+        )
+        fields_total = summary.get("policy_fields_used_total") or {}
+        if fields_total:
+            items = ", ".join(f"{k}:{v}" for k, v in fields_total.items())
+            print("Policy fields used (total):", items)
+        if summary.get("policy_budget_frac_mean"):
+            print("Policy budget_frac mean:", f"{summary['policy_budget_frac_mean']:.2f}")
+        if summary.get("policy_reserve_ratio_mean"):
+            print("Policy reserve_ratio mean:", f"{summary['policy_reserve_ratio_mean']:.2f}")
     if summary["eval_events"]:
         accuracy_pct = summary["eval_accuracy_mean"] * 100
         print(
