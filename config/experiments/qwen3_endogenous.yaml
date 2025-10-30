@@ -8,7 +8,7 @@ host:
   gen_max_new_tokens: 48
 
 grid:
-  families: [math, math.sequence, json_repair, string.sort, word.count, logic.bool]
+  families: [word.count, string.sort, math, math.sequence]
   depths: [short, medium, long]
 
 energy:
@@ -42,8 +42,8 @@ assimilation_tuning:
   gating_snapshot_limit: 64
   holdout_tasks_path: config/evaluation/holdout_simple.jsonl
   holdout_sample_size: 24
-  holdout_margin: 0.03
-  min_window: 14
+  holdout_margin: 0.02
+  min_window: 10
   window_step: 2
   adaptive_decay: 0.82
   adaptive_floor: 0.0003
@@ -79,7 +79,7 @@ assimilation_tuning:
   colony_post_cap: 1
   colony_read_cap: 2
   window_autotune: true
-  min_window_min: 6
+  min_window_min: 4
   min_window_max: 24
 
 evolution:
@@ -150,6 +150,9 @@ comms:
   read_cost: 0.1
   credit_frac: 0.2
   ttl: 10
+
+metrics:
+  in_memory_log_limit: 0
 
 policy:
   enabled: true
