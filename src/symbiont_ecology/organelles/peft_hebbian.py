@@ -104,8 +104,13 @@ class HebbianPEFTOrganelle(Organelle):
         self.traces.pre = pre.mean(dim=(0, 1)).detach().to(self.device)
         self.traces.post = hidden_last[:, -1, :].mean(dim=0).detach().to(self.device)
 
-        # Generate short answer
-        gen_ids = self.model.generate(**enc, max_new_tokens=16, do_sample=False)
+        # Generate answer; max_new_tokens is configurable via host config
+        try:
+            max_new = int(getattr(self.backbone.host_config, "gen_max_new_tokens", 48))
+        except Exception:
+            max_new = 48
+        max_new = max(1, min(512, max_new))
+        gen_ids = self.model.generate(**enc, max_new_tokens=max_new, do_sample=False)
         answer = self.tokenizer.decode(gen_ids[0][enc["input_ids"].shape[1] :], skip_special_tokens=True)
         envelope.observation.state["answer"] = answer.strip()
 

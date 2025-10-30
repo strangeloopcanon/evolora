@@ -133,6 +133,7 @@ The report now highlights ROI stats, assimilation gating totals, **recent gating
 - `assimilation_tuning.*`: guard baselines, probe requirements, holdout settings, LoRA soup behaviour, **`energy_topup_roi_bonus` for lenient top-ups**, and `gating_snapshot_limit` for telemetry retention.
 - `grid.families`: choose which mix of math, logic, sorting, sequence, and JSON cells make up the curriculum.
 - `diversity.*`: energy Gini cap and per-species share limit.
+- `policy.*`: turn on per-org policy proposals (`enabled`), cap prompt size (`token_cap`), and charge a micro-cost for policy requests (`energy_cost`, optionally scaled by tokens with `charge_tokens`). Analyzer reports policy usage and ROI when policy is on vs off.
 
 Tweak `config/experiments/gemma_relaxed.yaml`, rerun the long evaluation, and compare `gen_summaries.jsonl` across artifacts.
 
