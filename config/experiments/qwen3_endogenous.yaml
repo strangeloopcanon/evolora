@@ -7,15 +7,14 @@ host:
   max_sequence_length: 256
   gen_max_new_tokens: 32
 grid:
+  # Easy-mode curriculum: words + math only (no JSON/sort); keep sequences.
   families:
   - word.count
-  - string.sort
   - math
   - math.sequence
   depths:
   - short
   - medium
-  - long
 energy:
   Emax: 6.0
   m: 0.5
