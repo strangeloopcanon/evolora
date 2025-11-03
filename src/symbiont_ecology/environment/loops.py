@@ -271,6 +271,9 @@ class EcologyLoop:
         team_max = int(getattr(self.config.assimilation_tuning, "team_max_routes_per_gen", 0))
         team_used = 0
         used_pairs: set[tuple[str, str]] = set()
+        # Evidence boost budget
+        boost_cap = int(getattr(self.config.assimilation_tuning, "evidence_boost_cap", 0))
+        boost_left = boost_cap
         for organelle_id in active:
             # policy-driven per-org batch multiplier
             per_org_bs = bs
@@ -278,6 +281,14 @@ class EcologyLoop:
             if isinstance(pol.get("budget_frac"), (int, float)):
                 frac = max(0.25, min(2.0, float(pol["budget_frac"])) )
                 per_org_bs = max(1, int(round(bs * frac)))
+            # Evidence boost for near-threshold candidates
+            try:
+                if boost_left > 0 and self._should_boost(organelle_id):
+                    inc = int(getattr(self.config.assimilation_tuning, "evidence_boost_factor", 1))
+                    per_org_bs += inc
+                    boost_left = max(0, boost_left - inc)
+            except Exception:
+                pass
             for _ in range(per_org_bs):
                 task = (self._sample_task_with_policy(lp_mix_value, organelle_id) if lp_mix_value > 0.0 else self.environment.sample_task())
                 # Optional team routing: pick a synergy pair and run team episode
@@ -413,6 +424,30 @@ class EcologyLoop:
                 for (family, depth), state in self.environment.controller.cells.items()
             },
         }
+        # Promotion acceptance governor (adjust team thresholds toward target)
+        try:
+            target = float(getattr(self.config.assimilation_tuning, "promotion_target_rate", 0.0))
+            step = float(getattr(self.config.assimilation_tuning, "promotion_adjust_step", 0.0))
+            if step > 0.0 and target > 0.0:
+                observed = float(team_promotions)
+                # If 0..N per gen, use raw count; normalize against 1.0 (aim ~target per gen)
+                err = target - min(observed, 1.0)
+                # Adjust team_holdout_margin and team_min_power gently
+                margin = float(getattr(self.config.assimilation_tuning, "team_holdout_margin", getattr(self.config.assimilation_tuning, "holdout_margin", 0.02)))
+                power = float(getattr(self.config.assimilation_tuning, "team_min_power", 0.2))
+                margin_min = float(getattr(self.config.assimilation_tuning, "team_margin_min", 0.0))
+                margin_max = float(getattr(self.config.assimilation_tuning, "team_margin_max", 0.1))
+                power_min = float(getattr(self.config.assimilation_tuning, "team_power_min", 0.05))
+                power_max = float(getattr(self.config.assimilation_tuning, "team_power_max", 0.5))
+                # If under target, reduce margin and power; if over, increase
+                margin = max(margin_min, min(margin_max, margin - step * (1.0 if err > 0 else -1.0)))
+                power = max(power_min, min(power_max, power - step * (1.0 if err > 0 else -1.0)))
+                # Write back
+                setattr(self.config.assimilation_tuning, "team_holdout_margin", margin)
+                setattr(self.config.assimilation_tuning, "team_min_power", power)
+                summary["promotion_controller"] = {"team_holdout_margin": round(margin, 4), "team_min_power": round(power, 4), "target": target, "observed": observed}
+        except Exception:
+            pass
         # Top co-routing pairs this gen (best-effort)
         try:
             if self._co_routing_counts:
@@ -772,6 +807,24 @@ class EcologyLoop:
             self._record_episode(task, oid, reward, metrics, settlement, success, adapter_utilisation)
         if not results:
             return False
+        # Optional: single handoff (solver→checker)
+        try:
+            if bool(getattr(self.config.assimilation_tuning, "team_handoff_enabled", False)) and len(results) == 2:
+                # pick current winner and let the other revise
+                best_pair = max(results, key=lambda tup: float(tup[4].get("roi", 0.0)))
+                winner_id = best_pair[0]
+                checker_id = b_id if winner_id == a_id else a_id
+                winner_answer = str(best_pair[1].answer)
+                handoff_prompt = f"Review and improve this answer:\n{winner_answer}\n\nTask:\n{task.prompt}"
+                result_rev = self.host.step(prompt=handoff_prompt, intent="team handoff", max_routes=1, allowed_organelle_ids=[checker_id])
+                m_rev = result_rev.responses.get(checker_id)
+                if m_rev is not None:
+                    success_rev, reward_rev = task.evaluate(m_rev.answer)
+                    st_rev = self._settle_episode(checker_id, task, reward_rev, m_rev)
+                    # Do not record a separate episode for the revision to keep accounting simple
+                    results.append((checker_id, m_rev, success_rev, reward_rev, st_rev))
+        except Exception:
+            pass
         # Choose winner by highest ROI
         best = None
         best_roi = float("-inf")
@@ -986,11 +1039,11 @@ class EcologyLoop:
             self._policy_attempts_gen += 1
         except Exception:
             self._policy_attempts_gen = 1
+        allowed = list(getattr(self.config.policy, "allowed_fields", []))
         prompt = (
-            "You are an agent that emits a tiny JSON policy.\n"
-            "Output ONLY a single minified JSON object with keys from this set:"
-            " {cell_pref:{family,depth}, budget_frac, explore_rate, reserve_ratio, read, post, partner_id, trial, gate_bias_delta}.\n"
-            "No code fences, no prose, no trailing commas."
+            "Emit ONLY a single minified JSON object with these keys: "
+            + ", ".join(allowed)
+            + ". No prose, no code fences, no trailing commas. If unsure, emit {}."
         )
         result = self.host.step(
             prompt=prompt,
@@ -2393,7 +2446,14 @@ class EcologyLoop:
             baseline = max(base_a, base_b)
             ci_low, ci_high, team_mu, team_se = self._compute_mean_ci(team_series)
             min_tasks = int(getattr(self.config.assimilation_tuning, "team_min_tasks", 8))
-            margin = float(getattr(self.config.assimilation_tuning, "holdout_margin", 0.02))
+            # team_holdout_margin can be present but None; fall back to generic holdout_margin
+            margin_val = getattr(self.config.assimilation_tuning, "team_holdout_margin", None)
+            if margin_val is None:
+                margin_val = getattr(self.config.assimilation_tuning, "holdout_margin", 0.02)
+            try:
+                margin = float(margin_val)
+            except Exception:
+                margin = 0.02
             # Power proxy gate
             min_power = float(getattr(self.config.assimilation_tuning, "team_min_power", 0.2))
             power = self._power_proxy(team_mu, baseline, margin, team_se)

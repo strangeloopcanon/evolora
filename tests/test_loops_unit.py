@@ -48,6 +48,7 @@ def test_team_probe_can_promote_colony():
     cfg.assimilation_tuning.team_probe_per_gen = 1
     cfg.assimilation_tuning.team_min_tasks = 6
     cfg.assimilation_tuning.holdout_margin = 0.001
+    cfg.assimilation_tuning.team_min_power = 0.0
     # Simple population with two orgs
     class Pop:
         def __init__(self):
