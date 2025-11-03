@@ -42,8 +42,8 @@ assimilation_tuning:
   gating_snapshot_limit: 64
   holdout_tasks_path: config/evaluation/holdout_simple.jsonl
   holdout_sample_size: 16
-  holdout_margin: 0.02
-  min_window: 6
+  holdout_margin: 0.010
+  min_window: 5
   window_step: 2
   adaptive_decay: 0.82
   adaptive_floor: 0.0003
@@ -56,16 +56,16 @@ assimilation_tuning:
   dr_enabled: true
   dr_strata: [family, depth]
   dr_min_stratum_size: 3
-  dr_min_power: 0.25
+  dr_min_power: 0.20
   merge_audit_enabled: true
   merge_method: fisher_svd
   merge_mode: hybrid
   trial_offspring_enabled: true
   trial_per_gen_cap: 5
   trial_stipend: 1.0
-  trial_probation_gens: 12
-  trial_promote_margin: 0.03
-  trial_min_power: 0.2
+  trial_probation_gens: 8
+  trial_promote_margin: 0.015
+  trial_min_power: 0.10
   colonies_enabled: true
   colony_synergy_delta: 0.08
   colony_variance_improve: 0.20
@@ -82,11 +82,11 @@ assimilation_tuning:
   min_window_min: 3
   min_window_max: 24
   team_probe_per_gen: 3
-  team_min_tasks: 6
-  holdout_margin: 0.015
+  team_min_tasks: 4
   # Enable team router and lightweight co-routing probes
   team_router_enabled: true
-  team_max_routes_per_gen: 6
+  team_max_routes_per_gen: 8
+  team_min_power: 0.10
   team_routing_probe_per_gen: 2
 
 evolution:
@@ -127,7 +127,7 @@ policy:
   bias_strength: 0.5
   energy_cost: 0.05
   charge_tokens: false
-  allowed_fields: [cell_pref, budget_frac, reserve_ratio, read, post, gate_bias_delta]
+  allowed_fields: [budget_frac, reserve_ratio]
 
 environment:
   synthetic_batch_size: 2
