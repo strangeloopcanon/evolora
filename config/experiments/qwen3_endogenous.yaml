@@ -89,11 +89,19 @@ assimilation_tuning:
   team_probe_per_gen: 3
   team_min_tasks: 3
   team_router_enabled: true
-  team_max_routes_per_gen: 8
+  team_max_routes_per_gen: 12
   team_min_power: 0.05
-  team_routing_probe_per_gen: 2
+  team_routing_probe_per_gen: 3
   evidence_boost_cap: 8
   evidence_boost_factor: 1
+  team_holdout_margin: 0.006
+  team_handoff_enabled: true
+  promotion_target_rate: 0.2
+  promotion_adjust_step: 0.005
+  team_margin_min: 0.0
+  team_margin_max: 0.02
+  team_power_min: 0.05
+  team_power_max: 0.2
 evolution:
   mutation_rate: 0.3
   assimilation_threshold: 0.0

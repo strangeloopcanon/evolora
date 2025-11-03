@@ -416,6 +416,29 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         plt.xlabel("Generation"); plt.ylabel("Team promotions"); plt.title("Team promotions per generation")
         plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "team_promotions.png"); plt.close()
 
+    # Promotion controller thresholds over generations (if present)
+    if any("promotion_controller" in rec for rec in records):
+        margin_vals, power_vals = [], []
+        for rec in records:
+            pc = rec.get("promotion_controller") or {}
+            if isinstance(pc, dict):
+                try:
+                    margin_vals.append(float(pc.get("team_holdout_margin", float("nan"))))
+                except Exception:
+                    margin_vals.append(float("nan"))
+                try:
+                    power_vals.append(float(pc.get("team_min_power", float("nan"))))
+                except Exception:
+                    power_vals.append(float("nan"))
+            else:
+                margin_vals.append(float("nan"))
+                power_vals.append(float("nan"))
+        plt.figure(figsize=(8, 4))
+        plt.plot(generations, margin_vals, label="team_holdout_margin", color="#1f77b4")
+        plt.plot(generations, power_vals, label="team_min_power", color="#2ca02c")
+        plt.xlabel("Generation"); plt.ylabel("value"); plt.title("Promotion controller thresholds")
+        plt.legend(); plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "promotion_controller.png"); plt.close()
+
     # Co-routing heatmap for top pairs across the run
     pairs_set = set()
     for rec in records:
