@@ -227,6 +227,7 @@ Suggested next nudges (short runs)
   - `.venv311/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report`
   - Optional HTML dashboard: `.venv311/bin/python scripts/evoscope.py <run_dir>` then open `<run_dir>/index.html`
   - Optional animation (timeline GIF): `.venv311/bin/python scripts/evoscope_anim.py <run_dir> --gif` (writes `<run_dir>/timeline.gif`)
+  - macOS tip: set `MPLCONFIGDIR=$(mktemp -d)` when running analysis or long training to avoid font cache writes and occasional malloc pressure.
 
 Inline animation (optional)
 - If you want the animation visible directly on GitHub, copy a generated `timeline.gif` into `docs/timeline.gif` and it will render inline here:
