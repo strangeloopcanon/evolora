@@ -1,17 +1,30 @@
 import torch
 
-from symbiont_ecology.utils.torch_utils import clamp_norm, ensure_dtype, no_grad, resolve_device
+from symbiont_ecology.utils.torch_utils import clamp_norm, ensure_dtype, resolve_device, no_grad
 
 
-def test_torch_utils_helpers() -> None:
-    device = resolve_device("cpu")
-    assert isinstance(device, torch.device)
-    tensor = torch.tensor([3.0, 4.0])
-    clamped = clamp_norm(tensor, max_norm=5.0)
-    assert torch.allclose(clamped, tensor)
-    clamped_small = clamp_norm(tensor, max_norm=1.0)
-    assert torch.linalg.norm(clamped_small) <= 1.0 + 1e-5
-    converted = ensure_dtype(tensor, torch.float64)
-    assert converted.dtype == torch.float64
+def test_clamp_norm_scales_tensor_down():
+    t = torch.ones(4)
+    out = clamp_norm(t, max_norm=1.0)
+    assert torch.linalg.norm(out) <= 1.0000001
+
+
+def test_ensure_dtype_converts_dtype():
+    t = torch.ones(2, dtype=torch.float32)
+    out = ensure_dtype(t, torch.float16)
+    assert out.dtype == torch.float16
+    # idempotent when already correct
+    out2 = ensure_dtype(out, torch.float16)
+    assert out2.dtype == torch.float16
+
+
+def test_resolve_device_string_cpu():
+    dev = resolve_device("cpu")
+    assert str(dev) == "cpu"
+
+
+def test_no_grad_context_manager():
     with no_grad():
-        tensor.add_(1.0)
+        t = torch.ones(2, requires_grad=True) * 2
+        # Autograd disabled; result should not require grad
+        assert t.requires_grad is False

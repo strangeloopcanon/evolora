@@ -252,14 +252,16 @@ def test_sanitize_telemetry_handles_various_types() -> None:
 
 def test_analyzer_policy_conditioning_and_fields_aggregate() -> None:
     records = [
-        {"generation": 1, "avg_roi": 1.0, "policy_applied": 1, "policy_fields_used": {"budget_frac": 1}, "policy_budget_frac_avg": 1.2},
-        {"generation": 2, "avg_roi": 0.5, "policy_applied": 0},
+        {"generation": 1, "avg_roi": 1.0, "policy_applied": 1, "policy_fields_used": {"budget_frac": 1}, "policy_budget_frac_avg": 1.2, "policy_attempts": 2, "policy_parsed": 1},
+        {"generation": 2, "avg_roi": 0.5, "policy_applied": 0, "policy_attempts": 1, "policy_parsed": 0},
     ]
     summary = summarise_generations(records)
     assert summary["policy_applied_total"] == 1
     assert summary["policy_roi_mean_when_applied"] == 1.0
     assert summary["policy_roi_mean_when_not"] == 0.5
     assert summary["policy_fields_used_total"].get("budget_frac") == 1
+    assert summary["policy_parse_attempts_total"] == 3
+    assert summary["policy_parse_parsed_total"] == 1
 
 
 def test_config_loader_fallback_parser(tmp_path) -> None:

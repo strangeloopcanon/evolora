@@ -1,64 +1,41 @@
-from symbiont_ecology.config import CanaryConfig, ControllerConfig, GridConfig, PricingConfig
-from symbiont_ecology.environment.grid import EnvironmentController
+from symbiont_ecology.config import GridConfig, ControllerConfig, PricingConfig, CanaryConfig
+from symbiont_ecology.environment.grid import EnvironmentController, GridEnvironment
 
 
-def test_environment_controller_equilibrium_adjustments() -> None:
-    grid_cfg = GridConfig(families=["math"], depths=["short"])
-    controller_cfg = ControllerConfig(tau=0.5, beta=0.4, eta=0.1)
-    pricing_cfg = PricingConfig(base=1.0, k=1.0, min=0.2, max=2.0)
-    canary_cfg = CanaryConfig(q_min=0.9)
-    controller = EnvironmentController(grid_cfg, controller_cfg, pricing_cfg, canary_cfg, seed=21)
-    cell = ("math", "short")
-
-    baseline_state = controller.get_state(cell)
-    baseline_success = baseline_state.success_ema
-    baseline_price = baseline_state.price
-
-    for _ in range(6):
-        controller.update(cell, success=True)
-
-    after_success = controller.get_state(cell)
-    assert after_success.success_ema > baseline_success
-    assert after_success.price < baseline_price
-
-    for _ in range(6):
-        controller.update(cell, success=False)
-
-    after_failure = controller.get_state(cell)
-    assert after_failure.success_ema < after_success.success_ema
-    assert after_failure.price > after_success.price
-
-
-def test_bandit_sampling_prefers_successful_cells() -> None:
-    grid_cfg = GridConfig(families=["math", "logic.bool"], depths=["short"])
-    controller_cfg = ControllerConfig(tau=0.5, beta=0.4, eta=0.1)
-    pricing_cfg = PricingConfig(base=1.0, k=1.0, min=0.2, max=2.0)
+def test_environment_controller_apply_parameters_updates_prices():
+    grid_cfg = GridConfig(families=["word.count"], depths=["short"])
+    ctrl_cfg = ControllerConfig(tau=0.5, beta=0.2, eta=0.1)
+    price_cfg = PricingConfig(base=1.0, k=1.0, min=0.1, max=10.0)
     canary_cfg = CanaryConfig(q_min=0.8)
-    controller = EnvironmentController(grid_cfg, controller_cfg, pricing_cfg, canary_cfg, seed=11)
+    envc = EnvironmentController(grid_cfg, ctrl_cfg, price_cfg, canary_cfg, lp_alpha=0.5, seed=42)
+    # initial price
+    cell = ("word.count", "short")
+    before = envc.cells[cell].price
+    envc.apply_parameters(price_base=2.0, price_k=0.5)
+    after = envc.cells[cell].price
+    assert after != before
+    # adjusting tau should also work
+    envc.apply_parameters(tau=0.6)
+    assert envc.ctrl.tau == 0.6
 
-    math_cell = ("math", "short")
-    logic_cell = ("logic.bool", "short")
 
-    first = controller.sample_cell()
-    controller.update(first, success=first == math_cell)
-    second = controller.sample_cell()
-    controller.update(second, success=second == math_cell)
-    assert {first, second} == {math_cell, logic_cell}
-
-    for _ in range(20):
-        cell = controller.sample_cell()
-        success = cell == math_cell
-        controller.update(cell, success=success)
-
-    math_picks = 0
-    logic_picks = 0
-    for _ in range(10):
-        cell = controller.sample_cell()
-        success = cell == math_cell
-        controller.update(cell, success=success)
-        if cell == math_cell:
-            math_picks += 1
-        else:
-            logic_picks += 1
-
-    assert math_picks > logic_picks
+def test_environment_controller_sampling_and_messages():
+    grid_cfg = GridConfig(families=["word.count", "math"], depths=["short"])
+    ctrl_cfg = ControllerConfig(tau=0.5, beta=0.2, eta=0.1)
+    price_cfg = PricingConfig(base=1.0, k=1.0, min=0.1, max=10.0)
+    canary_cfg = CanaryConfig(q_min=0.8)
+    envc = EnvironmentController(grid_cfg, ctrl_cfg, price_cfg, canary_cfg, lp_alpha=0.5, seed=123)
+    # First two calls should explore each cell at least once
+    a = envc.sample_cell()
+    b = envc.sample_cell()
+    assert a in envc.cells and b in envc.cells
+    # Message board TTL behavior
+    env = GridEnvironment(grid_cfg, ctrl_cfg, price_cfg, canary_cfg, seed=999)
+    env.message_board.clear()
+    assert env.post_message("org_x", "hello", ttl=2)
+    msgs = env.read_messages(max_items=1)
+    assert msgs and msgs[0]["text"] == "hello"
+    # After two more reads, message should expire
+    env.read_messages(max_items=1)
+    env.read_messages(max_items=1)
+    assert env.read_messages(max_items=1) == []

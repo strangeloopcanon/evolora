@@ -80,6 +80,13 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     latest_record = records[-1]
     latest_gating_samples = latest_record.get("assimilation_gating_samples", [])
+    # Aggregate gating reasons seen across snapshots (best-effort; snapshots are bounded)
+    gating_reason_counts: Dict[str, int] = {}
+    for rec in records:
+        for sample in rec.get("assimilation_gating_samples", []) or []:
+            reason = sample.get("reason")
+            if isinstance(reason, str):
+                gating_reason_counts[reason] = gating_reason_counts.get(reason, 0) + 1
     latest_attempts = latest_record.get("assimilation_attempts", [])
     colonies_meta = latest_record.get("colonies_meta")
     # Colonies timeline
@@ -101,6 +108,8 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     qd_coverage = latest_record.get("qd_coverage")
     roi_volatility = latest_record.get("roi_volatility")
     policy_applied = sum(1 for rec in records if rec.get("policy_applied"))
+    policy_attempts_total = sum(int(rec.get("policy_attempts", 0) or 0) for rec in records)
+    policy_parsed_total = sum(int(rec.get("policy_parsed", 0) or 0) for rec in records)
     # Policy-conditioned ROI
     roi_when_policy: List[float] = []
     roi_when_no_policy: List[float] = []
@@ -128,6 +137,21 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Trials/promotions totals
     total_trials = sum(int(rec.get("trials_created", 0) or 0) for rec in records)
     total_promotions = sum(int(rec.get("promotions", 0) or 0) for rec in records)
+    # Team metrics
+    team_routes_series: List[int] = [int(rec.get("team_routes", 0) or 0) for rec in records]
+    team_promotions_series: List[int] = [int(rec.get("team_promotions", 0) or 0) for rec in records]
+    team_routes_total = sum(team_routes_series)
+    team_promotions_total = sum(team_promotions_series)
+    # Co-routing totals across generations
+    co_routing_totals: Dict[str, int] = {}
+    for rec in records:
+        top = rec.get("co_routing_top") or {}
+        if isinstance(top, dict):
+            for pair, cnt in top.items():
+                try:
+                    co_routing_totals[str(pair)] = co_routing_totals.get(str(pair), 0) + int(cnt)
+                except Exception:
+                    continue
     return {
         "generations": len(records),
         "avg_roi_mean": mean(roi),
@@ -167,15 +191,23 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "diversity_max_species_share_mean": diversity_max_share_mean,
         "diversity_enforced_rate": diversity_enforced_rate,
         "assimilation_gating_samples": latest_gating_samples[-5:],
+        "assimilation_gating_reasons_samples": gating_reason_counts,
         "assimilation_attempts": latest_attempts[-5:],
         "qd_coverage": qd_coverage,
         "roi_volatility": roi_volatility,
         "trials_total": total_trials,
         "promotions_total": total_promotions,
+        "team_routes_series": team_routes_series,
+        "team_promotions_series": team_promotions_series,
+        "team_routes_total": team_routes_total,
+        "team_promotions_total": team_promotions_total,
+        "co_routing_totals": dict(sorted(co_routing_totals.items(), key=lambda kv: kv[1], reverse=True)[:10]),
         "colonies_meta": colonies_meta,
         "colonies_count_series": colonies_count_series,
         "colonies_avg_size_mean": (sum(colonies_avg_size_series) / max(1, len(colonies_avg_size_series))) if colonies_avg_size_series else 0.0,
         "policy_applied_total": policy_applied,
+        "policy_parse_attempts_total": int(policy_attempts_total),
+        "policy_parse_parsed_total": int(policy_parsed_total),
         "policy_roi_mean_when_applied": (sum(roi_when_policy) / max(1, len(roi_when_policy))) if roi_when_policy else 0.0,
         "policy_roi_mean_when_not": (sum(roi_when_no_policy) / max(1, len(roi_when_no_policy))) if roi_when_no_policy else 0.0,
         "policy_fields_used_total": fields_agg,
@@ -195,6 +227,7 @@ def summarise_assimilation(path: Path) -> Dict[str, Any]:
     for_ci = 0
     method_counts: Dict[str, int] = {}
     dr_used = 0
+    strata_agg: Dict[str, int] = {}
     with path.open() as handle:
         for line in handle:
             line = line.strip()
@@ -225,6 +258,14 @@ def summarise_assimilation(path: Path) -> Dict[str, Any]:
                 method_counts[method] = method_counts.get(method, 0) + 1
             if bool(event.get("dr_used")):
                 dr_used += 1
+            strata = event.get("strata")
+            if isinstance(strata, dict):
+                for name, sizes in strata.items():
+                    try:
+                        paired = int(sizes.get("paired", 0))
+                        strata_agg[name] = strata_agg.get(name, 0) + paired
+                    except Exception:
+                        continue
     out: Dict[str, Any] = {
         "events": passes + failures,
         "passes": passes,
@@ -240,6 +281,10 @@ def summarise_assimilation(path: Path) -> Dict[str, Any]:
         out["methods"] = method_counts
     if dr_used:
         out["dr_used"] = dr_used
+    if strata_agg:
+        # Keep top 6 contributing strata by total paired count
+        top = sorted(strata_agg.items(), key=lambda kv: kv[1], reverse=True)[:6]
+        out["dr_strata_top"] = top
     return out
 
 
@@ -272,6 +317,14 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
     ]:
         plot_line(metric, ylabel)
 
+    # Policy parsed plot if available
+    if any("policy_parsed" in rec for rec in records):
+        values = [int(rec.get("policy_parsed", 0) or 0) for rec in records]
+        plt.figure(figsize=(8, 4))
+        plt.plot(generations, values, marker="o", linewidth=1)
+        plt.xlabel("Generation"); plt.ylabel("Policy parsed count"); plt.title("Policy parsed per generation")
+        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "policy_parsed.png"); plt.close()
+
     # Colonies plots
     colonies = [int(rec.get("colonies", 0) or 0) for rec in records]
     plt.figure(figsize=(8, 4))
@@ -296,6 +349,98 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
     plt.plot(generations, avg_sizes, marker="o", linewidth=1)
     plt.xlabel("Generation"); plt.ylabel("Avg colony size"); plt.title("Colony size over generations")
     plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_avg_size.png"); plt.close()
+
+    # Colony pots over time (total and per top colonies)
+    # Collect all colony ids
+    all_ids = set()
+    per_gen_meta: List[Dict[str, Any]] = []
+    for rec in records:
+        meta = rec.get("colonies_meta") or {}
+        if isinstance(meta, dict):
+            per_gen_meta.append(meta)
+            all_ids.update(meta.keys())
+        else:
+            per_gen_meta.append({})
+    if all_ids:
+        # Build pot and membership series aligned to generations
+        pot_series: Dict[str, List[float]] = {cid: [] for cid in all_ids}
+        mem_series: Dict[str, List[int]] = {cid: [] for cid in all_ids}
+        for meta in per_gen_meta:
+            for cid in all_ids:
+                entry = meta.get(cid) or {}
+                try:
+                    pot_series[cid].append(float(entry.get("pot", 0.0)))
+                except Exception:
+                    pot_series[cid].append(0.0)
+                try:
+                    mem_series[cid].append(int(len(entry.get("members", []))))
+                except Exception:
+                    mem_series[cid].append(0)
+        # Total pot
+        total_pot = [sum(pot_series[cid][i] for cid in all_ids) for i in range(len(records))]
+        plt.figure(figsize=(8, 4))
+        plt.plot(generations, total_pot, linewidth=1.5)
+        plt.xlabel("Generation"); plt.ylabel("Total pot"); plt.title("Colony pot (total)")
+        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_pot_total.png"); plt.close()
+        # Per-colony (top 5 by max pot)
+        top_ids = sorted(all_ids, key=lambda cid: max(pot_series[cid]) if pot_series[cid] else 0.0, reverse=True)[:5]
+        if top_ids:
+            plt.figure(figsize=(10, 5))
+            for cid in top_ids:
+                plt.plot(generations, pot_series[cid], label=cid, linewidth=1)
+            plt.xlabel("Generation"); plt.ylabel("Pot"); plt.title("Colony pot by colony (top 5)")
+            plt.legend(fontsize=8)
+            plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_pot_per_colony.png"); plt.close()
+            # Membership stacked area for top 5
+            try:
+                plt.figure(figsize=(10, 5))
+                ys = [mem_series[cid] for cid in top_ids]
+                plt.stackplot(generations, *ys, labels=top_ids)
+                plt.xlabel("Generation"); plt.ylabel("Members"); plt.title("Colony membership (stacked, top 5)")
+                plt.legend(fontsize=8, loc="upper left")
+                plt.tight_layout(); plt.savefig(output_dir / "colonies_membership_stack.png"); plt.close()
+            except Exception:
+                pass
+
+    # Team routes/promotions per generation
+    if any("team_routes" in rec for rec in records):
+        values = [int(rec.get("team_routes", 0) or 0) for rec in records]
+        plt.figure(figsize=(8, 4))
+        plt.plot(generations, values, marker="o", linewidth=1)
+        plt.xlabel("Generation"); plt.ylabel("Team routes"); plt.title("Team routes per generation")
+        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "team_routes.png"); plt.close()
+    if any("team_promotions" in rec for rec in records):
+        values = [int(rec.get("team_promotions", 0) or 0) for rec in records]
+        plt.figure(figsize=(8, 4))
+        plt.plot(generations, values, marker="o", linewidth=1)
+        plt.xlabel("Generation"); plt.ylabel("Team promotions"); plt.title("Team promotions per generation")
+        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "team_promotions.png"); plt.close()
+
+    # Co-routing heatmap for top pairs across the run
+    pairs_set = set()
+    for rec in records:
+        top = rec.get("co_routing_top") or {}
+        if isinstance(top, dict):
+            pairs_set.update(str(k) for k in top.keys())
+    pairs = sorted(list(pairs_set))[:10]
+    if pairs:
+        matrix: List[List[int]] = []
+        for rec in records:
+            row: List[int] = []
+            top = rec.get("co_routing_top") or {}
+            for p in pairs:
+                try:
+                    row.append(int((top or {}).get(p, 0)))
+                except Exception:
+                    row.append(0)
+            matrix.append(row)
+        plt.figure(figsize=(max(6, len(pairs)), 4))
+        plt.imshow(matrix, aspect="auto", origin="lower", cmap="cividis")
+        plt.colorbar(label="Co-route count")
+        plt.yticks(range(len(records)), generations)
+        plt.xticks(range(len(pairs)), pairs, rotation=45, ha="right")
+        plt.xlabel("Pair"); plt.ylabel("Generation"); plt.title("Co-routing (top pairs)")
+        plt.tight_layout(); plt.savefig(output_dir / "co_routing_heatmap.png"); plt.close()
 
     # Heatmaps for per-cell metrics if available
     if records[0].get("cells"):
@@ -366,6 +511,10 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
     )
     lines.append(f"- Bankruptcy culls: total {summary['culled_total']} (max per generation {summary['culled_max']})")
     lines.append(f"- Assimilation merges (per summary): {summary['total_merges']}")
+    if summary.get("team_routes_total") is not None:
+        lines.append(
+            f"- Team routes / promotions: {summary.get('team_routes_total', 0)} / {summary.get('team_promotions_total', 0)}"
+        )
     if summary.get("assimilation_attempt_total"):
         lines.append(f"- Assimilation attempts (all stages): {summary['assimilation_attempt_total']}")
     if summary["assimilation_gating_total"]:
@@ -409,6 +558,12 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
             lines.append(f"  - Methods: {method_items}")
         if assimilation.get("dr_used"):
             lines.append(f"  - DR uplift applied in {assimilation['dr_used']} events")
+    # Co-routing aggregate
+    crt = summary.get("co_routing_totals") or {}
+    if crt:
+        lines.append("- Top co-routing pairs (aggregate):")
+        for pair, cnt in crt.items():
+            lines.append(f"  - {pair}: {cnt}")
     else:
         lines.append("- Assimilation tests: none recorded")
     if summary.get("tau_relief_active"):
@@ -525,6 +680,10 @@ def main() -> None:
         print("Assimilation gating totals:")
         for key, value in summary["assimilation_gating_total"].items():
             print(f"  {key}: {value}")
+    if summary.get("assimilation_gating_reasons_samples"):
+        print("Gating reasons (samples across gens):")
+        for key, value in summary["assimilation_gating_reasons_samples"].items():
+            print(f"  {key}: {value}")
     if summary.get("colonies_count_series"):
         series = summary["colonies_count_series"]
         print("Colonies count (min-max):", min(series), "-", max(series))
@@ -544,6 +703,17 @@ def main() -> None:
             print("Policy budget_frac mean:", f"{summary['policy_budget_frac_mean']:.2f}")
         if summary.get("policy_reserve_ratio_mean"):
             print("Policy reserve_ratio mean:", f"{summary['policy_reserve_ratio_mean']:.2f}")
+    if summary.get("policy_parse_attempts_total") or summary.get("policy_parse_parsed_total"):
+        a = summary.get("policy_parse_attempts_total", 0) or 0
+        p = summary.get("policy_parse_parsed_total", 0) or 0
+        rate = (p / a) * 100 if a else 0.0
+        print("Policy parse:", p, "/", a, f"({rate:.1f}% )")
+    # Team totals to console
+    if summary.get("team_routes_total") is not None:
+        print("Team routes / promotions:", summary.get("team_routes_total", 0), "/", summary.get("team_promotions_total", 0))
+    if summary.get("co_routing_totals"):
+        tops = ", ".join(f"{k}:{v}" for k, v in summary["co_routing_totals"].items())
+        print("Top co-routing pairs:", tops)
     if summary["eval_events"]:
         accuracy_pct = summary["eval_accuracy_mean"] * 100
         print(
@@ -571,6 +741,10 @@ def main() -> None:
             print("Methods:", method_items)
         if assimilation_summary.get("dr_used"):
             print("DR uplift events:", assimilation_summary["dr_used"])
+        if assimilation_summary.get("dr_strata_top"):
+            top = assimilation_summary["dr_strata_top"]
+            items = ", ".join(f"{k}:{v}" for k, v in top)
+            print("DR contributing strata (top):", items)
     else:
         print("No assimilation events recorded")
     if summary.get("trials_total") or summary.get("promotions_total"):
@@ -593,9 +767,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    # Colonies timeline summary
-    if summary.get("colonies_count_series"):
-        lines.append("- Colonies timeline:")
-        series = summary["colonies_count_series"]
-        lines.append(f"  - count (min-max): {min(series)} – {max(series)}")
-        lines.append(f"  - avg size (mean): {summary['colonies_avg_size_mean']:.2f}")

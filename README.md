@@ -20,13 +20,13 @@ If the colony keeps earning more than it spends, the population should drift tow
 - Recent changes: added low‑power gating (defer decisions), larger evidence windows, easier evidence top‑ups, and trial offspring with promotion checks.
 
 ## What’s New (Oct 2025)
-- Low‑power gating in assimilation (defers merges when evidence is weak).
-- Adaptive energy top‑ups (ease ROI threshold when variance/streak is high).
-- Trial offspring path with evidence accumulation across generations.
-- Doubly-robust assimilation uplift with stratified holdout telemetry (tracks method, power, strata).
-- Auto-tuned learning-progress curriculum (lp_mix adapts each generation, smoothed window + plots).
-- Colony promotion now requires sustained synergy plus holdout wins; colonies dissolve after repeated regressions.
-- Adaptive assimilation relief: controller τ and ROI floors decay when merges stall, logging total attempts per generation.
+- Policy hook (per‑org JSON policy) with energy micro‑cost. Policies can bias routing (cell_pref), adjust per‑org budget_frac, enable comms, and set a small gate_bias delta. Analyzer shows policy usage and ROI when policy is on vs off.
+- Colonies (team mode) with cautious promotion/shrink and priced comms. Per‑colony bandwidth fraction + read/post caps; analyzer shows colonies over time and average size.
+- Co‑routing probes per generation to surface synergistic pairs; optional team router can route a few best‑of‑two episodes per generation and reports `team_routes`/`team_promotions`.
+- Evidence auto‑tune for assimilation windows to reduce “insufficient_scores”. DR small‑n deferral (low_power_dr) grants evidence credit instead of forcing bad calls.
+- Doubly‑robust uplift with stratified holdout telemetry (method, power, strata), plus snapshots of assimilation gates and attempts.
+- Learning‑progress curriculum heatmap (LP) and smoothed lp_mix. QD coverage readout (optional).
+- Adaptive relief: τ/ROI guardrails relax when merges stall; analyzer surfaces relief snapshots.
 
 ## How Learning Emerges (Core Hypothesis)
 
@@ -171,6 +171,53 @@ Pull requests welcome! Please:
 
 Happy evolving — let’s see if this Cambrian-era colony learns something genuinely new.
 
+## Quick Start (Qwen3‑0.6B)
+- 40‑gen smoke (endogenous config, policy + colonies + auto‑tune on):
+  - `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/qwen3_endogenous.yaml --generations 40 --output artifacts_qwen3_endogenous_flags_40`
+- Simple ladder (short cells; fast):
+  - `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/qwen3_simple.yaml --generations 40 --output artifacts_qwen3_simple_40`
+- Analyze any run dir:
+  - `.venv311/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report`
+
+What to watch in the ticker each generation
+- `ROI`: keep mean in a healthy band (>1.3 desirable on Qwen3 smoke).
+- `merges`: accepted assimilations (can be 0–3 in 40‑gen smoke).
+- `energy floor` and `(ROI≥x)`: how strict the gate is and the ROI needed for top‑ups.
+- `gating`: which reasons dominated (low_energy, low_power, low_power_dr, insufficient_scores, …).
+- `trials/promotions`: trial offspring created and team promotions.
+- `eval a/b`: holdout accuracy if scheduled.
+
+Analyzer insights (after the run)
+- Colonies count (min–max) and average size: ensures team behavior isn’t collapsing to monoculture.
+- Policy usage: gens with policy, parse counts, ROI when policy on vs off, and field usage summary.
+- Assimilation: events summary, mean sample size, CI‑excludes‑zero share, mean power; gating totals and sample reasons (look for `low_power_dr`).
+- LP heatmap and cell difficulty/price heatmaps: confirms curriculum pressure and pricing dynamics.
+
+## Latest Results Snapshot — Qwen3 Endogenous (40 gens)
+- Run: `artifacts_qwen3_endogenous_flags_40_e`
+- ROI: mean 1.872 (median 1.895; min/max 0.063/2.752)
+- Energy: avg cost 0.985; mean balance 2.859 (min/max 2.382/3.075)
+- Curriculum: lp_mix active mean 0.547 (base 0.200; last 0.600)
+- Merges: 1 total; Bankruptcy culls: 0
+- Evaluation: 22.22% (8/36); cadence 10
+- Colonies: present briefly (count 0–1), average size 1.70
+- Trials/promotions: trials 1, promotions 1
+- Assimilation gating totals (top items):
+  - uplift_below_threshold 238; insufficient_scores 211; cooldown 89; low_power 25; low_energy 39; no_best_cell 24
+  - Top‑up status: success 195; ROI‑blocked 8; already_sufficient 421
+- Policy parse rate: 0/580 (0.0%) — current JSON extraction is strict; consider more robust parsing or narrower allowed fields
+
+Interpretation
+- Healthy ROI and stable energy indicate the economy is viable; assimilation is still evidence‑limited (insufficient_scores) and uplift‑limited (below threshold).
+- DR small‑n deferrals appear (low_power/low_power_dr), which is expected when holdout power is low; auto‑tune will keep nudging evidence windows within configured bounds.
+- Policy hook influence is likely minimal given 0% parse rate; improving JSON extraction or steering the policy prompt can surface stronger routing/budget effects.
+- Colonies form occasionally but remain small and transient under cautious gates — by design at this stage.
+
+Suggested next nudges (short runs)
+- If insufficient_scores remains high: temporarily reduce `assimilation_tuning.min_window` by 2 (e.g., 8→6) to accelerate attempts, then revert after merges increase.
+- If macOS memory pressure reappears: lower `host.gen_max_new_tokens` (e.g., 48→32) or reduce `evaluation.sample_size` slightly; keep `metrics.in_memory_log_limit: 0`.
+- Improve policy parsing: use a stricter JSON‑only system instruction or a tolerant extractor to increase parse rate before raising `policy.bias_strength` further.
+
 ## Run & Observe
 - Debug (20 generations, rich telemetry):
   - `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed_debug.yaml --generations 20 --batch-size 2 --output artifacts_gemma_debug_latest`
@@ -201,3 +248,69 @@ During runs, the progress ticker prints what actually matters each generation:
 Note: noisy Transformer/PEFT warnings and pad‑token notices are suppressed in `scripts/eval_gemma_long.py` to keep the ticker readable.
 
 Analyzer notes: `scripts/analyze_ecology_run.py` reports assimilation power and may show a `low_power` gating total when uplift tests defer. If `low_power` dominates, extend runs slightly or increase evidence windows (config knobs) to accumulate more samples per attempt.
+
+### Colony inference (best‑of‑two)
+
+You can query a small “colony” (2 members) directly and see the combined response.
+
+CLI:
+
+```
+.venv311/bin/python scripts/colony_infer.py \
+  --config config/experiments/qwen3_endogenous.yaml \
+  --members auto \
+  --prompt "Sort: pear banana apple"
+```
+
+Python API (inside a run):
+
+```
+result = loop.run_colony_inference(["org_a", "org_b"], "Sort: pear banana apple")
+print(result["selected_id"], result["selected_answer"])  # per‑member answers in result["answers"]
+```
+
+Note: For querying previously trained adapters, add persistence for organelle adapter states and reload before calling.
+
+### Latest Snapshot (Qwen endogenous, 40 gens — “_40_b”)
+
+Key numbers (quick glance):
+- ROI mean 2.39 (min 0.00, max 3.68)
+- Team routes 220, promotions 0
+- Merges 0; Eval 22.22% (8/36)
+
+Plots (click to open):
+- Team routes: `artifacts_qwen3_endogenous_colonies_40_b/visuals/team_routes.png`
+- Team promotions: `artifacts_qwen3_endogenous_colonies_40_b/visuals/team_promotions.png`
+- Co‑routing heatmap: `artifacts_qwen3_endogenous_colonies_40_b/visuals/co_routing_heatmap.png`
+- Colonies count: `artifacts_qwen3_endogenous_colonies_40_b/visuals/colonies_count.png`
+- Colony pot (total): `artifacts_qwen3_endogenous_colonies_40_b/visuals/colonies_pot_total.png`
+- Avg ROI: `artifacts_qwen3_endogenous_colonies_40_b/visuals/avg_roi.png`
+
+Reproduce analysis:
+
+```
+MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python \
+  scripts/analyze_ecology_run.py artifacts_qwen3_endogenous_colonies_40_b --plots --report
+```
+
+### Teams & Policy quick run (Qwen‑0.6B)
+
+```bash
+MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py \
+  --config config/experiments/qwen3_endogenous.yaml \
+  --generations 40 \
+  --output artifacts_qwen3_endogenous_colonies_40
+
+.venv311/bin/python scripts/analyze_ecology_run.py artifacts_qwen3_endogenous_colonies_40 --plots --report
+```
+
+## Tuning Cheatsheet
+- Faster assimilation cadence (smoke only; revert for long stability):
+  - `assimilation_tuning.min_window: 8–10`, `probe_max_other_cells: 1–2`, `holdout_margin: 0.02–0.03`.
+- More exploration: lower `controller.tau` slightly; increase `curriculum.lp_mix_max`.
+- Reduce stalls from small‑n evidence: keep DR on, accept deferral (`low_power_dr`) and let auto‑tune shrink windows; don’t force merges.
+- Strengthen policy influence: `policy.bias_strength: 0.4–0.6` while parse rate is healthy.
+- Team router & co‑routing:
+  - `assimilation_tuning.team_router_enabled: true`
+  - `assimilation_tuning.team_max_routes_per_gen: 4–8`
+  - `assimilation_tuning.team_routing_probe_per_gen: 1–3`

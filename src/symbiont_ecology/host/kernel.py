@@ -349,6 +349,40 @@ class HostKernel:
         return self.organelles.get(organelle_id)
 
     # ------------------------------------------------------------------
+    def export_organelle_adapter(self, organelle_id: str, path: str | 'Path') -> None:
+        """Persist an organelle's adapter state to disk via torch.save.
+
+        Creates parent directories as needed.
+        """
+        import os
+        from pathlib import Path as _P
+        import torch as _t
+        org = self.organelles.get(organelle_id)
+        if org is None:
+            raise KeyError(f"Unknown organelle {organelle_id}")
+        state = org.export_adapter_state()
+        p = _P(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _t.save(state, p)
+
+    def import_organelle_adapter(self, organelle_id: str, path: str | 'Path', alpha: float = 1.0) -> None:
+        """Load an adapter state from disk and import into the organelle.
+
+        If the organelle does not implement import_adapter_state, this is a no-op.
+        """
+        from pathlib import Path as _P
+        import torch as _t
+        org = self.organelles.get(organelle_id)
+        if org is None:
+            raise KeyError(f"Unknown organelle {organelle_id}")
+        p = _P(path)
+        state = _t.load(p, map_location="cpu")
+        try:
+            org.import_adapter_state(state, alpha=alpha)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     def _apply_assimilation_seed(self, organelle: Organelle) -> None:
         scale = getattr(self.config.assimilation_tuning, "seed_scale", 0.0)
         if scale <= 0.0 or not self.assimilation_state:
