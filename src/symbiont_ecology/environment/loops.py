@@ -1033,6 +1033,23 @@ class EcologyLoop:
                 # Best‑effort only; continue
                 continue
 
+    def _should_boost(self, organelle_id: str) -> bool:
+        """Heuristic: boost evidence for near-threshold or promising organelles.
+
+        Uses recent ROI vs aggregate ROI as a proxy. Best-effort and safe.
+        """
+        try:
+            recent = float(self.population.average_roi(organelle_id, limit=5))
+        except Exception:
+            return False
+        try:
+            aggregate = float(self.population.aggregate_roi())
+        except Exception:
+            aggregate = 0.0
+        # Boost when recent ROI is close to or above 90% of aggregate
+        threshold = max(0.0, 0.9 * aggregate)
+        return recent >= threshold
+
     def _request_and_apply_policy(self, organelle_id: str) -> None:
         # Count attempt
         try:
