@@ -1,4 +1,5 @@
 import importlib.util
+import pytest
 from pathlib import Path
 
 _ANALYZER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "analyze_ecology_run.py"
@@ -32,5 +33,5 @@ def test_colonies_timeline_and_sizes_in_summary() -> None:
     ]
     summary = summarise_generations(records)
     assert summary["colonies_count_series"] == [0, 2, 1]
-    # avg sizes across gens: [0.0, 2.5, 2.0] -> mean 1.5
-    assert abs(summary["colonies_avg_size_mean"] - 1.5) < 1e-6
+    # avg sizes across gens: [0.0, 2.5, 2.0] -> mean 1.5 (allow tiny tolerance)
+    assert summary["colonies_avg_size_mean"] == pytest.approx(1.5, abs=1e-6)

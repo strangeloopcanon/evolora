@@ -96,6 +96,13 @@ controller:
 qd:
   enabled: false
 
+policy:
+  enabled: true
+  bias_strength: 0.5
+  energy_cost: 0.05
+  charge_tokens: false
+  allowed_fields: [cell_pref, budget_frac, reserve_ratio, read, post, gate_bias_delta]
+
 environment:
   synthetic_batch_size: 2
   auto_batch: true

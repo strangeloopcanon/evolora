@@ -218,6 +218,10 @@ def main() -> None:
         if isinstance(trials, int) and isinstance(promos, int):
             if trials or promos:
                 message += f" | trials {trials} promotions {promos}"
+        # Team metrics in ticker
+        tr = summary.get("team_routes"); tp = summary.get("team_promotions")
+        if isinstance(tr, int) and isinstance(tp, int) and (tr or tp):
+            message += f" | team routes {tr} promos {tp}"
         if "evaluation" in generation_record:
             eval_info = generation_record["evaluation"]
             message += f" | eval {eval_info['accuracy']:.3f} ({eval_info['correct']}/{eval_info['total']})"

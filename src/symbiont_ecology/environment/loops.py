@@ -114,12 +114,17 @@ class EcologyLoop:
     _active_policies: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _assim_attempt_total: int = field(default=0, init=False, repr=False)
     _policy_cost_total: float = field(default=0.0, init=False, repr=False)
+    _policy_attempts_gen: int = field(default=0, init=False, repr=False)
+    _policy_parsed_gen: int = field(default=0, init=False, repr=False)
+    _co_routing_counts: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
         self.promotions_this_gen = 0
         self.trial_creations_this_gen = 0
         self._assim_attempt_total = 0
+        self._policy_attempts_gen = 0
+        self._policy_parsed_gen = 0
         if self.morphogenesis is None:
             self.morphogenesis = MorphogenesisController(config=self.config, host=self.host)
         if self.config.evaluation.enabled and self.evaluation_manager is None:
@@ -193,6 +198,12 @@ class EcologyLoop:
                 except Exception:
                     pass
 
+        # Lightweight co‑routing probes to inform team pairing
+        try:
+            self._probe_co_routing(active)
+        except Exception:
+            pass
+
         # Optional: communication read step once per active organelle
         comms_enabled = getattr(self.config.comms, "enabled", False)
         post_cost = float(getattr(self.config.comms, "post_cost", 0.2))
@@ -256,6 +267,10 @@ class EcologyLoop:
         base_lp_mix = float(getattr(self.config.curriculum, "lp_mix", 0.0))
         self._base_lp_mix = base_lp_mix
         lp_mix_value = self._resolve_lp_mix(base_lp_mix)
+        team_enabled = bool(getattr(self.config.assimilation_tuning, "team_router_enabled", False))
+        team_max = int(getattr(self.config.assimilation_tuning, "team_max_routes_per_gen", 0))
+        team_used = 0
+        used_pairs: set[tuple[str, str]] = set()
         for organelle_id in active:
             # policy-driven per-org batch multiplier
             per_org_bs = bs
@@ -264,11 +279,15 @@ class EcologyLoop:
                 frac = max(0.25, min(2.0, float(pol["budget_frac"])) )
                 per_org_bs = max(1, int(round(bs * frac)))
             for _ in range(per_org_bs):
-                task = (
-                    self._sample_task_with_policy(lp_mix_value, organelle_id)
-                    if lp_mix_value > 0.0
-                    else self.environment.sample_task()
-                )
+                task = (self._sample_task_with_policy(lp_mix_value, organelle_id) if lp_mix_value > 0.0 else self.environment.sample_task())
+                # Optional team routing: pick a synergy pair and run team episode
+                if team_enabled and team_used < team_max and len(self.population.population) >= 2:
+                    pair = self._select_synergy_pair(fallback_organelle=organelle_id, excluded=used_pairs)
+                    if pair is not None and pair not in used_pairs:
+                        if self._run_team_episode(pair, task):
+                            team_used += 1
+                            used_pairs.add(pair)
+                            continue
                 # apply any pending hints to the prompt
                 prompt_text = task.prompt
                 hints = self._pending_hints.get(organelle_id, [])
@@ -354,6 +373,11 @@ class EcologyLoop:
         merges = self._attempt_assimilation(capped=self.config.evolution.max_merges_per_gen)
         # review trial offspring for potential promotion or cull
         self._review_trial_offspring()
+        # Optional: team probes to promote colonies via CI gate
+        try:
+            team_promotions = self._maybe_team_probes()
+        except Exception:
+            team_promotions = 0
         # Colonies: promotion and upkeep (pooled pot, reserve top-ups)
         try:
             if bool(getattr(self.config.assimilation_tuning, "colonies_enabled", False)):
@@ -375,7 +399,9 @@ class EcologyLoop:
             "bankrupt": len(bankrupt),
             "culled_bankrupt": len(culled_bankrupt),
             "merges": merges + self.promotions_this_gen,
+            "team_promotions": int(team_promotions),
             "population": len(self.population.population),
+            "team_routes": int(team_used),
             "avg_roi": self.population.aggregate_roi(),
             "avg_energy_cost": self.population.aggregate_energy(),
             "cells": {
@@ -387,6 +413,14 @@ class EcologyLoop:
                 for (family, depth), state in self.environment.controller.cells.items()
             },
         }
+        # Top co-routing pairs this gen (best-effort)
+        try:
+            if self._co_routing_counts:
+                top_pairs = sorted(self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+                summary["co_routing_top"] = {f"{a}:{b}": int(c) for (a, b), c in top_pairs}
+                self._co_routing_counts = {}
+        except Exception:
+            pass
         # Learning progress snapshot per cell (for analyzer LP heatmaps)
         try:
             lp_map = {
@@ -421,6 +455,8 @@ class EcologyLoop:
                     summary["policy_reserve_ratio_avg"] = float(sum(reserves) / max(1, len(reserves)))
                 if getattr(self, "_policy_cost_total", 0.0) > 0.0:
                     summary["policy_cost_total"] = float(self._policy_cost_total)
+            summary["policy_attempts"] = int(self._policy_attempts_gen)
+            summary["policy_parsed"] = int(self._policy_parsed_gen)
         # QD coverage (family-depth cells with observed stats)
         try:
             if getattr(self.config.qd, "enabled", False):
@@ -669,6 +705,90 @@ class EcologyLoop:
         if self.sink:
             self.sink.log_episode(episode)
 
+    def _select_synergy_pair(
+        self,
+        fallback_organelle: str | None = None,
+        excluded: set[tuple[str, str]] | None = None,
+    ) -> tuple[str, str] | None:
+        # Prefer top co-routing pairs; else use top-ROI fallback including the provided organelle.
+        # Skips any pairs present in `excluded`.
+        excluded = excluded or set()
+        try:
+            if hasattr(self, "_co_routing_counts") and self._co_routing_counts:
+                pairs_sorted = sorted(self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True)
+                for (a, b), _c in pairs_sorted:
+                    pair = (min(a, b), max(a, b))
+                    if pair in excluded:
+                        continue
+                    if a in self.population.population and b in self.population.population:
+                        return pair
+        except Exception:
+            pass
+        # Fallback by ROI
+        try:
+            scored = [(oid, float(self.population.average_roi(oid, limit=5))) for oid in self.population.population.keys()]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            top = [oid for oid, _ in scored[: min(6, len(scored))]]
+            if fallback_organelle and fallback_organelle in top and len(top) >= 2:
+                # Try each candidate paired with fallback until one is not excluded
+                for other in top:
+                    if other == fallback_organelle:
+                        continue
+                    pair = tuple(sorted((fallback_organelle, other)))  # type: ignore[assignment]
+                    if pair not in excluded:
+                        return pair  # type: ignore[return-value]
+            if len(top) >= 2:
+                # Return the first non-excluded pair in rank order
+                for i in range(len(top)):
+                    for j in range(i + 1, len(top)):
+                        pair = tuple(sorted((top[i], top[j])))  # type: ignore[assignment]
+                        if pair not in excluded:
+                            return pair  # type: ignore[return-value]
+        except Exception:
+            pass
+        return None
+
+    def _run_team_episode(self, pair: tuple[str, str], task: GridTask) -> bool:
+        # Best-of-two answer (vote) with individual energy settlement
+        if len(pair) != 2:
+            return False
+        a_id, b_id = pair
+        results: list[tuple[str, RouteMetrics, bool, RewardBreakdown, dict[str, float]]] = []
+        for oid in (a_id, b_id):
+            result = self.host.step(
+                prompt=task.prompt,
+                intent="team episode",
+                max_routes=1,
+                allowed_organelle_ids=[oid],
+            )
+            metrics = result.responses.get(oid)
+            if metrics is None:
+                continue
+            success, reward = task.evaluate(metrics.answer)
+            settlement = self._settle_episode(oid, task, reward, metrics)
+            results.append((oid, metrics, success, reward, settlement))
+            # record episode per member
+            adapter_utilisation = {k: float(v) for k, v in metrics.active_adapters.items()} if isinstance(metrics.active_adapters, dict) else {}
+            self._record_episode(task, oid, reward, metrics, settlement, success, adapter_utilisation)
+        if not results:
+            return False
+        # Choose winner by highest ROI
+        best = None
+        best_roi = float("-inf")
+        for oid, metrics, success, reward, settlement in results:
+            roi = float(settlement.get("roi", 0.0))
+            if roi > best_roi:
+                best_roi = roi
+                best = (oid, metrics, success, reward, settlement)
+        # post a small hint if the winner succeeded
+        if best is not None and bool(best[2]):
+            try:
+                hint = "Team tip: cross-check units and counts."
+                self.environment.post_message(best[0], hint, cost=float(getattr(self.config.comms, "post_cost", 0.2)), ttl=int(getattr(self.config.comms, "ttl", 10)))
+            except Exception:
+                pass
+        return True
+
     def _sample_task_lp(self, lp_mix: float) -> GridTask:
         try:
             cell = self.environment.controller.sample_cell(lp_mix=lp_mix)
@@ -693,25 +813,184 @@ class EcologyLoop:
 
     @staticmethod
     def _parse_policy_json(text: str, allowed: list[str]) -> dict[str, object]:
+        """Extract and repair a small JSON object with allowed fields.
+
+        Strategy (best-effort, no heavy deps):
+        1) Prefer fenced ```json blocks; else any fenced block; else the outermost {...} span.
+        2) Try strict json.loads; on failure, apply light repairs:
+           - strip code fences
+           - remove trailing commas before } or ]
+           - normalize Python literals to JSON (True/False/None -> true/false/null)
+           - convert simple single-quoted keys/values to double-quoted
+        3) Return only keys in `allowed`.
+        """
         import json as _json
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return {}
-        try:
-            data = _json.loads(text[start : end + 1])
+        import re as _re
+
+        def _find_fenced(block: str) -> list[str]:
+            candidates: list[str] = []
+            # ```json ... ``` preferred
+            for m in _re.finditer(r"```json\s*([\s\S]*?)\s*```", block, _re.IGNORECASE):
+                candidates.append(m.group(1))
+            # any ``` ... ```
+            for m in _re.finditer(r"```\s*([\s\S]*?)\s*```", block):
+                candidates.append(m.group(1))
+            return candidates
+
+        def _outer_object(block: str) -> str | None:
+            start = block.find("{")
+            if start == -1:
+                return None
+            depth = 0
+            for i in range(start, len(block)):
+                ch = block[i]
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return block[start : i + 1]
+            return None
+
+        def _repair(s: str) -> str:
+            # strip code fences accidentally included
+            s = s.strip().strip('`')
+            # normalize common Python literals to JSON
+            s = _re.sub(r"\bTrue\b", "true", s)
+            s = _re.sub(r"\bFalse\b", "false", s)
+            s = _re.sub(r"\bNone\b", "null", s)
+            # remove trailing commas before closing } or ]
+            s = _re.sub(r",\s*([}\]])", r"\1", s)
+            # single-quoted keys -> double quotes
+            s = _re.sub(r"([{,]\s*)'([^'\s]+)'\s*:", r'\1"\2":', s)
+            # single-quoted string values -> double quotes (conservative, no nested quotes)
+            s = _re.sub(r":\s*'([^']*)'\s*([,}])", r': "\1"\2', s)
+            return s
+
+        def _try_load(s: str) -> dict[str, object] | None:
+            try:
+                data = _json.loads(s)
+            except Exception:
+                try:
+                    data = _json.loads(_repair(s))
+                except Exception:
+                    return None
             if not isinstance(data, dict):
-                return {}
+                return None
             return {k: v for k, v in data.items() if k in allowed}
+
+        # Collect candidates
+        candidates = _find_fenced(text)
+        outer = _outer_object(text)
+        if outer:
+            candidates.append(outer)
+        for cand in candidates:
+            parsed = _try_load(cand)
+            if parsed:
+                return parsed
+        # Fallback: simple key:value extraction (very tolerant)
+        try:
+            kvs: dict[str, object] = {}
+            # match patterns like key: 0.5 or key=0.5 or key: true/false
+            for m in _re.finditer(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=]\s*([\-+]?[0-9]+(?:\.[0-9]+)?|true|false)", text, _re.IGNORECASE):
+                k = m.group(1)
+                vraw = m.group(2)
+                if k not in allowed:
+                    continue
+                if vraw.lower() in ("true", "false"):
+                    kvs[k] = (vraw.lower() == "true")
+                else:
+                    try:
+                        kvs[k] = float(vraw) if "." in vraw else int(vraw)
+                    except Exception:
+                        continue
+            if kvs:
+                return kvs
         except Exception:
-            return {}
+            pass
+        return {}
+
+    def run_colony_inference(self, member_ids: list[str], prompt: str, strategy: str = "best_of_two") -> dict[str, object]:
+        """Run an ad-hoc inference over a set of members and return the selected answer.
+
+        - strategy="best_of_two" chooses the answer with the larger number of non-whitespace characters
+          (heuristic when no ground-truth reward is available).
+        - Returns a dict: {"selected_id", "selected_answer", "answers": {id: answer}, "tokens": {id: int}}
+        """
+        answers: dict[str, str] = {}
+        tokens: dict[str, int] = {}
+        for oid in member_ids:
+            result = self.host.step(prompt=prompt, intent="colony infer", max_routes=1, allowed_organelle_ids=[oid])
+            metrics = result.responses.get(oid)
+            ans = ""
+            tok = 0
+            if metrics is not None:
+                ans = str(metrics.answer)
+                tok = int(getattr(metrics, "tokens", 0) or 0)
+            answers[oid] = ans
+            tokens[oid] = tok
+        selected_id = member_ids[0] if member_ids else ""
+        if strategy == "best_of_two" and len(member_ids) >= 2:
+            def _score(a: str) -> int:
+                return len(str(a).strip())
+            selected_id = max(member_ids, key=lambda oid: _score(answers.get(oid, "")))
+        selected_answer = answers.get(selected_id, "")
+        return {"selected_id": selected_id, "selected_answer": selected_answer, "answers": answers, "tokens": tokens}
+
+    def _probe_co_routing(self, active_ids: list[str]) -> None:
+        """Run a few light routing probes to populate co‑routing counts per generation.
+
+        Uses host routing with k=2 to observe which organelles tend to co‑route on sampled tasks.
+        Keeps the count in `_co_routing_counts` and avoids energy settlement/logging.
+        """
+        try:
+            per_gen = int(getattr(self.config.assimilation_tuning, "team_routing_probe_per_gen", 0))
+        except Exception:
+            per_gen = 0
+        if per_gen <= 0 or len(active_ids) < 2:
+            return
+        # Ensure counter exists
+        try:
+            _ = self._co_routing_counts
+        except Exception:
+            self._co_routing_counts = {}
+        for _ in range(per_gen):
+            try:
+                task = self.environment.sample_task()
+                # Ask router to pick two candidates via normal step (no settlement here)
+                result = self.host.step(
+                    prompt=task.prompt,
+                    intent="routing probe",
+                    max_routes=2,
+                    allowed_organelle_ids=active_ids,
+                )
+                # Collect first two unique routed organelles
+                picked: list[str] = []
+                for evt in result.routes:
+                    oid = getattr(evt, "organelle_id", None)
+                    if isinstance(oid, str) and oid not in picked:
+                        picked.append(oid)
+                    if len(picked) >= 2:
+                        break
+                if len(picked) == 2:
+                    a, b = sorted(picked)
+                    key = (a, b)
+                    self._co_routing_counts[key] = int(self._co_routing_counts.get(key, 0)) + 1
+            except Exception:
+                # Best‑effort only; continue
+                continue
 
     def _request_and_apply_policy(self, organelle_id: str) -> None:
+        # Count attempt
+        try:
+            self._policy_attempts_gen += 1
+        except Exception:
+            self._policy_attempts_gen = 1
         prompt = (
             "You are an agent that emits a tiny JSON policy.\n"
-            "Only output a single JSON object on one line with fields from this set: \n"
-            "{cell_pref:{family,depth}, budget_frac, explore_rate, reserve_ratio, read, post, partner_id, trial, gate_bias_delta}.\n"
-            "Do not include any explanations."
+            "Output ONLY a single minified JSON object with keys from this set:"
+            " {cell_pref:{family,depth}, budget_frac, explore_rate, reserve_ratio, read, post, partner_id, trial, gate_bias_delta}.\n"
+            "No code fences, no prose, no trailing commas."
         )
         result = self.host.step(
             prompt=prompt,
@@ -727,6 +1006,11 @@ class EcologyLoop:
         pol = self._parse_policy_json(str(answer), allowed)
         if not pol:
             return
+        # Count successful parse
+        try:
+            self._policy_parsed_gen += 1
+        except Exception:
+            self._policy_parsed_gen = 1
         # Energy charging for policy request (micro-cost)
         try:
             micro = float(getattr(self.config.policy, "energy_cost", 0.0))
@@ -1144,18 +1428,64 @@ class EcologyLoop:
                     if partner is not None:
                         tasks = self._sample_holdout_tasks()
                         if tasks:
-                            team_roi = self._evaluate_team_holdout_roi(genome.organelle_id, partner, tasks)
-                            base_a = self._evaluate_holdout_roi(genome.organelle_id, tasks)
-                            base_b = self._evaluate_holdout_roi(partner, tasks)
+                            # Collect per-task ROI series for team (best-of-two) and bases
+                            energy_cfg = self.config.energy
+                            team_series: list[float] = []
+                            a_series: list[float] = []
+                            b_series: list[float] = []
+                            for index, task in enumerate(tasks, start=1):
+                                grid_task = task.to_grid_task(self.environment, task_id=f"team_{index:04d}")
+                                best_roi = 0.0
+                                for oid in (genome.organelle_id, partner):
+                                    result_i = self.host.step(
+                                        prompt=grid_task.prompt,
+                                        intent="team holdout",
+                                        max_routes=1,
+                                        allowed_organelle_ids=[oid],
+                                    )
+                                    metrics_i = result_i.responses.get(oid)
+                                    if metrics_i is None:
+                                        continue
+                                    success_i, reward_i = grid_task.evaluate(metrics_i.answer)
+                                    revenue_i = grid_task.price * reward_i.total
+                                    cost_i = (
+                                        energy_cfg.alpha * metrics_i.flops_estimate
+                                        + energy_cfg.beta * metrics_i.memory_gb
+                                        + energy_cfg.gamma * metrics_i.latency_ms
+                                        + energy_cfg.lambda_p * metrics_i.trainable_params
+                                    )
+                                    roi_i = (float("inf") if revenue_i > 0 else 0.0) if cost_i <= 0.0 else (revenue_i / cost_i)
+                                    roi_i = 0.0 if not math.isfinite(roi_i) else float(max(0.0, min(roi_i, 10.0)))
+                                    if oid == genome.organelle_id:
+                                        a_series.append(roi_i)
+                                    else:
+                                        b_series.append(roi_i)
+                                    best_roi = max(best_roi, roi_i)
+                                team_series.append(best_roi)
+                            # Compute acceptance using CI on team mean vs baseline mean
+                            base_a = sum(a_series) / max(len(a_series), 1)
+                            base_b = sum(b_series) / max(len(b_series), 1)
                             baseline = max(base_a, base_b)
-                            delta = team_roi - baseline
-                            # simple power proxy: n tasks >= 8
+                            ci_low, ci_high, team_mu, team_se = self._compute_mean_ci(team_series)
+                            margin = float(self.config.assimilation_tuning.holdout_margin)
                             min_power_tasks = 8
-                            if len(tasks) >= min_power_tasks and delta > float(self.config.assimilation_tuning.holdout_margin):
+                            accept = len(team_series) >= min_power_tasks and (ci_low > baseline + margin)
+                            if accept:
                                 cid = f"col_{genome.organelle_id[:4]}_{partner[:4]}"
                                 self.colonies.setdefault(cid, {"members": [genome.organelle_id, partner], "pot": 0.0, "reserve_ratio": 0.25, "created_gen": self.generation_index})
                                 self.promotions_this_gen += 1
                                 attempt_detail["team_promoted_colony"] = cid
+                            # log team acceptance stats
+                            attempt_detail["team_holdout"] = {
+                                "team_roi": float(team_mu),
+                                "base_a": float(base_a),
+                                "base_b": float(base_b),
+                                "delta": float(team_mu - baseline),
+                                "ci_low": float(ci_low),
+                                "ci_high": float(ci_high),
+                                "tasks": int(len(team_series)),
+                                "min_tasks": int(min_power_tasks),
+                            }
                 except Exception:
                     pass
             self._record_assimilation_attempt(attempt_detail)
@@ -1945,6 +2275,135 @@ class EcologyLoop:
                 best_roi = max(best_roi, float(roi_value))
             rois.append(best_roi)
         return float(sum(rois) / max(len(rois), 1)) if rois else 0.0
+
+    @staticmethod
+    def _compute_mean_ci(series: list[float], alpha: float = 0.05) -> tuple[float, float, float, float]:
+        """Compute a normal-approximation CI for the mean of a series.
+
+        Returns (ci_low, ci_high, mean, se). Uses sample std (Bessel corrected) when n>1.
+        """
+        n = len(series)
+        if n == 0:
+            return (0.0, 0.0, 0.0, float("inf"))
+        mu = sum(series) / n
+        if n > 1:
+            var = sum((x - mu) ** 2 for x in series) / (n - 1)
+        else:
+            var = 0.0
+        se = math.sqrt(max(var, 1e-12)) / math.sqrt(n)
+        z = 1.96 if abs(alpha - 0.05) < 1e-6 else 1.0
+        return (mu - z * se, mu + z * se, mu, se)
+
+    @staticmethod
+    def _power_proxy(mu: float, baseline: float, margin: float, se: float, alpha: float = 0.05) -> float:
+        """Approximate one-sided power using a normal approximation.
+
+        Computes z_eff = (mu - (baseline + margin)) / se and returns Phi(z_eff - z_alpha).
+        This is a heuristic proxy in lieu of an exact test; bounded to [0,1].
+        """
+        import math as _m
+        if se <= 0.0:
+            return 1.0 if mu > (baseline + margin) else 0.0
+        z_alpha = 1.645 if abs(alpha - 0.05) < 1e-6 else 1.0
+        z_eff = (mu - (baseline + margin)) / max(se, 1e-6)
+        # standard normal CDF via erf
+        cdf = 0.5 * (1.0 + _m.erf((z_eff - z_alpha) / _m.sqrt(2.0)))
+        return max(0.0, min(1.0, float(cdf)))
+
+    @staticmethod
+    def _team_accept(ci_low: float, baseline: float, margin: float, n: int, min_tasks: int) -> bool:
+        if n < min_tasks:
+            return False
+        return ci_low > (baseline + margin)
+
+    def _maybe_team_probes(self) -> int:
+        """Probe a few high-ROI pairs per generation and promote colonies when CI gate passes.
+
+        Returns number of promotions.
+        """
+        per_gen = int(getattr(self.config.assimilation_tuning, "team_probe_per_gen", 0))
+        if per_gen <= 0 or len(self.population.population) < 2:
+            return 0
+        # Pick top-K candidates by recent ROI
+        scored = [
+            (oid, float(self.population.average_roi(oid, limit=5)))
+            for oid in self.population.population.keys()
+        ]
+        if not scored:
+            return 0
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top = [oid for oid, _ in scored[: min(6, len(scored))]]
+        # Build candidate pairs; prefer co-routing synergy if available
+        pairs: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        # 1) From co-routing counts
+        if hasattr(self, "_co_routing_counts") and self._co_routing_counts:
+            pairs_sorted = sorted(self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True)
+            for (a, b), _c in pairs_sorted:
+                if a in top and b in top and (a, b) not in seen:
+                    pairs.append((a, b))
+                    seen.add((a, b))
+        # 2) Fill with top-ROI unique pairs
+        for i in range(len(top)):
+            for j in range(i + 1, len(top)):
+                key = (top[i], top[j])
+                if key not in seen:
+                    pairs.append(key)
+                    seen.add(key)
+        promotions = 0
+        rng = self.environment.rng
+        rng.shuffle(pairs)
+        for (a_id, b_id) in pairs[:per_gen]:
+            tasks = self._sample_holdout_tasks()
+            if not tasks:
+                continue
+            # Compute best-of-two ROI series and baseline means
+            energy_cfg = self.config.energy
+            team_series: list[float] = []
+            a_series: list[float] = []
+            b_series: list[float] = []
+            for index, task in enumerate(tasks, start=1):
+                grid_task = task.to_grid_task(self.environment, task_id=f"team_probe_{index:04d}")
+                best_roi = 0.0
+                for oid, series in ((a_id, a_series), (b_id, b_series)):
+                    result_i = self.host.step(
+                        prompt=grid_task.prompt,
+                        intent="team probe",
+                        max_routes=1,
+                        allowed_organelle_ids=[oid],
+                    )
+                    metrics_i = result_i.responses.get(oid)
+                    if metrics_i is None:
+                        continue
+                    success_i, reward_i = grid_task.evaluate(metrics_i.answer)
+                    revenue_i = grid_task.price * reward_i.total
+                    cost_i = (
+                        energy_cfg.alpha * metrics_i.flops_estimate
+                        + energy_cfg.beta * metrics_i.memory_gb
+                        + energy_cfg.gamma * metrics_i.latency_ms
+                        + energy_cfg.lambda_p * metrics_i.trainable_params
+                    )
+                    roi_i = (float("inf") if revenue_i > 0 else 0.0) if cost_i <= 0.0 else (revenue_i / cost_i)
+                    roi_i = 0.0 if not math.isfinite(roi_i) else float(max(0.0, min(roi_i, 10.0)))
+                    series.append(roi_i)
+                    best_roi = max(best_roi, roi_i)
+                team_series.append(best_roi)
+            base_a = sum(a_series) / max(len(a_series), 1)
+            base_b = sum(b_series) / max(len(b_series), 1)
+            baseline = max(base_a, base_b)
+            ci_low, ci_high, team_mu, team_se = self._compute_mean_ci(team_series)
+            min_tasks = int(getattr(self.config.assimilation_tuning, "team_min_tasks", 8))
+            margin = float(getattr(self.config.assimilation_tuning, "holdout_margin", 0.02))
+            # Power proxy gate
+            min_power = float(getattr(self.config.assimilation_tuning, "team_min_power", 0.2))
+            power = self._power_proxy(team_mu, baseline, margin, team_se)
+            if power >= min_power and self._team_accept(ci_low, baseline, margin, len(team_series), min_tasks):
+                cid = f"col_{a_id[:4]}_{b_id[:4]}"
+                self.colonies.setdefault(cid, {"members": [a_id, b_id], "pot": 0.0, "reserve_ratio": 0.25, "created_gen": self.generation_index})
+                promotions += 1
+        if promotions > 0:
+            self.promotions_this_gen += promotions
+        return promotions
 
     def _holdout_accepts(self, candidate_id: str, mate_ids: list[str]) -> tuple[bool, dict[str, object] | None]:
         cfg = self.config.assimilation_tuning

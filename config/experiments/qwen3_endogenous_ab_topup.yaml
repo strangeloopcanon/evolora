@@ -81,13 +81,6 @@ assimilation_tuning:
   window_autotune: true
   min_window_min: 3
   min_window_max: 24
-  team_probe_per_gen: 3
-  team_min_tasks: 6
-  holdout_margin: 0.015
-  # Enable team router and lightweight co-routing probes
-  team_router_enabled: true
-  team_max_routes_per_gen: 6
-  team_routing_probe_per_gen: 2
 
 evolution:
   mutation_rate: 0.30
@@ -140,9 +133,6 @@ environment:
   success_reward_bonus: 1.0
   failure_cost_multiplier: 0.5
 
-metrics:
-  in_memory_log_limit: 0
-
 human_bandit:
   enabled: true
   preference_weight: 0.1
@@ -168,11 +158,3 @@ comms:
   credit_frac: 0.2
   ttl: 10
 
-metrics:
-  in_memory_log_limit: 0
-
-policy:
-  enabled: true
-  energy_cost: 0.05
-  charge_tokens: false
-  token_cap: 64

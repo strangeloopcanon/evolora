@@ -253,6 +253,19 @@ class AssimilationTuningConfig(BaseModel):
     # Window auto-tune
     window_autotune: bool = Field(False, description="Auto-adjust assimilation evidence window to reduce insufficient_scores")
     min_window_min: int = Field(6, ge=2)
+    # Team probe knobs (colony focus)
+    team_probe_per_gen: int = Field(2, ge=0, description="How many team probe pairs to evaluate per generation")
+    team_min_tasks: int = Field(8, ge=1, description="Minimum tasks required for team promotion CI gate")
+    team_routing_probe_per_gen: int = Field(2, ge=0, description="How many router co-routing probes to run per generation")
+    # Team router/composition knobs
+    team_router_enabled: bool = Field(False, description="If true, a fraction of tasks may be routed to 2-member teams")
+    team_vote_enabled: bool = Field(True, description="If true, select best-of-two answer (majority vote for 2)")
+    team_handoff_enabled: bool = Field(False, description="If true, allow solver→checker single revise step (not yet implemented)")
+    team_max_routes_per_gen: int = Field(8, ge=0, description="Max team episodes per generation across all pairs")
+    team_min_power: float = Field(0.2, ge=0.0, le=1.0, description="Minimum power proxy required for team promotions")
+    colony_expand_delta: float = Field(0.03, ge=0.0, description="ΔROI threshold to expand 2→3")
+    colony_shrink_delta: float = Field(-0.01, le=0.0, description="ΔROI threshold to shrink")
+    colony_stipend: float = Field(0.2, ge=0.0, description="Stipend per pass for colony members from pot")
     min_window_max: int = Field(24, ge=2)
 
 
