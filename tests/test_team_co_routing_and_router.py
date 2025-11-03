@@ -29,6 +29,8 @@ def test_run_team_episode_best_of_two_and_records(monkeypatch) -> None:
         population=SimpleNamespace(population={"A": object(), "B": object()}),
         assimilation=SimpleNamespace(),
     )
+    # Enable handoff
+    loop.config.assimilation_tuning.team_handoff_enabled = True
 
     class DummyMetrics:
         def __init__(self):
