@@ -169,3 +169,8 @@ comms:
   read_cost: 0.1
   credit_frac: 0.2
   ttl: 10
+  c2c_enabled: true
+  c2c_post_cost: 0.05
+  c2c_read_cost: 0.03
+  c2c_ttl: 5
+  c2c_mix: 0.5

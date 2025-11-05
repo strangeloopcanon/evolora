@@ -261,11 +261,15 @@ class AssimilationTuningConfig(BaseModel):
     team_router_enabled: bool = Field(False, description="If true, a fraction of tasks may be routed to 2-member teams")
     team_vote_enabled: bool = Field(True, description="If true, select best-of-two answer (majority vote for 2)")
     team_handoff_enabled: bool = Field(False, description="If true, allow solver→checker single revise step (not yet implemented)")
+    team_handoff_cap_per_gen: int = Field(4, ge=0, description="Max handoff revisions allowed per generation")
+    team_handoff_cost: float = Field(0.05, ge=0.0, description="Energy cost charged to the checker for a handoff revision")
     team_max_routes_per_gen: int = Field(8, ge=0, description="Max team episodes per generation across all pairs")
     team_min_power: float = Field(0.2, ge=0.0, le=1.0, description="Minimum power proxy required for team promotions")
     team_holdout_margin: float | None = Field(None, description="Team-specific holdout margin; falls back to holdout_margin if None")
     promotion_target_rate: float = Field(0.2, ge=0.0, le=1.0, description="Target promotions per generation (normalized)")
     promotion_adjust_step: float = Field(0.002, ge=0.0, le=0.1, description="Step size to adjust team thresholds toward target")
+    # Optional smoothing for controller
+    promotion_ema_alpha: float = Field(0.3, ge=0.0, le=1.0, description="EMA smoothing for observed promotions in controller")
     team_margin_min: float = Field(0.0, ge=0.0)
     team_margin_max: float = Field(0.1, ge=0.0)
     team_power_min: float = Field(0.05, ge=0.0, le=1.0)
@@ -319,6 +323,12 @@ class CommsConfig(BaseModel):
     read_cost: float = Field(0.1, ge=0.0)
     credit_frac: float = Field(0.2, ge=0.0, le=1.0)
     ttl: int = Field(10, ge=1)
+    # Cache-to-Cache (C2C) latent comms
+    c2c_enabled: bool = Field(False, description="Enable cache-to-cache latent communications")
+    c2c_post_cost: float = Field(0.1, ge=0.0)
+    c2c_read_cost: float = Field(0.05, ge=0.0)
+    c2c_ttl: int = Field(5, ge=1)
+    c2c_mix: float = Field(0.5, ge=0.0, le=1.0, description="Blend factor for latent_prefix vs current prompt latent")
 
 class PolicyConfig(BaseModel):
     enabled: bool = Field(False, description="If true, each organism may propose a JSON policy once per generation")

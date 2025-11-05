@@ -98,6 +98,8 @@ class HostKernel:
         constraints: Sequence[str] | None = None,
         max_routes: int = 3,
         allowed_organelle_ids: Sequence[str] | None = None,
+        latent_prefix: list[float] | None = None,
+        latent_mix: float | None = None,
     ) -> HostStepResult:
         observation = Observation(state={"text": prompt})
         plan = Plan(steps=[], confidence=0.1)
@@ -108,6 +110,15 @@ class HostKernel:
         )
         t0 = time.time()
         latent = self.backbone.encode_text([prompt], device=self.device)
+        # Optional C2C latent prefix blending
+        if latent_prefix is not None:
+            try:
+                mix = float(latent_mix) if latent_mix is not None else 0.5
+                mix = max(0.0, min(1.0, mix))
+                lp = torch.tensor(latent_prefix, device=self.device, dtype=latent.dtype).view_as(latent)
+                latent = (1.0 - mix) * latent + mix * lp
+            except Exception:
+                pass
         envelope.observation.state["latent"] = latent.squeeze(0).tolist()
         organelle_pool = (
             {oid: self.organelles[oid] for oid in allowed_organelle_ids if oid in self.organelles}

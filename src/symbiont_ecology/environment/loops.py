@@ -19,7 +19,7 @@ from symbiont_ecology.evaluation import EvaluationManager
 from symbiont_ecology.evaluation.manager import EvaluationTask
 from symbiont_ecology.host.kernel import HostKernel, RouteMetrics
 from symbiont_ecology.metrics.persistence import TelemetrySink
-from symbiont_ecology.metrics.telemetry import EpisodeLog, RewardBreakdown
+from symbiont_ecology.metrics.telemetry import AssimilationEvent, EpisodeLog, RewardBreakdown
 
 
 @dataclass
@@ -125,6 +125,8 @@ class EcologyLoop:
         self._assim_attempt_total = 0
         self._policy_attempts_gen = 0
         self._policy_parsed_gen = 0
+        # per-generation caps
+        self._team_handoff_used = 0
         if self.morphogenesis is None:
             self.morphogenesis = MorphogenesisController(config=self.config, host=self.host)
         if self.config.evaluation.enabled and self.evaluation_manager is None:
@@ -186,9 +188,14 @@ class EcologyLoop:
             read_cap = int(getattr(self.config.assimilation_tuning, "colony_read_cap", 3))
             for cid, meta in self.colonies.items():
                 pot = float(meta.get("pot", 0.0))
-                meta["bandwidth_left"] = max(0.0, min(pot, bw_frac * pot))
+                bandwidth = max(0.0, min(pot, bw_frac * pot))
+                meta["bandwidth_left"] = bandwidth
                 meta["posts_left"] = post_cap
                 meta["reads_left"] = read_cap
+                # C2C latent comms share the same budget unless overridden later
+                meta["c2c_bandwidth_left"] = bandwidth
+                meta["c2c_posts_left"] = post_cap
+                meta["c2c_reads_left"] = read_cap
 
         # Optional: organism policy step (JSON intents)
         if bool(getattr(self.config.policy, "enabled", False)):
@@ -209,6 +216,13 @@ class EcologyLoop:
         post_cost = float(getattr(self.config.comms, "post_cost", 0.2))
         read_cost = float(getattr(self.config.comms, "read_cost", 0.1))
         credit_frac = float(getattr(self.config.comms, "credit_frac", 0.2))
+        # C2C latent comms
+        c2c_enabled = bool(getattr(self.config.comms, "c2c_enabled", False))
+        c2c_post_cost = float(getattr(self.config.comms, "c2c_post_cost", 0.1))
+        c2c_read_cost = float(getattr(self.config.comms, "c2c_read_cost", 0.05))
+        c2c_ttl = int(getattr(self.config.comms, "c2c_ttl", 5))
+        c2c_mix = float(getattr(self.config.comms, "c2c_mix", 0.5))
+        self._pending_latents: dict[str, list[list[float]]] = {}
         if comms_enabled:
             for organelle_id in active:
                 # attempt to read messages and pay read cost per read; scaled by trait
@@ -261,6 +275,9 @@ class EcologyLoop:
                             bucket = self._pending_hints.setdefault(organelle_id, [])
                             if len(bucket) < 3:
                                 bucket.append(hint_text)
+                # C2C: read latent capsules for this organelle
+                if c2c_enabled:  # pragma: no cover - integration exercised in long runs
+                    self._consume_c2c_latents(organelle_id, member_colony, c2c_read_cost)
 
         # endogenous batch size option
         bs = self._compute_batch_size(batch_size)
@@ -307,11 +324,17 @@ class EcologyLoop:
                     prompt_text = f"Hints: {joined}\n\n{task.prompt}"
                     # clear after use
                     self._pending_hints[organelle_id] = []
+                # optional C2C latent prefix consumption
+                latent_prefix = None
+                if c2c_enabled and self._pending_latents.get(organelle_id):
+                    latent_prefix = self._pending_latents[organelle_id].pop(0)
                 result = self.host.step(
                     prompt=prompt_text,
                     intent="solve task",
                     max_routes=1,
                     allowed_organelle_ids=[organelle_id],
+                    latent_prefix=latent_prefix,
+                    latent_mix=c2c_mix,
                 )
                 metrics = result.responses.get(organelle_id)
                 if metrics is None:
@@ -350,6 +373,16 @@ class EcologyLoop:
                     task, organelle_id, reward, metrics, settlement, success, utilisation_snapshot
                 )
                 self.host.apply_reward(result.envelope, {organelle_id: reward})
+                # C2C: post latent capsule from this step
+                if c2c_enabled:  # pragma: no cover - integration exercised in long runs
+                    latent = result.envelope.observation.state.get("latent")
+                    member_colony_post = None
+                    if self.colonies:
+                        for cid, meta in self.colonies.items():
+                            if organelle_id in meta.get("members", []):
+                                member_colony_post = (cid, meta)
+                                break
+                    self._post_c2c_latent(organelle_id, latent, c2c_post_cost, c2c_ttl, member_colony_post)
 
         self._enforce_diversity()
         # Optional: communication post step (one hint per generation by top ROI organelle)
@@ -429,9 +462,15 @@ class EcologyLoop:
             target = float(getattr(self.config.assimilation_tuning, "promotion_target_rate", 0.0))
             step = float(getattr(self.config.assimilation_tuning, "promotion_adjust_step", 0.0))
             if step > 0.0 and target > 0.0:
-                observed = float(team_promotions)
-                # If 0..N per gen, use raw count; normalize against 1.0 (aim ~target per gen)
-                err = target - min(observed, 1.0)
+                observed_raw = float(team_promotions)
+                # Normalize against 1.0 (aim ~target per gen)
+                observed_norm = min(observed_raw, 1.0)
+                # EMA smoothing
+                alpha = float(getattr(self.config.assimilation_tuning, "promotion_ema_alpha", 0.3))
+                prev = float(getattr(self, "_promotions_ema", observed_norm))
+                smoothed = alpha * observed_norm + (1.0 - alpha) * prev
+                self._promotions_ema = smoothed
+                err = target - smoothed
                 # Adjust team_holdout_margin and team_min_power gently
                 margin = float(getattr(self.config.assimilation_tuning, "team_holdout_margin", getattr(self.config.assimilation_tuning, "holdout_margin", 0.02)))
                 power = float(getattr(self.config.assimilation_tuning, "team_min_power", 0.2))
@@ -445,7 +484,7 @@ class EcologyLoop:
                 # Write back
                 setattr(self.config.assimilation_tuning, "team_holdout_margin", margin)
                 setattr(self.config.assimilation_tuning, "team_min_power", power)
-                summary["promotion_controller"] = {"team_holdout_margin": round(margin, 4), "team_min_power": round(power, 4), "target": target, "observed": observed}
+                summary["promotion_controller"] = {"team_holdout_margin": round(margin, 4), "team_min_power": round(power, 4), "target": target, "observed": observed_raw, "observed_smooth": round(smoothed, 3)}
         except Exception:
             pass
         # Top co-routing pairs this gen (best-effort)
@@ -805,17 +844,43 @@ class EcologyLoop:
             # record episode per member
             adapter_utilisation = {k: float(v) for k, v in metrics.active_adapters.items()} if isinstance(metrics.active_adapters, dict) else {}
             self._record_episode(task, oid, reward, metrics, settlement, success, adapter_utilisation)
+            # C2C: post latent capsule from this team step
+            try:
+                if bool(getattr(self.config.comms, "c2c_enabled", False)):  # pragma: no cover - integration exercised in long runs
+                    ttl = int(getattr(self.config.comms, "c2c_ttl", 5))
+                    cost = float(getattr(self.config.comms, "c2c_post_cost", 0.1))
+                    latent = result.envelope.observation.state.get("latent")
+                    member_colony_post = None
+                    if self.colonies:
+                        for cid, meta in self.colonies.items():
+                            if oid in meta.get("members", []):
+                                member_colony_post = (cid, meta)
+                                break
+                    self._post_c2c_latent(oid, latent, cost, ttl, member_colony_post)
+            except Exception:
+                pass
         if not results:
             return False
         # Optional: single handoff (solver→checker)
         try:
             if bool(getattr(self.config.assimilation_tuning, "team_handoff_enabled", False)) and len(results) == 2:
+                # Cap and cost
+                cap = int(getattr(self.config.assimilation_tuning, "team_handoff_cap_per_gen", 4))
+                cost = float(getattr(self.config.assimilation_tuning, "team_handoff_cost", 0.05))
+                if getattr(self, "_team_handoff_used", 0) >= cap:
+                    raise RuntimeError("handoff_cap_reached")
                 # pick current winner and let the other revise
                 best_pair = max(results, key=lambda tup: float(tup[4].get("roi", 0.0)))
                 winner_id = best_pair[0]
                 checker_id = b_id if winner_id == a_id else a_id
                 winner_answer = str(best_pair[1].answer)
                 handoff_prompt = f"Review and improve this answer:\n{winner_answer}\n\nTask:\n{task.prompt}"
+                # charge small energy to checker if possible
+                try:
+                    if self.host.ledger.energy_balance(checker_id) >= cost:
+                        self.host.ledger.consume_energy(checker_id, cost)
+                except Exception:
+                    pass
                 result_rev = self.host.step(prompt=handoff_prompt, intent="team handoff", max_routes=1, allowed_organelle_ids=[checker_id])
                 m_rev = result_rev.responses.get(checker_id)
                 if m_rev is not None:
@@ -823,6 +888,7 @@ class EcologyLoop:
                     st_rev = self._settle_episode(checker_id, task, reward_rev, m_rev)
                     # Do not record a separate episode for the revision to keep accounting simple
                     results.append((checker_id, m_rev, success_rev, reward_rev, st_rev))
+                    self._team_handoff_used = int(getattr(self, "_team_handoff_used", 0)) + 1
         except Exception:
             pass
         # Choose winner by highest ROI
@@ -1049,6 +1115,78 @@ class EcologyLoop:
         # Boost when recent ROI is close to or above 90% of aggregate
         threshold = max(0.0, 0.9 * aggregate)
         return recent >= threshold
+
+    @staticmethod
+    def _colony_c2c_debit(meta: dict[str, object], amount: float, counter_key: str) -> bool:
+        """Attempt to pay a C2C cost from colony pot & bandwidth.
+
+        Returns True when the debit succeeds and updates pot/bandwidth/counter.
+        """
+        try:
+            bandwidth = float(meta.get("c2c_bandwidth_left", meta.get("bandwidth_left", 0.0)))
+            counter = int(meta.get(counter_key, 0))
+            pot = float(meta.get("pot", 0.0))
+        except Exception:
+            return False
+        if bandwidth < amount or counter <= 0 or pot < amount:
+            return False
+        meta["pot"] = pot - amount
+        meta["c2c_bandwidth_left"] = max(0.0, bandwidth - amount)
+        meta[counter_key] = counter - 1
+        return True
+
+    def _consume_c2c_latents(
+        self,
+        organelle_id: str,
+        member_colony: tuple[str, dict[str, object]] | None,
+        read_cost: float,
+    ) -> None:
+        caches = self.environment.read_caches(max_items=1)
+        for cap in caches:
+            vec = cap.get("latent") or []
+            if not isinstance(vec, list) or not vec:
+                continue
+            paid = False
+            if member_colony is not None:
+                _cid, _meta = member_colony
+                if self._colony_c2c_debit(_meta, read_cost, "c2c_reads_left"):
+                    paid = True
+            if not paid:
+                try:
+                    if self.host.ledger.energy_balance(organelle_id) < read_cost:
+                        continue
+                    self.host.ledger.consume_energy(organelle_id, read_cost)
+                    paid = True
+                except Exception:
+                    continue
+            self._pending_latents.setdefault(organelle_id, []).append(vec)
+
+    def _post_c2c_latent(
+        self,
+        organelle_id: str,
+        latent: object,
+        cost: float,
+        ttl: int,
+        member_colony: tuple[str, dict[str, object]] | None,
+    ) -> None:
+        if not isinstance(latent, list) or not latent:
+            return
+        paid = False
+        if member_colony is not None:
+            _cid, _meta = member_colony
+            if self._colony_c2c_debit(_meta, cost, "c2c_posts_left"):
+                paid = True
+        if not paid:
+            try:
+                if self.host.ledger.energy_balance(organelle_id) < cost:
+                    return
+                self.host.ledger.consume_energy(organelle_id, cost)
+            except Exception:
+                return
+        try:
+            self.environment.post_cache(organelle_id, latent, ttl=ttl)
+        except Exception:
+            pass
 
     def _request_and_apply_policy(self, organelle_id: str) -> None:
         # Count attempt

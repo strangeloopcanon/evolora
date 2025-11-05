@@ -321,6 +321,8 @@ class GridEnvironment:
         self._bootstrap_canaries()
         # simple message board (off by default unless enabled in config via loop)
         self.message_board: list[dict[str, object]] = []
+        # simple latent cache bus for C2C comms
+        self.cache_bus: list[dict[str, object]] = []
 
     def post_message(self, organelle_id: str, text: str, *, cost: float = 0.2, ttl: int = 10) -> bool:
         try:
@@ -339,6 +341,31 @@ class GridEnvironment:
                 continue
             entry["ttl"] = ttl - 1
             cleaned.append({"organelle_id": str(entry.get("organelle_id")), "text": str(entry.get("text"))})
+            if len(cleaned) >= max_items:
+                break
+        return cleaned
+
+    # C2C latent cache bus -------------------------------------------------
+    def post_cache(self, organelle_id: str, latent: list[float], *, ttl: int = 5) -> bool:
+        try:
+            entry = {"organelle_id": organelle_id, "latent": list(latent), "ttl": int(ttl)}
+            self.cache_bus.append(entry)
+            return True
+        except Exception:
+            return False
+
+    def read_caches(self, max_items: int = 2) -> list[dict[str, object]]:
+        cleaned: list[dict[str, object]] = []
+        for entry in list(self.cache_bus):
+            ttl = int(entry.get("ttl", 0))
+            if ttl <= 0:
+                self.cache_bus.remove(entry)
+                continue
+            entry["ttl"] = ttl - 1
+            cleaned.append({
+                "organelle_id": str(entry.get("organelle_id")),
+                "latent": list(entry.get("latent", [])),
+            })
             if len(cleaned) >= max_items:
                 break
         return cleaned
