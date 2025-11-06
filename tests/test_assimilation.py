@@ -20,7 +20,7 @@ def _make_basic_loop(tmp_path):
     router = BanditRouter()
     host = HostKernel(config=config, router=router, ledger=ledger)
     host.freeze_host()
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     organelle_id = host.spawn_organelle(rank=2)
     population.register(Genome(organelle_id=organelle_id, drive_weights={}, gate_bias=0.0, rank=2))
     environment = GridEnvironment(
@@ -63,7 +63,7 @@ def test_assimilation_uses_global_probe_and_soup(tmp_path) -> None:
     host = HostKernel(config=config, router=router, ledger=ledger)
     host.freeze_host()
 
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     candidate_id = host.spawn_organelle(rank=2)
     mate_id = host.spawn_organelle(rank=2)
     population.register(Genome(organelle_id=candidate_id, drive_weights={}, gate_bias=0.0, rank=2))
@@ -128,7 +128,7 @@ def test_assimilation_records_multi_soup_and_hf(tmp_path) -> None:
     host = HostKernel(config=config, router=router, ledger=ledger)
     host.freeze_host()
 
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     candidate_id = host.spawn_organelle(rank=2)
     mate_a = host.spawn_organelle(rank=2)
     mate_b = host.spawn_organelle(rank=2)
@@ -200,7 +200,7 @@ def test_assimilation_records_multi_soup_and_hf(tmp_path) -> None:
 
 def test_population_tracks_assimilation_history() -> None:
     config = EcologyConfig()
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     genome = Genome(organelle_id="org-test", drive_weights={}, gate_bias=0.0, rank=2)
     population.register(genome)
     record = {"generation": 1, "passed": True, "uplift": 0.2}
@@ -208,6 +208,52 @@ def test_population_tracks_assimilation_history() -> None:
     history = population.assimilation_records(genome.organelle_id, ("math", "short"))
     assert history
     assert history[-1]["generation"] == 1
+
+
+def test_assimilation_history_summary_limit(tmp_path) -> None:
+    config = EcologyConfig()
+    config.grid = GridConfig(families=["math"], depths=["short"])
+    config.metrics.root = tmp_path
+    config.assimilation_tuning.assimilation_history_limit = 2
+    config.assimilation_tuning.assimilation_history_summary = 2
+    host = HostKernel(config=config, router=BanditRouter(), ledger=ATPLedger())
+    host.freeze_host()
+    population = PopulationManager(config.evolution, config.foraging)
+    organelle_id = host.spawn_organelle(rank=2)
+    population.register(Genome(organelle_id=organelle_id, drive_weights={}, gate_bias=0.0, rank=2))
+    environment = GridEnvironment(
+        grid_cfg=config.grid,
+        controller_cfg=config.controller,
+        pricing_cfg=config.pricing,
+        canary_cfg=config.canary,
+        seed=11,
+    )
+    assimilation = AssimilationTester(
+        uplift_threshold=config.evolution.assimilation_threshold,
+        p_value_threshold=config.evolution.assimilation_p_value,
+        safety_budget=0,
+    )
+    loop = EcologyLoop(
+        config=config,
+        host=host,
+        environment=environment,
+        population=population,
+        assimilation=assimilation,
+        human_bandit=None,
+        sink=None,
+    )
+    for gen in range(1, 4):
+        loop.population.record_assimilation(
+            organelle_id,
+            ("math", "short"),
+            {"generation": gen, "uplift": gen * 0.1},
+        )
+    assert loop.population.assimilation_history_limit == 2
+    summary = loop.run_generation(batch_size=0)
+    key = f"{organelle_id}:math:short"
+    history = summary["assimilation_history"][key]
+    assert len(history) == 2
+    assert [entry["generation"] for entry in history] == [2, 3]
 
 
 def test_tau_relief_accumulates_and_decays(tmp_path) -> None:
