@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import math
+import random
+import textwrap
 from dataclasses import dataclass, field
 from statistics import mean, pstdev, quantiles
 from typing import Dict, Optional, Tuple
-import math
-import random
+
+import torch
 
 from symbiont_ecology.config import EcologyConfig
 from symbiont_ecology.environment.human import HumanBandit, HumanFeedbackResult
@@ -103,6 +107,8 @@ class EcologyLoop:
     trial_creations_this_gen: int = 0
     _qd_archive: dict[tuple[str, str, int], dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _synergy_window: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _synergy_sustain: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
+    _team_probe_candidates_gen: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
     colonies: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _lp_mix_history: list[float] = field(default_factory=list, init=False, repr=False)
     _last_lp_mix: float = field(default=0.0, init=False, repr=False)
@@ -117,6 +123,53 @@ class EcologyLoop:
     _policy_attempts_gen: int = field(default=0, init=False, repr=False)
     _policy_parsed_gen: int = field(default=0, init=False, repr=False)
     _co_routing_counts: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
+    _reserve_state: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
+    _hazard_state: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
+    _hazard_cooldown: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _survival_events: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _comms_credit_queue: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _comms_events_history: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _knowledge_store: dict[str, list[dict[str, object]]] = field(default_factory=dict, init=False, repr=False)
+    _knowledge_stats_gen: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _budget_snapshot_gen: dict[str, object] | None = field(default=None, init=False, repr=False)
+    _power_econ_stats: dict[str, float | int] = field(default_factory=dict, init=False, repr=False)
+    _winter_active: bool = field(default=False, init=False, repr=False)
+    _winter_timer: int = field(default=0, init=False, repr=False)
+    _winter_counter: int = field(default=0, init=False, repr=False)
+    _winter_price_factor: float = field(default=1.0, init=False, repr=False)
+    _winter_ticket_multiplier: float = field(default=1.0, init=False, repr=False)
+    _winter_pre_roi: float = field(default=0.0, init=False, repr=False)
+    _winter_pre_assim_attempts: int = field(default=0, init=False, repr=False)
+    _last_assim_attempts: int = field(default=0, init=False, repr=False)
+    _colony_events_archive: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _colony_selection_pool: dict[str, object] = field(
+        default_factory=lambda: {"members": [], "pot": 0.0, "events": []},
+        init=False,
+        repr=False,
+    )
+    _colony_selection_stats: dict[str, object] = field(default_factory=dict, init=False, repr=False)
+    _mutation_stats_gen: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _merge_audits_gen: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if hasattr(self.environment, "message_board"):
+            setattr(
+                self.environment,
+                "comms_history_cap",
+                max(1, int(getattr(self.config.comms, "history_cap", 64))),
+            )
+            setattr(
+                self.environment,
+                "default_comm_priority",
+                float(getattr(self.config.comms, "default_priority", 0.0)),
+            )
+        history_limit = getattr(self.config.assimilation_tuning, "assimilation_history_limit", None)
+        if isinstance(history_limit, int) and history_limit > 0:
+            self.population.assimilation_history_limit = int(history_limit)
+        else:
+            self.population.assimilation_history_limit = None
+        self._mutation_stats_gen = {"rank_noise": 0, "dropout": 0, "duplication": 0}
+        self._merge_audits_gen = []
 
     def run_generation(self, batch_size: int) -> None:
         self.generation_index += 1
@@ -125,8 +178,43 @@ class EcologyLoop:
         self._assim_attempt_total = 0
         self._policy_attempts_gen = 0
         self._policy_parsed_gen = 0
+        self._comms_stats_gen = {"posts": 0, "reads": 0, "credits": 0}
+        self._comms_events_gen: list[dict[str, object]] = []
+        self._budget_snapshot_gen = None
+        self._power_econ_stats = {
+            "episodes": 0,
+            "power_sum": 0.0,
+            "price_multiplier_sum": 0.0,
+            "tokens_minted": 0,
+            "tokens_used": 0,
+            "info_topups": 0,
+        }
+        self._mutation_stats_gen = {"rank_noise": 0, "dropout": 0, "duplication": 0}
+        self._merge_audits_gen = []
+        self._knowledge_stats_gen = {
+            "writes": 0,
+            "write_denied": 0,
+            "reads": 0,
+            "read_denied": 0,
+            "hits": 0,
+            "expired": 0,
+        }
+        self._prune_knowledge_cache()
         # per-generation caps
         self._team_handoff_used = 0
+        self._prompt_scaffold_counts = {}
+        self._team_probe_candidates_gen = []
+        self._winter_events_gen = []
+        pool = self._colony_selection_pool
+        pool_members = list(pool.get("members", []))
+        pool_pot = float(pool.get("pot", 0.0))
+        self._colony_selection_stats = {
+            "dissolved": 0,
+            "replicated": 0,
+            "pool_members": len(pool_members),
+            "pool_pot": round(pool_pot, 4),
+            "events": [],
+        }
         if self.morphogenesis is None:
             self.morphogenesis = MorphogenesisController(config=self.config, host=self.host)
         if self.config.evaluation.enabled and self.evaluation_manager is None:
@@ -142,7 +230,9 @@ class EcologyLoop:
         if not organelle_ids:
             return
 
-        ticket = self.config.energy.m
+        self._update_winter_cycle()
+        ticket_base = self.config.energy.m
+        ticket = ticket_base * self._winter_ticket_multiplier
         active: list[str] = []
         bankrupt: list[str] = []
         grace = max(1, self.config.energy.bankruptcy_grace)
@@ -176,26 +266,101 @@ class EcologyLoop:
                 self.host.retire_organelle(organelle_id)
                 self.population.remove(organelle_id)
 
+        if self._winter_active and culled_bankrupt:
+            preview = culled_bankrupt[:5]
+            self._winter_events_gen.append(
+                {
+                    "gen": self.generation_index,
+                    "type": "winter_cull",
+                    "count": len(culled_bankrupt),
+                    "preview": list(preview),
+                }
+            )
+
         for organelle_id in bankrupt:
             self.population.record_score(organelle_id, 0.0)
             self.population.record_energy(organelle_id, 0.0)
             self.population.record_roi(organelle_id, 0.0)
 
+        if self.colonies:
+            try:
+                self._apply_colony_bankruptcy_guard(culled_bankrupt)
+            except Exception:
+                pass
+
         # Prepare colony comms budgets (bandwidth + per-gen caps)
         if self.colonies:
-            bw_frac = float(getattr(self.config.assimilation_tuning, "colony_bandwidth_frac", 0.02))
-            post_cap = int(getattr(self.config.assimilation_tuning, "colony_post_cap", 2))
-            read_cap = int(getattr(self.config.assimilation_tuning, "colony_read_cap", 3))
+            tune = self.config.assimilation_tuning
+            bw_base = float(getattr(tune, "colony_bandwidth_base", 2.0))
+            bw_frac = float(getattr(tune, "colony_bandwidth_frac", 0.02))
+            hazard_scale = float(getattr(tune, "colony_hazard_bandwidth_scale", 0.3))
+            post_cap_base = int(getattr(tune, "colony_post_cap", 2))
+            read_cap_base = int(getattr(tune, "colony_read_cap", 3))
+            post_cap_hazard = int(getattr(tune, "colony_post_cap_hazard", max(0, post_cap_base // 2)))
+            if post_cap_hazard <= 0:
+                post_cap_hazard = max(0, min(post_cap_base, 1))
+            read_cap_hazard = int(getattr(tune, "colony_read_cap_hazard", max(0, read_cap_base // 2)))
+            if read_cap_hazard <= 0:
+                read_cap_hazard = max(0, min(read_cap_base, 1))
             for cid, meta in self.colonies.items():
-                pot = float(meta.get("pot", 0.0))
-                bandwidth = max(0.0, min(pot, bw_frac * pot))
+                members = [str(x) for x in meta.get("members", [])]
+                pot = max(0.0, float(meta.get("pot", 0.0)))
+                hazard_members = sum(
+                    1 for m in members if bool(self._hazard_state.get(m, {}).get("active"))
+                )
+                hazard_active = hazard_members > 0
+                bandwidth = min(bw_base, pot * bw_frac)
+                if hazard_active:
+                    bandwidth *= hazard_scale
+                bandwidth = max(0.0, bandwidth)
+                posts_cap = post_cap_hazard if hazard_active else post_cap_base
+                reads_cap = read_cap_hazard if hazard_active else read_cap_base
+                reserve_active = bool(meta.get("reserve_active"))
+                if reserve_active:
+                    reserve_scale = float(getattr(tune, "colony_reserve_bandwidth_scale", 0.3))
+                    bandwidth *= max(0.0, min(1.0, reserve_scale))
+                    posts_cap = min(posts_cap, int(getattr(tune, "colony_reserve_post_cap", posts_cap)))
+                    reads_cap = min(reads_cap, int(getattr(tune, "colony_reserve_read_cap", reads_cap)))
+                winter_mode = bool(meta.get("winter_mode"))
+                if winter_mode:
+                    winter_scale = float(getattr(tune, "colony_winter_bandwidth_scale", 0.1))
+                    bandwidth *= max(0.0, min(1.0, winter_scale))
+                    posts_cap = min(posts_cap, int(getattr(tune, "colony_winter_post_cap", posts_cap)))
+                    reads_cap = min(reads_cap, int(getattr(tune, "colony_winter_read_cap", reads_cap)))
+                tier = int(meta.get("tier", 0))
+                if tier > 0:
+                    boost = float(getattr(tune, "colony_tier_bandwidth_boost", 0.0))
+                    if boost > 0.0:
+                        scale = 1.0 + tier * boost
+                        bandwidth *= scale
+                        posts_cap = max(1, int(round(posts_cap * scale)))
+                        reads_cap = max(1, int(round(reads_cap * scale)))
                 meta["bandwidth_left"] = bandwidth
-                meta["posts_left"] = post_cap
-                meta["reads_left"] = read_cap
+                meta["posts_left"] = posts_cap
+                meta["reads_left"] = reads_cap
+                meta["bandwidth_budget"] = bandwidth
+                meta["posts_budget"] = posts_cap
+                meta["reads_budget"] = reads_cap
+                meta["hazard_members"] = hazard_members
                 # C2C latent comms share the same budget unless overridden later
                 meta["c2c_bandwidth_left"] = bandwidth
-                meta["c2c_posts_left"] = post_cap
-                meta["c2c_reads_left"] = read_cap
+                meta["c2c_posts_left"] = posts_cap
+                meta["c2c_reads_left"] = reads_cap
+                self._log_colony_event(
+                    meta,
+                    self.generation_index,
+                    "bandwidth",
+                    budget=float(bandwidth),
+                    posts=int(posts_cap),
+                    reads=int(reads_cap),
+                    hazard=int(hazard_members),
+                    pot=float(pot),
+                )
+
+        try:
+            self._update_survival_states(active)
+        except Exception:
+            pass
 
         # Optional: organism policy step (JSON intents)
         if bool(getattr(self.config.policy, "enabled", False)):
@@ -224,58 +389,92 @@ class EcologyLoop:
         c2c_mix = float(getattr(self.config.comms, "c2c_mix", 0.5))
         self._pending_latents: dict[str, list[list[float]]] = {}
         if comms_enabled:
+            read_gen_cap = int(getattr(self.config.comms, "read_gen_cap", len(active) * 2))
+            reads_used = 0
             for organelle_id in active:
-                # attempt to read messages and pay read cost per read; scaled by trait
-                read_attempts = 2
+                if reads_used >= read_gen_cap:
+                    break
                 genome = self.population.population.get(organelle_id)
+                trait = 0.0
                 if genome is not None and isinstance(getattr(genome, "read_rate", 0.0), float):
-                    read_attempts = max(0, min(2, int(round(2 * max(0.0, min(1.0, genome.read_rate))))))
-                # colony gating for reads
-                max_reads = read_attempts
+                    trait = max(0.0, min(1.0, float(genome.read_rate)))
+                max_attempts = max(0, int(round(2 * trait)))
+                if max_attempts <= 0:
+                    continue
+                remaining_budget = max(0, read_gen_cap - reads_used)
+                if remaining_budget <= 0:
+                    break
                 member_colony = None
                 if self.colonies:
                     for cid, meta in self.colonies.items():
                         if organelle_id in meta.get("members", []):
                             member_colony = (cid, meta)
                             break
+                colony_reads_left = remaining_budget
                 if member_colony is not None:
                     _cid, _meta = member_colony
-                    max_reads = min(max_reads, int(_meta.get("reads_left", read_attempts)))
-                messages = self.environment.read_messages(max_items=max(0, max_reads))
+                    colony_reads_left = min(colony_reads_left, int(_meta.get("reads_left", remaining_budget)))
+                max_reads = min(colony_reads_left, max_attempts, remaining_budget)
+                if max_reads <= 0:
+                    continue
+                preferred_topics: list[str] | None = None
+                cell_topic = None
+                if hasattr(self.environment, "best_cell_score"):
+                    try:
+                        cell_info = self.environment.best_cell_score(organelle_id)
+                        if isinstance(cell_info, tuple) and cell_info[0]:
+                            cell_topic = f"{cell_info[0][0]}:{cell_info[0][1]}"
+                    except Exception:
+                        cell_topic = None
+                if cell_topic:
+                    preferred_topics = [cell_topic]
+                messages = self.environment.read_messages(
+                    max_items=max_reads,
+                    topics=preferred_topics,
+                    exclude={organelle_id},
+                    reader=organelle_id,
+                )
                 for msg in messages:
-                    # charge reader if enough energy
+                    if reads_used >= read_gen_cap:
+                        break
                     bal = self.host.ledger.energy_balance(organelle_id)
                     colony_ok = True
                     if member_colony is not None:
                         _cid, _meta = member_colony
                         colony_ok = float(_meta.get("bandwidth_left", 0.0)) >= read_cost and int(_meta.get("reads_left", 1)) > 0
-                    if bal >= read_cost and colony_ok:
-                        try:
-                            self.host.ledger.consume_energy(organelle_id, read_cost)
-                        except Exception:
-                            pass
-                        if member_colony is not None:
-                            _cid, _meta = member_colony
-                            _meta["bandwidth_left"] = max(0.0, float(_meta.get("bandwidth_left", 0.0)) - read_cost)
-                            _meta["reads_left"] = max(0, int(_meta.get("reads_left", 1)) - 1)
-                        # credit poster
-                        poster = msg.get("organelle_id")
-                        if isinstance(poster, str):
-                            try:
-                                self.host.ledger.credit_energy(poster, credit_frac * read_cost)
-                            except Exception:
-                                pass
-                        # small gate bias nudge for reader
-                        genome = self.population.population.get(organelle_id)
-                        if genome is not None:
-                            genome.gate_bias += 0.01
-                        # stash hint for next prompt
+                    if bal < read_cost or not colony_ok:
+                        continue
+                    try:
+                        self.host.ledger.consume_energy(organelle_id, read_cost)
+                    except Exception:
+                        continue
+                    if member_colony is not None:
+                        _cid, _meta = member_colony
+                        _meta["bandwidth_left"] = max(0.0, float(_meta.get("bandwidth_left", 0.0)) - read_cost)
+                        _meta["reads_left"] = max(0, int(_meta.get("reads_left", 1)) - 1)
+                    reads_used += 1
+                    self._comms_stats_gen["reads"] = self._comms_stats_gen.get("reads", 0) + 1
+                    poster = msg.get("organelle_id") if isinstance(msg, dict) else None
+                    poster_id = str(poster) if isinstance(poster, str) else None
+                    baseline = self._estimate_power(organelle_id)
+                    self._queue_comms_credit(poster_id, organelle_id, baseline, credit_frac * read_cost)
+                    self._log_comms_event(
+                        "read",
+                        reader=organelle_id,
+                        poster=poster_id,
+                        topic=msg.get("topic"),
+                        priority=msg.get("priority"),
+                    )
+                    genome = self.population.population.get(organelle_id)
+                    if genome is not None:
+                        genome.gate_bias += 0.01
+                    hint_text = ""
+                    if isinstance(msg, dict):
                         hint_text = str(msg.get("text", "")).strip()
-                        if hint_text:
-                            bucket = self._pending_hints.setdefault(organelle_id, [])
-                            if len(bucket) < 3:
-                                bucket.append(hint_text)
-                # C2C: read latent capsules for this organelle
+                    if hint_text:
+                        bucket = self._pending_hints.setdefault(organelle_id, [])
+                        if len(bucket) < 3:
+                            bucket.append(hint_text)
                 if c2c_enabled:  # pragma: no cover - integration exercised in long runs
                     self._consume_c2c_latents(organelle_id, member_colony, c2c_read_cost)
 
@@ -288,26 +487,47 @@ class EcologyLoop:
         team_max = int(getattr(self.config.assimilation_tuning, "team_max_routes_per_gen", 0))
         team_used = 0
         used_pairs: set[tuple[str, str]] = set()
+        budget_map, budget_meta = self._compute_budget_map(active, bs)
+        global_cap_value = int(budget_meta.get("global_cap", 0))
+        if budget_map:
+            capped_total = int(budget_meta.get("capped_total", sum(budget_map.values())))
+        else:
+            capped_total = len(active) * bs
+        global_left: int | None = capped_total if global_cap_value > 0 else None
+        executed_budget: dict[str, int] = {}
+        boost_record: dict[str, int] = {}
         # Evidence boost budget
         boost_cap = int(getattr(self.config.assimilation_tuning, "evidence_boost_cap", 0))
         boost_left = boost_cap
         for organelle_id in active:
-            # policy-driven per-org batch multiplier
-            per_org_bs = bs
-            pol = self._active_policies.get(organelle_id, {})
-            if isinstance(pol.get("budget_frac"), (int, float)):
-                frac = max(0.25, min(2.0, float(pol["budget_frac"])) )
-                per_org_bs = max(1, int(round(bs * frac)))
+            per_org_bs = int(budget_map.get(organelle_id, bs)) if budget_map else bs
             # Evidence boost for near-threshold candidates
             try:
                 if boost_left > 0 and self._should_boost(organelle_id):
                     inc = int(getattr(self.config.assimilation_tuning, "evidence_boost_factor", 1))
+                    inc = min(inc, boost_left)
                     per_org_bs += inc
                     boost_left = max(0, boost_left - inc)
+                    if inc > 0:
+                        boost_record[organelle_id] = boost_record.get(organelle_id, 0) + inc
             except Exception:
                 pass
-            for _ in range(per_org_bs):
-                task = (self._sample_task_with_policy(lp_mix_value, organelle_id) if lp_mix_value > 0.0 else self.environment.sample_task())
+            try:
+                per_org_bs = self._resolve_per_org_batch(organelle_id, per_org_bs)
+            except Exception:
+                per_org_bs = max(0, per_org_bs)
+            per_org_bs = max(0, per_org_bs)
+            if global_left is not None:
+                allowed = min(per_org_bs, max(0, global_left))
+            else:
+                allowed = per_org_bs
+            if global_left is not None:
+                global_left = max(0, global_left - allowed)
+            if allowed <= 0:
+                executed_budget[organelle_id] = 0
+                continue
+            for _ in range(allowed):
+                task = self._sample_task_for_org(organelle_id, lp_mix_value)
                 # Optional team routing: pick a synergy pair and run team episode
                 if team_enabled and team_used < team_max and len(self.population.population) >= 2:
                     pair = self._select_synergy_pair(fallback_organelle=organelle_id, excluded=used_pairs)
@@ -324,10 +544,16 @@ class EcologyLoop:
                     prompt_text = f"Hints: {joined}\n\n{task.prompt}"
                     # clear after use
                     self._pending_hints[organelle_id] = []
+                knowledge_block = self._prepare_knowledge_prompt(organelle_id, task)
+                if knowledge_block:
+                    prompt_text = f"{knowledge_block}\n\n{prompt_text}"
                 # optional C2C latent prefix consumption
                 latent_prefix = None
                 if c2c_enabled and self._pending_latents.get(organelle_id):
                     latent_prefix = self._pending_latents[organelle_id].pop(0)
+                prompt_text, scaffold_applied = self._apply_prompt_scaffold(task, prompt_text)
+                if scaffold_applied:
+                    self._prompt_scaffold_counts[task.family] = self._prompt_scaffold_counts.get(task.family, 0) + 1
                 result = self.host.step(
                     prompt=prompt_text,
                     intent="solve task",
@@ -340,6 +566,8 @@ class EcologyLoop:
                 if metrics is None:
                     continue
                 success, reward = task.evaluate(metrics.answer)
+                if success:
+                    self._record_knowledge_entry(organelle_id, task, metrics)
                 responses = {organelle_id: (metrics.answer, float(metrics.tokens))}
                 human_feedback = self._collect_human_feedback(task.prompt, responses)
                 if human_feedback:
@@ -383,37 +611,86 @@ class EcologyLoop:
                                 member_colony_post = (cid, meta)
                                 break
                     self._post_c2c_latent(organelle_id, latent, c2c_post_cost, c2c_ttl, member_colony_post)
+            executed_budget[organelle_id] = allowed
+        budget_meta["final"] = executed_budget
+        budget_meta["final_total"] = int(sum(executed_budget.values()))
+        budget_meta["boost_applied"] = boost_record
+        budget_meta["cap_exhausted"] = bool(global_left == 0) if global_left is not None else False
+        self._budget_snapshot_gen = budget_meta
 
         self._enforce_diversity()
-        # Optional: communication post step (one hint per generation by top ROI organelle)
         if comms_enabled and active:
-            try:
-                top_org = max(active, key=lambda oid: self.population.average_roi(oid, limit=5))
-                genome = self.population.population.get(top_org)
-                post_ok = True
+            post_gen_cap = int(getattr(self.config.comms, "post_gen_cap", 1))
+            posts_used = 0
+            rng = getattr(self.environment, "rng", None)
+            if rng is None:
+                rng = random.Random(self.generation_index)
+            candidates = sorted(active, key=lambda oid: self.population.average_roi(oid, limit=5), reverse=True)
+            for organelle_id in candidates:
+                if posts_used >= post_gen_cap:
+                    break
+                genome = self.population.population.get(organelle_id)
+                trait = 0.0
                 if genome is not None and isinstance(getattr(genome, "post_rate", 0.0), float):
-                    post_ok = max(0.0, min(1.0, genome.post_rate)) > 0.0
-                # Only post if enough energy and trait allows
+                    trait = max(0.0, min(1.0, float(genome.post_rate)))
+                if trait <= 0.0:
+                    continue
+                if rng.random() > trait:
+                    continue
                 colony_ok = True
                 member_colony = None
                 if self.colonies:
                     for cid, meta in self.colonies.items():
-                        if top_org in meta.get("members", []):
+                        if organelle_id in meta.get("members", []):
                             member_colony = (cid, meta)
                             break
                 if member_colony is not None:
                     _cid, _meta = member_colony
                     colony_ok = float(_meta.get("bandwidth_left", 0.0)) >= post_cost and int(_meta.get("posts_left", 1)) > 0
-                if post_ok and colony_ok and self.host.ledger.energy_balance(top_org) >= post_cost:
-                    self.host.ledger.consume_energy(top_org, post_cost)
-                    hint = "Hint: count words ignoring punctuation and double spaces."
-                    self.environment.post_message(top_org, hint, cost=post_cost, ttl=int(getattr(self.config.comms, "ttl", 10)))
-                    if member_colony is not None:
-                        _cid, _meta = member_colony
-                        _meta["bandwidth_left"] = max(0.0, float(_meta.get("bandwidth_left", 0.0)) - post_cost)
-                        _meta["posts_left"] = max(0, int(_meta.get("posts_left", 1)) - 1)
-            except Exception:
-                pass
+                if not colony_ok:
+                    continue
+                if self.host.ledger.energy_balance(organelle_id) < post_cost:
+                    continue
+                try:
+                    self.host.ledger.consume_energy(organelle_id, post_cost)
+                except Exception:
+                    continue
+                hint = ""
+                topic = None
+                cell_meta = None
+                if hasattr(self.environment, "best_cell_score"):
+                    try:
+                        cell_score = self.environment.best_cell_score(organelle_id)
+                        if isinstance(cell_score, tuple) and cell_score[0]:
+                            cell_meta = cell_score[0]
+                            topic = f"{cell_meta[0]}:{cell_meta[1]}"
+                    except Exception:
+                        topic = None
+                hint = self._build_comms_hint(organelle_id, cell_meta)
+                if not hint or not hint.strip():
+                    continue
+                priority = float(trait)
+                try:
+                    self.environment.post_message(
+                        organelle_id,
+                        hint,
+                        cost=post_cost,
+                        ttl=int(getattr(self.config.comms, "ttl", 10)),
+                        priority=priority,
+                        topic=topic,
+                        cell=cell_meta,
+                        meta={"source": "auto_hint"},
+                    )
+                except Exception:
+                    continue
+                if member_colony is not None:
+                    _cid, _meta = member_colony
+                    _meta["bandwidth_left"] = max(0.0, float(_meta.get("bandwidth_left", 0.0)) - post_cost)
+                    _meta["posts_left"] = max(0, int(_meta.get("posts_left", 1)) - 1)
+                posts_used += 1
+                self._comms_stats_gen["posts"] = self._comms_stats_gen.get("posts", 0) + 1
+                colony_id = member_colony[0] if member_colony is not None else None
+                self._log_comms_event("post", poster=organelle_id, colony=colony_id, topic=topic, priority=priority)
         merges = self._attempt_assimilation(capped=self.config.evolution.max_merges_per_gen)
         # review trial offspring for potential promotion or cull
         self._review_trial_offspring()
@@ -427,8 +704,26 @@ class EcologyLoop:
             if bool(getattr(self.config.assimilation_tuning, "colonies_enabled", False)):
                 self._maybe_promote_colonies()
                 self._tick_colonies()
+                self._colony_selection_step()
+                self._colony_tier_migration()
         except Exception:
             pass
+        if comms_enabled:
+            try:
+                self._process_comms_credit()
+            except Exception:
+                pass
+            self._comms_events_history.append(
+                {
+                    "generation": self.generation_index,
+                    "posts": int(self._comms_stats_gen.get("posts", 0)),
+                    "reads": int(self._comms_stats_gen.get("reads", 0)),
+                    "credits": int(self._comms_stats_gen.get("credits", 0)),
+                    "events": list(self._comms_events_gen),
+                }
+            )
+            if len(self._comms_events_history) > 120:
+                self._comms_events_history = self._comms_events_history[-120:]
         if merges > 0:
             self.no_merge_counter = 0
         else:
@@ -456,6 +751,7 @@ class EcologyLoop:
                 }
                 for (family, depth), state in self.environment.controller.cells.items()
             },
+            "mutation_stats": dict(self._mutation_stats_gen),
         }
         # Promotion acceptance governor (adjust team thresholds toward target)
         try:
@@ -531,6 +827,8 @@ class EcologyLoop:
                     summary["policy_cost_total"] = float(self._policy_cost_total)
             summary["policy_attempts"] = int(self._policy_attempts_gen)
             summary["policy_parsed"] = int(self._policy_parsed_gen)
+        if getattr(self, "_prompt_scaffold_counts", None):
+            summary["prompt_scaffolds"] = dict(self._prompt_scaffold_counts)
         # QD coverage (family-depth cells with observed stats)
         try:
             if getattr(self.config.qd, "enabled", False):
@@ -542,6 +840,7 @@ class EcologyLoop:
                         seen.add(cell)
                 populated = len(seen)
                 summary["qd_coverage"] = f"{populated}/{total_bins}"
+                summary["qd_coverage_ratio"] = float(populated / max(total_bins, 1))
         except Exception:
             pass
         if hasattr(self, "assim_gating_counts"):
@@ -552,20 +851,59 @@ class EcologyLoop:
         attempt_samples = getattr(self, "assim_attempt_samples_snapshot", None)
         if attempt_samples:
             summary["assimilation_attempts"] = attempt_samples
+        if self._merge_audits_gen:
+            summary["merge_audits"] = list(self._merge_audits_gen)
         if self.population.assimilation_history:
-            history_snapshot: dict[str, dict[str, object]] = {}
+            summary_limit = max(
+                1,
+                int(getattr(self.config.assimilation_tuning, "assimilation_history_summary", 6)),
+            )
+            history_snapshot: dict[str, list[dict[str, object]]] = {}
             for (organelle_id, family, depth), records in self.population.assimilation_history.items():
                 if not records:
                     continue
-                history_snapshot[f"{organelle_id}:{family}:{depth}"] = records[-1]
+                trimmed = records[-summary_limit:]
+                history_snapshot[f"{organelle_id}:{family}:{depth}"] = [
+                    self._sanitize_telemetry(entry) for entry in trimmed
+                ]
             summary["assimilation_history"] = history_snapshot
         summary["roi_by_organelle"] = {
             organelle_id: float(self.population.average_roi(organelle_id, limit=5))
             for organelle_id in self.population.population
         }
+        if getattr(self.config, "foraging", None) and getattr(self.config.foraging, "enabled", False):
+            top_k = int(getattr(self.config.foraging, "telemetry_top_k", 3))
+            max_orgs = int(getattr(self.config.foraging, "telemetry_max_orgs", 10))
+            ids_sorted = sorted(
+                self.population.population.keys(),
+                key=lambda oid: self.population.average_roi(oid, limit=5),
+                reverse=True,
+            )[: max(1, max_orgs)]
+            trait_snapshot: dict[str, dict[str, float]] = {}
+            top_cells_snapshot: dict[str, list[dict[str, float | str]]] = {}
+            for oid in ids_sorted:
+                genome = self.population.population.get(oid)
+                if genome is None:
+                    continue
+                trait_snapshot[oid] = {
+                    "beta": round(float(genome.beta_exploit), 3),
+                    "decay": round(float(genome.q_decay), 3),
+                    "ucb": round(float(genome.ucb_bonus), 3),
+                    "budget": round(float(genome.budget_aggressiveness), 3),
+                }
+                top_cells = self.population.top_cells(oid, limit=top_k)
+                if top_cells:
+                    top_cells_snapshot[oid] = [
+                        {"family": fam, "depth": depth, "q": round(val, 4)} for fam, depth, val in top_cells
+                    ]
+            summary["foraging"] = {
+                "traits": trait_snapshot,
+                "top_cells": top_cells_snapshot,
+            }
         summary["lp_mix_base"] = float(self._base_lp_mix)
         summary["lp_mix_active"] = float(self._last_lp_mix)
         if self.colonies:
+            tier_counts: dict[int, int] = {}
             summary["colonies_meta"] = {
                 cid: {
                     "members": list(meta.get("members", [])),
@@ -573,9 +911,85 @@ class EcologyLoop:
                     "holdout_passes": int(meta.get("holdout_passes", 0)),
                     "holdout_failures": int(meta.get("holdout_failures", 0)),
                     "last_delta": float(meta.get("last_delta", 0.0)),
+                    "reserve_active": bool(meta.get("reserve_active", False)),
+                    "reserve_floor": float(meta.get("reserve_floor", 0.0)),
+                    "winter_mode": bool(meta.get("winter_mode", False)),
+                    "hazard_z": float(meta.get("hazard_z", 0.0)),
+                    "variance_guard": bool(meta.get("variance_guard", False)),
+                    "bandwidth_budget": float(meta.get("bandwidth_budget", meta.get("bandwidth_left", 0.0))),
+                    "hazard_members": int(meta.get("hazard_members", 0)),
+                    "bankrupt_violations": int(meta.get("bankrupt_violations", 0)),
+                    "roi_mean": float(meta.get("roi_mean", 0.0)),
+                    "fitness": float(meta.get("fitness", 0.0)),
+                    "tax_rate": float(meta.get("tax_rate", getattr(self.config.assimilation_tuning, "colony_tax_rate", 0.1))),
+                    "subsidy_frac": float(meta.get("subsidy_frac", getattr(self.config.assimilation_tuning, "colony_subsidy_fraction", 0.25))),
+                    "events": list(meta.get("events", [])),
+                    "tier": int(meta.get("tier", 0)),
+                    "tier_cooldown": int(meta.get("tier_cooldown", 0)),
                 }
                 for cid, meta in self.colonies.items()
             }
+            for meta in self.colonies.values():
+                tier = int(meta.get("tier", 0))
+                tier_counts[tier] = tier_counts.get(tier, 0) + 1
+            if self._colony_selection_stats:
+                stats_copy = dict(self._colony_selection_stats)
+                events = list(stats_copy.pop("events", []))
+                summary["colony_selection"] = stats_copy
+                if events:
+                    summary["colony_selection_events"] = events[-5:]
+                pool_events = list(self._colony_selection_pool.get("events", []))
+                if pool_events:
+                    summary["colony_selection_pool"] = pool_events[-5:]
+            if tier_counts:
+                summary["colony_tier_counts"] = {str(k): v for k, v in sorted(tier_counts.items())}
+                total_colonies = sum(tier_counts.values())
+                tier_mean = sum(level * count for level, count in tier_counts.items()) / max(1, total_colonies)
+                summary["colony_tier_mean"] = float(tier_mean)
+        winter_block = {
+            "active": bool(self._winter_active),
+            "timer": int(self._winter_timer),
+            "counter": int(self._winter_counter),
+            "price_multiplier": float(self._winter_price_factor),
+            "ticket_multiplier": float(self._winter_ticket_multiplier),
+            "events": list(self._winter_events_gen),
+        }
+        summary["winter"] = winter_block
+        if getattr(self, "_team_probe_candidates_gen", None):
+            summary["team_probe_candidates"] = [
+                {
+                    **{k: (list(v) if k == "pair" else v) for k, v in cand.items()}
+                }
+                for cand in self._team_probe_candidates_gen
+            ]
+        stats = getattr(self, "_power_econ_stats", None)
+        if stats is not None and stats.get("episodes", 0):
+            episodes = max(1, int(stats.get("episodes", 0)))
+            summary["power_economics"] = {
+                "episodes": episodes,
+                "avg_power_need": float(stats.get("power_sum", 0.0)) / episodes,
+                "avg_price_multiplier": float(stats.get("price_multiplier_sum", 0.0)) / episodes,
+                "tokens_minted": int(stats.get("tokens_minted", 0)),
+                "tokens_used": int(stats.get("tokens_used", 0)),
+                "info_topups": int(stats.get("info_topups", 0)),
+            }
+        if comms_enabled:
+            summary["comms"] = {
+                "posts": int(self._comms_stats_gen.get("posts", 0)),
+                "reads": int(self._comms_stats_gen.get("reads", 0)),
+                "credits": int(self._comms_stats_gen.get("credits", 0)),
+                "events": list(self._comms_events_gen),
+            }
+            if hasattr(self.environment, "peek_messages"):
+                try:
+                    summary["comms_board"] = self.environment.peek_messages(limit=5)
+                except Exception:
+                    summary["comms_board"] = []
+        if self._knowledge_enabled():
+            entries_total = sum(len(v) for v in self._knowledge_store.values())
+            knowledge_block = dict(self._knowledge_stats_gen)
+            knowledge_block["entries"] = entries_total
+            summary["knowledge"] = knowledge_block
         # Learning KPI: ROI volatility (rolling std across organelles)
         try:
             roi_vals = list(summary["roi_by_organelle"].values())
@@ -593,15 +1007,58 @@ class EcologyLoop:
             if summary["energy_balance"]
             else 0.0
         )
+        if self._budget_snapshot_gen is not None:
+            summary["budget"] = dict(self._budget_snapshot_gen)
         if self._diversity_snapshot is not None:
             summary["diversity"] = dict(self._diversity_snapshot)
         summary["assimilation_fail_streak"] = self.assim_fail_streak
         summary["trial_offspring_active"] = len(self.trial_offspring)
         summary["trials_created"] = int(getattr(self, "trial_creations_this_gen", 0))
         summary["promotions"] = int(getattr(self, "promotions_this_gen", 0))
+        if self.colonies:
+            summary["colony_metrics"] = {
+                cid: {
+                    "size": len(meta.get("members", [])),
+                    "pot": float(meta.get("pot", 0.0)),
+                    "bandwidth_budget": float(meta.get("bandwidth_budget", 0.0)),
+                    "posts_budget": int(meta.get("posts_budget", 0)),
+                    "reads_budget": int(meta.get("reads_budget", 0)),
+                    "last_delta": float(meta.get("last_delta", 0.0)),
+                    "variance_ratio": float(meta.get("last_variance_ratio", 1.0)),
+                    "hazard_members": int(meta.get("hazard_members", 0)),
+                    "tier": int(meta.get("tier", 0)),
+                    "tier_cooldown": int(meta.get("tier_cooldown", 0)),
+                }
+                for cid, meta in self.colonies.items()
+            }
+        summary["colony_events"] = list(self._colony_events_archive[-240:])
         # Update QD archive and expose size
         try:
-            summary["qd_archive_size"] = int(self._update_qd_archive())
+            archive_size = int(self._update_qd_archive())
+            summary["qd_archive_size"] = archive_size
+            if getattr(self.config.qd, "enabled", False):
+                total_bins = max(
+                    1,
+                    len(self.environment.controller.cells)
+                    * max(1, int(getattr(self.config.qd, "cost_bins", 1))),
+                )
+                summary["qd_archive_coverage"] = float(archive_size / total_bins)
+                top_entries = sorted(
+                    self._qd_archive.items(),
+                    key=lambda kv: float(kv[1].get("roi", 0.0)),
+                    reverse=True,
+                )[:5]
+                summary["qd_archive_top"] = [
+                    {
+                        "cell": f"{key[0]}:{key[1]}",
+                        "bin": int(key[2]),
+                        "organelle": value.get("organelle_id"),
+                        "roi": float(value.get("roi", 0.0)),
+                        "ema": float(value.get("ema", 0.0)),
+                        "novelty": float(value.get("novelty", 0.0)),
+                    }
+                    for key, value in top_entries
+                ]
         except Exception:
             summary["qd_archive_size"] = 0
         self._auto_tune_assimilation_energy(summary)
@@ -620,6 +1077,9 @@ class EcologyLoop:
         # Colonies: ensure count is present even if disabled
         summary["colonies"] = int(len(self.colonies))
         summary["assimilation_attempt_total"] = int(getattr(self, "_assim_attempt_total", 0))
+        survival_snapshot = self._snapshot_survival_state()
+        if survival_snapshot is not None:
+            summary["survival"] = survival_snapshot
         if self._tau_relief:
             relief_snapshot = {
                 f"{cell[0]}:{cell[1]}": round(float(relief), 3)
@@ -649,6 +1109,7 @@ class EcologyLoop:
                 )
             meta_info = self.meta_evolver.step(self.generation_index, summary["avg_roi"])
             summary.update(meta_info)
+        self._last_assim_attempts = int(getattr(self, "_assim_attempt_total", 0))
         return summary
 
     def _compute_batch_size(self, default_bs: int) -> int:
@@ -699,7 +1160,16 @@ class EcologyLoop:
         metrics: RouteMetrics,
     ) -> Dict[str, float]:
         energy_before = self.host.ledger.energy_balance(organelle_id)
-        price = task.price
+        price = task.price * self._winter_price_factor
+        tuning = self.config.assimilation_tuning
+        power_need = self._power_need(organelle_id)
+        premium_alpha = float(getattr(tuning, "price_premium_alpha", 0.0))
+        premium_cap = float(getattr(tuning, "price_premium_cap", 1.0))
+        price_multiplier = 1.0
+        if premium_alpha > 0.0:
+            price_multiplier = 1.0 + premium_alpha * power_need
+            price_multiplier = max(1.0, price_multiplier)
+            price_multiplier = min(max(1.0, premium_cap), price_multiplier)
         config = self.config.energy
         revenue = price * reward.total
         cost = (
@@ -708,6 +1178,7 @@ class EcologyLoop:
             + config.gamma * metrics.latency_ms
             + config.lambda_p * metrics.trainable_params
         )
+        cost *= price_multiplier
         cost *= max(0.0, min(self.config.energy.cost_scale, 1.0))
         roi = revenue / max(cost, 1e-6) if cost > 0 else (float("inf") if revenue > 0 else 0.0)
         if not math.isfinite(roi):
@@ -718,14 +1189,60 @@ class EcologyLoop:
         energy_after = max(0.0, min(self.host.ledger.energy_cap, energy_before + delta))
         self.host.ledger.set_energy(organelle_id, energy_after)
         self.population.record_energy_delta(organelle_id, delta)
-        return {
+        stats = self._power_econ_stats
+        if stats is not None:
+            stats["episodes"] = int(stats.get("episodes", 0)) + 1
+            stats["power_sum"] = float(stats.get("power_sum", 0.0)) + power_need
+            stats["price_multiplier_sum"] = float(stats.get("price_multiplier_sum", 0.0)) + price_multiplier
+        settlement = {
             "energy_before": energy_before,
             "energy_after": energy_after,
             "revenue": revenue,
             "cost": cost,
             "roi": roi,
             "delta": delta,
+            "price_multiplier": price_multiplier,
+            "power_need": power_need,
         }
+        minted = self._maybe_mint_evidence_token(organelle_id, power_need)
+        if minted:
+            settlement["evidence_tokens_minted"] = minted
+        return settlement
+
+    def _apply_colony_tax(self, organelle_id: str, settlement: Dict[str, float]) -> None:
+        if not getattr(self.config.assimilation_tuning, "colonies_enabled", False):
+            return
+        colony = self._find_member_colony(organelle_id)
+        if colony is None:
+            return
+        cid, meta = colony
+        cfg = self.config.assimilation_tuning
+        tax_rate = float(meta.get("tax_rate", getattr(cfg, "colony_tax_rate", 0.1)))
+        if tax_rate <= 0.0:
+            return
+        delta = float(settlement.get("delta", 0.0))
+        if delta <= 0.0:
+            return
+        tax = max(0.0, delta * tax_rate)
+        if tax <= 0.0:
+            return
+        try:
+            balance = float(self.host.ledger.energy_balance(organelle_id))
+        except Exception:
+            balance = 0.0
+        tax = min(tax, balance)
+        if tax <= 0.0:
+            return
+        try:
+            if not self.host.ledger.consume_energy(organelle_id, tax):
+                return
+        except Exception:
+            return
+        meta["pot"] = float(meta.get("pot", 0.0)) + tax
+        meta["_pot_earn_gen"] = float(meta.get("_pot_earn_gen", 0.0)) + tax
+        settlement["energy_after"] = float(self.host.ledger.energy_balance(organelle_id))
+        settlement["colony_tax"] = tax
+        self._log_colony_event(meta, self.generation_index, "tax", member=organelle_id, amount=float(tax), colony=cid)
 
     def _record_episode(
         self,
@@ -737,6 +1254,10 @@ class EcologyLoop:
         success: bool,
         adapter_utilisation: dict[str, float],
     ) -> None:
+        try:
+            self._apply_colony_tax(organelle_id, settlement)
+        except Exception:
+            pass
         episode = EpisodeLog(
             episode_id=f"epi_{len(self.logs)}",
             task_id=task.task_id,
@@ -754,6 +1275,7 @@ class EcologyLoop:
                 "success": success,
                 "energy_before": settlement["energy_before"],
                 "energy_after": settlement["energy_after"],
+                "colony_tax": settlement.get("colony_tax"),
                 "roi": settlement["roi"],
                 "metrics": {
                     "tokens": metrics.tokens,
@@ -767,6 +1289,27 @@ class EcologyLoop:
             },
         )
         self.logs.append(episode)
+        if getattr(self.config, "foraging", None) and getattr(self.config.foraging, "enabled", False):
+            genome = self.population.population.get(organelle_id)
+            decay = float(getattr(self.config.foraging, "q_decay_default", 0.3))
+            if genome is not None and math.isfinite(getattr(genome, "q_decay", decay)):
+                decay = float(genome.q_decay)
+            q_init = float(getattr(self.config.foraging, "q_init", 0.0))
+            try:
+                roi_value = float(settlement.get("roi", 0.0))
+            except Exception:
+                roi_value = 0.0
+            cell_key = (str(task.family), str(task.depth))
+            try:
+                self.population.update_cell_value(
+                    organelle_id,
+                    cell_key,
+                    roi=roi_value,
+                    decay=decay,
+                    q_init=q_init,
+                )
+            except Exception:
+                pass
         # Keep a bounded in-memory cache to avoid RAM growth on long runs
         try:
             limit = int(getattr(self.config.metrics, "in_memory_log_limit", 256))
@@ -917,7 +1460,61 @@ class EcologyLoop:
         except Exception:
             return self.environment.sample_task()
 
+    def _foraging_select_cell(self, organelle_id: str) -> tuple[str, str]:
+        forage_cfg = getattr(self.config, "foraging", None)
+        cells = list(getattr(self.environment.controller, "cells", {}).keys())
+        if not cells:
+            return self.environment.controller.sample_cell(lp_mix=0.0)
+        genome = self.population.population.get(organelle_id)
+        q_map = self.population.cell_values.get(organelle_id, {})
+        counts = self.population.cell_counts.get(organelle_id, {})
+        q_init = float(getattr(forage_cfg, "q_init", 0.0)) if forage_cfg else 0.0
+        beta = genome.beta_exploit if genome is not None else (forage_cfg.beta_default if forage_cfg else 1.5)
+        if not math.isfinite(beta) or beta <= 0.0:
+            beta = forage_cfg.beta_default if forage_cfg else 1.5
+        total_visits = sum(counts.values()) + len(cells)
+        scores: list[float] = []
+        for cell in cells:
+            q_value = float(q_map.get(cell, q_init))
+            bonus = 0.0
+            if genome is not None and genome.ucb_bonus > 0.0 and total_visits > 0:
+                count = counts.get(cell, 0)
+                bonus = genome.ucb_bonus * math.sqrt(math.log(total_visits + 1) / (count + 1))
+            scores.append(q_value + bonus)
+        max_score = max(scores) if scores else 0.0
+        exps = [math.exp(beta * (score - max_score)) for score in scores]
+        total = sum(exps)
+        rng = getattr(self.environment, "rng", random)
+        if total <= 0.0:
+            return rng.choice(cells)
+        probs = [val / total for val in exps]
+        pol = self._active_policies.get(organelle_id)
+        if pol and isinstance(pol.get("cell_pref"), dict):
+            pref = (str(pol["cell_pref"].get("family")), str(pol["cell_pref"].get("depth")))
+            bias_strength = float(getattr(self.config.policy, "bias_strength", 0.3))
+            cap = float(getattr(forage_cfg, "policy_bias_cap", 0.5)) if forage_cfg else 0.5
+            boost = 1.0 + max(0.0, min(cap, bias_strength))
+            for idx, cell in enumerate(cells):
+                if cell == pref:
+                    probs[idx] *= boost
+                    break
+            total_prob = sum(probs)
+            if total_prob > 0.0:
+                probs = [p / total_prob for p in probs]
+        try:
+            choice = rng.choices(cells, weights=probs, k=1)[0]
+        except Exception:
+            choice = rng.choice(cells)
+        return choice
+
     def _sample_task_with_policy(self, lp_mix: float, organelle_id: str) -> GridTask:
+        if getattr(self.config, "foraging", None) and getattr(self.config.foraging, "enabled", False):
+            rng = getattr(self.environment, "rng", random)
+            if lp_mix > 0.0 and rng.random() < lp_mix:
+                cell = self.environment.controller.sample_cell(lp_mix=0.0)
+            else:
+                cell = self._foraging_select_cell(organelle_id)
+            return self.environment.sample_task_from_cell(cell)
         pol = self._active_policies.get(organelle_id)
         if pol and isinstance(pol.get("cell_pref"), dict):
             try:
@@ -1011,7 +1608,7 @@ class EcologyLoop:
         try:
             kvs: dict[str, object] = {}
             # match patterns like key: 0.5 or key=0.5 or key: true/false
-            for m in _re.finditer(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=]\s*([\-+]?[0-9]+(?:\.[0-9]+)?|true|false)", text, _re.IGNORECASE):
+            for m in _re.finditer(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=]\s*([\-+]?[0-9]+(?:\.[0-9]+)?%?|true|false)", text, _re.IGNORECASE):
                 k = m.group(1)
                 vraw = m.group(2)
                 if k not in allowed:
@@ -1020,7 +1617,17 @@ class EcologyLoop:
                     kvs[k] = (vraw.lower() == "true")
                 else:
                     try:
-                        kvs[k] = float(vraw) if "." in vraw else int(vraw)
+                        cleaned = vraw.strip()
+                        percent = cleaned.endswith("%")
+                        if percent:
+                            cleaned = cleaned[:-1]
+                        cleaned = cleaned.strip()
+                        if not cleaned:
+                            continue
+                        value = float(cleaned) if "." in cleaned else float(int(cleaned))
+                        if percent:
+                            value = value / 100.0
+                        kvs[k] = value
                     except Exception:
                         continue
             if kvs:
@@ -1116,6 +1723,300 @@ class EcologyLoop:
         threshold = max(0.0, 0.9 * aggregate)
         return recent >= threshold
 
+    def _compute_budget_map(self, active_ids: list[str], base_bs: int) -> tuple[dict[str, int], dict[str, object]]:
+        env_cfg = self.config.environment
+        if not getattr(env_cfg, "budget_enabled", True):
+            budgets = {oid: max(0, base_bs) for oid in active_ids}
+            meta = {
+                "base": base_bs,
+                "global_cap": int(getattr(env_cfg, "global_episode_cap", 0)),
+                "per_org": {
+                    oid: {
+                        "energy": 0.0,
+                        "trait": float(getattr(self.population.population.get(oid, None), "explore_rate", 0.0))
+                        if oid in self.population.population
+                        else 0.0,
+                        "policy": 1.0,
+                        "raw": budgets[oid],
+                    }
+                    for oid in active_ids
+                },
+                "raw_total": int(sum(budgets.values())),
+                "capped_total": int(sum(budgets.values())),
+                "cap_hit": False,
+            }
+            return budgets, meta
+        ticket = max(1e-6, float(self.config.energy.m))
+        energy_floor = max(0.0, float(getattr(env_cfg, "budget_energy_floor", 0.4)))
+        energy_ceiling = max(energy_floor, float(getattr(env_cfg, "budget_energy_ceiling", 3.0)))
+        trait_bonus = max(0.0, float(getattr(env_cfg, "budget_trait_bonus", 1.0)))
+        policy_floor = max(0.0, float(getattr(env_cfg, "budget_policy_floor", 0.3)))
+        policy_ceiling = max(policy_floor, float(getattr(env_cfg, "budget_policy_ceiling", 2.0)))
+        global_cap = int(max(0, getattr(env_cfg, "global_episode_cap", 0)))
+        budgets: dict[str, int] = {}
+        per_org_meta: dict[str, dict[str, float]] = {}
+        raw_total = 0
+        for organelle_id in active_ids:
+            try:
+                balance = float(self.host.ledger.energy_balance(organelle_id))
+            except Exception:
+                balance = 0.0
+            energy_ratio = balance / ticket if ticket > 0 else 0.0
+            clamped_ratio = max(energy_floor, min(energy_ceiling, energy_ratio))
+            energy_factor = math.sqrt(clamped_ratio)
+            genome = self.population.population.get(organelle_id)
+            if genome is not None:
+                trait = float(getattr(genome, "budget_aggressiveness", genome.explore_rate))
+            else:
+                trait = 0.5
+            trait_factor = max(0.1, 1.0 + trait_bonus * (trait - 0.5))
+            policy_frac = 1.0
+            pol = self._active_policies.get(organelle_id) if hasattr(self, "_active_policies") else None
+            if isinstance(pol, dict) and isinstance(pol.get("budget_frac"), (int, float)):
+                policy_frac = float(pol["budget_frac"])
+            policy_frac = max(policy_floor, min(policy_ceiling, policy_frac))
+            raw_budget = base_bs * energy_factor * trait_factor * policy_frac
+            per_org = max(0, int(round(raw_budget)))
+            budgets[organelle_id] = per_org
+            raw_total += per_org
+            per_org_meta[organelle_id] = {
+                "energy": round(energy_ratio, 4),
+                "trait": round(trait, 4),
+                "policy": round(policy_frac, 4),
+                "raw": per_org,
+            }
+        capped_total = raw_total
+        cap_hit = False
+        if global_cap > 0 and raw_total > global_cap:
+            cap_hit = True
+            scaled: dict[str, int] = {}
+            sorted_ids = sorted(active_ids, key=lambda oid: budgets.get(oid, 0), reverse=True)
+            remaining_cap = global_cap
+            for oid in sorted_ids:
+                raw = budgets.get(oid, 0)
+                if remaining_cap <= 0:
+                    alloc = 0
+                else:
+                    share = (raw / raw_total) if raw_total > 0 else 0.0
+                    alloc = min(raw, int(math.floor(share * global_cap)))
+                scaled[oid] = max(0, alloc)
+                remaining_cap -= scaled[oid]
+            idx = 0
+            while remaining_cap > 0 and sorted_ids:
+                oid = sorted_ids[idx % len(sorted_ids)]
+                if scaled[oid] < budgets.get(oid, 0):
+                    scaled[oid] += 1
+                    remaining_cap -= 1
+                idx += 1
+                if idx > len(sorted_ids) * 4:
+                    break
+            budgets = {oid: scaled.get(oid, 0) for oid in active_ids}
+            capped_total = sum(budgets.values())
+        for oid, meta in per_org_meta.items():
+            meta["capped"] = budgets.get(oid, 0)
+        meta = {
+            "base": base_bs,
+            "global_cap": global_cap,
+            "per_org": per_org_meta,
+            "raw_total": raw_total,
+            "capped_total": capped_total,
+            "cap_hit": cap_hit,
+        }
+        return budgets, meta
+
+    def _resolve_per_org_batch(self, organelle_id: str, base: int) -> int:
+        cfg = getattr(self.config, "survival", None)
+        if cfg is None or not cfg.enabled:
+            return max(0, base)
+        per_org = max(0, base)
+        reserve_state = self._reserve_state.get(organelle_id, {})
+        if reserve_state.get("active") and per_org > 0:
+            scale = max(0.0, min(1.0, float(cfg.reserve_batch_scale)))
+            if scale > 0.0:
+                per_org = max(0, int(round(per_org * scale)))
+            else:
+                per_org = 0
+            cap = int(cfg.steps_cap_low_energy)
+            if cap > 0:
+                per_org = min(per_org, cap)
+        return max(0, per_org)
+
+    def _sample_task_for_org(self, organelle_id: str, lp_mix: float) -> GridTask:
+        task = self._sample_task_with_policy(lp_mix, organelle_id) if lp_mix > 0.0 else self.environment.sample_task()
+        cfg = getattr(self.config, "survival", None)
+        if cfg is None or not cfg.enabled:
+            return task
+        reserve_state = self._reserve_state.get(organelle_id, {})
+        hazard_state = self._hazard_state.get(organelle_id, {})
+        reserve_active = bool(reserve_state.get("active"))
+        hazard_active = bool(hazard_state.get("active"))
+        price_bias = bool(getattr(cfg, "price_bias_low_energy", True))
+        if (not reserve_active and not hazard_active) or not price_bias:
+            return task
+        try:
+            quantile = max(0.0, min(1.0, float(cfg.cheap_cell_quantile)))
+            cells = getattr(self.environment.controller, "cells", {})
+            if quantile <= 0.0 or not cells:
+                return task
+            priced: list[tuple[GridKey, float]] = []
+            for key, state in cells.items():
+                price = getattr(state, "price", None)
+                if price is None:
+                    continue
+                priced.append((key, float(price)))
+            if not priced:
+                return task
+            priced.sort(key=lambda kv: kv[1])
+            idx = min(len(priced) - 1, max(0, int(math.floor(quantile * len(priced)))))
+            chosen_cell = priced[idx][0]
+            return self.environment.sample_task_from_cell(chosen_cell)
+        except Exception:
+            return task
+
+    def _log_survival_event(self, organelle_id: str, event_type: str, **payload: object) -> None:
+        entry: dict[str, object] = {"gen": self.generation_index, "org": organelle_id, "type": event_type}
+        entry.update(payload)
+        self._survival_events.append(entry)
+        if len(self._survival_events) > 200:
+            self._survival_events = self._survival_events[-200:]
+
+    def _update_survival_states(self, active_ids: list[str]) -> None:
+        cfg = getattr(self.config, "survival", None)
+        if cfg is None or not cfg.enabled:
+            return
+        ticket = float(self.config.energy.m)
+        reserve_window = max(1, int(cfg.reserve_cost_window))
+        hazard_window = max(2, int(cfg.hazard_window))
+        organelle_ids = list(self.host.list_organelle_ids())
+        for organelle_id in organelle_ids:
+            balance = float(self.host.ledger.energy_balance(organelle_id))
+            avg_cost = float(self.population.average_energy(organelle_id, limit=reserve_window))
+            reserve_threshold = max(ticket * float(cfg.reserve_ratio), float(cfg.reserve_cost_beta) * max(avg_cost, 0.0))
+            prev_reserve = self._reserve_state.get(organelle_id, {})
+            was_reserve = bool(prev_reserve.get("active"))
+            reserve_active = reserve_threshold > 0.0 and balance < reserve_threshold
+            self._reserve_state[organelle_id] = {
+                "active": reserve_active,
+                "threshold": reserve_threshold,
+                "balance": balance,
+            }
+            if reserve_active and not was_reserve:
+                self._log_survival_event(organelle_id, "reserve_enter", balance=balance, threshold=reserve_threshold)
+            elif was_reserve and not reserve_active:
+                self._log_survival_event(organelle_id, "reserve_exit", balance=balance, threshold=reserve_threshold)
+
+            roi_vals = self.population.roi.get(organelle_id, [])[-hazard_window:]
+            z_score = 0.0
+            latest_roi = roi_vals[-1] if roi_vals else 0.0
+            if len(roi_vals) >= 2:
+                mean_roi = sum(roi_vals) / len(roi_vals)
+                std_roi = pstdev(roi_vals)
+                if std_roi > 1e-6:
+                    z_score = (latest_roi - mean_roi) / std_roi
+            prev_hazard = self._hazard_state.get(organelle_id, {})
+            hazard_active = bool(prev_hazard.get("active"))
+            cooldown = max(0, int(self._hazard_cooldown.get(organelle_id, 0)))
+            if not hazard_active and cooldown > 0:
+                cooldown -= 1
+            entered = False
+            exited = False
+            if hazard_active:
+                if z_score >= float(cfg.hazard_exit_threshold):
+                    hazard_active = False
+                    exited = True
+                    cooldown = int(cfg.hazard_cooldown_gens)
+            else:
+                if cooldown <= 0 and z_score <= float(cfg.hazard_threshold):
+                    hazard_active = True
+                    entered = True
+            self._hazard_cooldown[organelle_id] = cooldown
+            if entered:
+                rank_shift = False
+                down = int(cfg.hazard_rank_downshift)
+                if down > 0:
+                    try:
+                        organelle = self.host.get_organelle(organelle_id)
+                        current_rank = getattr(organelle, "rank", None) if organelle is not None else None
+                        if isinstance(current_rank, int) and current_rank > 1:
+                            target_rank = max(1, current_rank - down)
+                            if target_rank < current_rank and self.host.resize_organelle_rank(organelle_id, target_rank):
+                                genome = self.population.population.get(organelle_id)
+                                if genome is not None:
+                                    genome.rank = target_rank
+                                rank_shift = True
+                    except Exception:
+                        rank_shift = False
+                self._log_survival_event(
+                    organelle_id,
+                    "hazard_enter",
+                    z=z_score,
+                    roi=latest_roi,
+                    cooldown=cooldown,
+                    rank_shift=rank_shift,
+                )
+            elif exited:
+                self._log_survival_event(
+                    organelle_id,
+                    "hazard_exit",
+                    z=z_score,
+                    roi=latest_roi,
+                    cooldown=cooldown,
+                )
+            if hazard_active and float(cfg.hazard_roi_relief_boost) > 0.0:
+                boost = float(cfg.hazard_roi_relief_boost)
+                current_relief = float(self._roi_relief.get(organelle_id, 0.0))
+                max_relief = float(getattr(self.config.assimilation_tuning, "roi_relief_max", 0.5))
+                self._roi_relief[organelle_id] = min(max_relief, current_relief + boost)
+            self._hazard_state[organelle_id] = {
+                "active": hazard_active,
+                "z": z_score,
+                "cooldown": cooldown,
+                "roi": latest_roi,
+                "in_active_set": organelle_id in active_ids,
+            }
+        for stale in [oid for oid in list(self._reserve_state.keys()) if oid not in organelle_ids]:
+            self._reserve_state.pop(stale, None)
+        for stale in [oid for oid in list(self._hazard_state.keys()) if oid not in organelle_ids]:
+            self._hazard_state.pop(stale, None)
+            self._hazard_cooldown.pop(stale, None)
+
+    def _should_block_assimilation(self, organelle_id: str) -> dict[str, object] | None:
+        cfg = getattr(self.config, "survival", None)
+        if cfg is None or not cfg.enabled:
+            return None
+        info = self._reserve_state.get(organelle_id, {})
+        if info.get("active"):
+            return {
+                "reserve_threshold": float(info.get("threshold", 0.0)),
+                "balance": float(info.get("balance", 0.0)),
+            }
+        return None
+
+    def _snapshot_survival_state(self) -> dict[str, object] | None:
+        cfg = getattr(self.config, "survival", None)
+        if cfg is None or not cfg.enabled:
+            return None
+        reserve_active = [oid for oid, info in self._reserve_state.items() if info.get("active")]
+        hazard_active = [oid for oid, info in self._hazard_state.items() if info.get("active")]
+        if bool(getattr(self.config.survival, "price_bias_low_energy", True)):
+            bias_active = sorted({*(reserve_active), *(hazard_active)})
+        else:
+            bias_active = []
+        snapshot: dict[str, object] = {
+            "reserve_active_ids": reserve_active,
+            "hazard_active_ids": hazard_active,
+            "reserve_active_count": len(reserve_active),
+            "hazard_active_count": len(hazard_active),
+            "price_bias_active_count": len(bias_active),
+            "price_bias_active_ids": bias_active,
+            "reserve_thresholds": {oid: float(info.get("threshold", 0.0)) for oid, info in self._reserve_state.items()},
+            "hazard_zscores": {oid: float(info.get("z", 0.0)) for oid, info in self._hazard_state.items()},
+        }
+        events = [event for event in self._survival_events if event.get("gen") == self.generation_index]
+        if events:
+            snapshot["events"] = events
+        return snapshot
+
     @staticmethod
     def _colony_c2c_debit(meta: dict[str, object], amount: float, counter_key: str) -> bool:
         """Attempt to pay a C2C cost from colony pot & bandwidth.
@@ -1134,6 +2035,407 @@ class EcologyLoop:
         meta["c2c_bandwidth_left"] = max(0.0, bandwidth - amount)
         meta[counter_key] = counter - 1
         return True
+
+    def _colony_expected_cost(self, members: list[str], window: int) -> float:
+        total = 0.0
+        window = max(1, window)
+        for organelle_id in members:
+            costs = [
+                float(value)
+                for value in self.population.energy.get(organelle_id, [])[-window:]
+                if math.isfinite(value)
+            ]
+            if not costs:
+                continue
+            avg_cost = sum(costs) / len(costs)
+            total += avg_cost * window
+        return total
+
+    def _colony_roi_series(self, members: list[str], window: int) -> tuple[list[float], list[float]]:
+        history: list[float] = []
+        latest: list[float] = []
+        window = max(1, window)
+        for organelle_id in members:
+            series = [
+                float(value)
+                for value in self.population.roi.get(organelle_id, [])[-window:]
+                if math.isfinite(value)
+            ]
+            if not series:
+                continue
+            history.extend(series)
+            latest.append(series[-1])
+        return history, latest
+
+    def _apply_colony_bankruptcy_guard(self, culled: list[str]) -> None:
+        if not self.colonies or not culled:
+            return
+        tolerance = int(getattr(self.config.assimilation_tuning, "colony_bankrupt_tolerance", 2))
+        for cid, meta in list(self.colonies.items()):
+            members = [str(x) for x in meta.get("members", [])]
+            hits = [oid for oid in culled if oid in members]
+            if not hits:
+                continue
+            count = int(meta.get("bankrupt_violations", 0)) + len(hits)
+            meta["bankrupt_violations"] = count
+            self._log_colony_event(
+                meta,
+                self.generation_index,
+                "bankrupt",
+                members=list(hits),
+                total=count,
+            )
+            if count >= tolerance:
+                self._log_colony_event(
+                    meta,
+                    self.generation_index,
+                    "dissolve",
+                    reason="bankrupt_guard",
+                )
+                self.colonies.pop(cid, None)
+
+    def _enter_colony_winter(self, cid: str, meta: dict[str, object], members: list[str]) -> None:
+        prev = meta.setdefault("winter_prev_ranks", {})
+        if not isinstance(prev, dict):
+            prev = {}
+            meta["winter_prev_ranks"] = prev
+        for organelle_id in members:
+            try:
+                organelle = self.host.get_organelle(organelle_id)
+            except Exception:
+                organelle = None
+            rank = getattr(organelle, "rank", None) if organelle is not None else None
+            if not isinstance(rank, int):
+                continue
+            prev.setdefault(organelle_id, rank)
+            target = max(1, rank - 1)
+            if target < rank:
+                try:
+                    if self.host.resize_organelle_rank(organelle_id, target):
+                        genome = self.population.population.get(organelle_id)
+                        if genome is not None:
+                            genome.rank = target
+                except Exception:
+                    continue
+
+    def _exit_colony_winter(self, meta: dict[str, object]) -> None:
+        prev = meta.pop("winter_prev_ranks", {}) or {}
+        if not isinstance(prev, dict):
+            return
+        for organelle_id, rank in prev.items():
+            if not isinstance(rank, int):
+                continue
+            try:
+                organelle = self.host.get_organelle(organelle_id)
+            except Exception:
+                organelle = None
+            current = getattr(organelle, "rank", None) if organelle is not None else None
+            if isinstance(current, int) and current >= rank:
+                continue
+            try:
+                if self.host.resize_organelle_rank(organelle_id, rank):
+                    genome = self.population.population.get(organelle_id)
+                    if genome is not None:
+                        genome.rank = rank
+            except Exception:
+                continue
+
+    def _run_colony_guard(self, cid: str, meta: dict[str, object], members: list[str]) -> None:
+        if not members:
+            return
+        try:
+            tasks = self._sample_holdout_tasks()
+        except Exception:
+            tasks = []
+        if not tasks:
+            return
+        stats = self._team_holdout_stats(members, tasks)
+        mean_roi = float(stats.get("mean", 0.0))
+        series = stats.get("series") or []
+        self._log_colony_event(
+            meta,
+            self.generation_index,
+            "deception_check",
+            mean=mean_roi,
+            tasks=len(series),
+        )
+
+    def _estimate_power(self, organelle_id: str, window: int = 5) -> float:
+        try:
+            return float(self.population.average_roi(organelle_id, limit=window))
+        except Exception:
+            return 0.0
+
+    def _population_roi_mean(self, limit: int = 5) -> float:
+        try:
+            value = float(self.population.aggregate_roi(limit=limit))
+        except Exception:
+            value = 0.0
+        if not math.isfinite(value):
+            return 0.0
+        return max(-10.0, min(10.0, value))
+
+    def _power_need(self, organelle_id: str) -> float:
+        tuning = self.config.assimilation_tuning
+        target = max(0.0, min(1.0, float(getattr(tuning, "power_target", 0.75))))
+        if target <= 0.0:
+            return 0.0
+        last_power = None
+        history = self.population.assimilation_history
+        for (oid, _family, _depth), records in history.items():
+            if oid != organelle_id or not records:
+                continue
+            for record in reversed(records):
+                value = record.get("power")
+                if isinstance(value, (int, float)) and value >= 0.0:
+                    last_power = float(value)
+                    break
+            if last_power is not None:
+                break
+        if last_power is None:
+            last_power = 0.0
+        last_power = max(0.0, min(1.0, float(last_power)))
+        need = max(0.0, target - last_power)
+        return max(0.0, min(1.0, need / target))
+
+    def _maybe_mint_evidence_token(self, organelle_id: str, power_need: float) -> int:
+        tuning = self.config.assimilation_tuning
+        threshold = max(0.0, min(1.0, float(getattr(tuning, "evidence_token_threshold", 1.0))))
+        if power_need < threshold:
+            return 0
+        amount = int(getattr(tuning, "evidence_token_mint", 1))
+        cap_value = int(getattr(tuning, "evidence_token_cap", 0))
+        cap = cap_value if cap_value > 0 else None
+        minted = self.population.grant_evidence(organelle_id, amount, cap=cap)
+        if minted and self._power_econ_stats is not None:
+            self._power_econ_stats["tokens_minted"] = int(self._power_econ_stats.get("tokens_minted", 0)) + minted
+        return minted
+
+    def _build_comms_hint(self, organelle_id: str, cell_meta: tuple[str, str] | None) -> str:
+        parts: list[str] = []
+        stats_map = getattr(self.environment, "organism_stats", None)
+        if isinstance(stats_map, dict):
+            per_org = stats_map.get(organelle_id)
+            if isinstance(per_org, dict) and per_org:
+                best_cell: tuple[str, str] | None = None
+                best_score: float | None = None
+                for cell, value in per_org.items():
+                    try:
+                        score = float(value)
+                    except Exception:
+                        continue
+                    if best_score is None or score > best_score:
+                        best_score = score
+                        if isinstance(cell, tuple) and len(cell) == 2:
+                            best_cell = (str(cell[0]), str(cell[1]))
+                        else:
+                            best_cell = None
+                if best_score is not None:
+                    if best_cell is not None:
+                        parts.append(f"best={best_cell[0]}:{best_cell[1]}@{best_score:.2f}")
+                    else:
+                        parts.append(f"best_score={best_score:.2f}")
+        if not parts and cell_meta is not None:
+            parts.append(f"focus={cell_meta[0]}:{cell_meta[1]}")
+        roi_history = self.population.roi.get(organelle_id, [])
+        if roi_history:
+            try:
+                parts.append(f"roi={float(roi_history[-1]):.2f}")
+            except Exception:
+                pass
+        genome = self.population.population.get(organelle_id)
+        if genome is not None:
+            explore_rate = getattr(genome, "explore_rate", None)
+            if isinstance(explore_rate, (int, float)):
+                parts.append(f"explore={float(explore_rate):.2f}")
+            hint_weight = getattr(genome, "hint_weight", None)
+            if isinstance(hint_weight, (int, float)) and float(hint_weight) > 0.0:
+                parts.append(f"hint={float(hint_weight):.2f}")
+        if parts:
+            return " | ".join(parts)
+        if cell_meta is not None:
+            return f"focus={cell_meta[0]}:{cell_meta[1]}"
+        return "share best cell and ROI once improved"
+
+    def _queue_comms_credit(self, poster: str | None, reader: str, baseline: float, credit_amount: float) -> None:
+        if not poster or poster == reader or credit_amount <= 0.0:
+            return
+        window = int(getattr(self.config.comms, "credit_power_window", 6))
+        min_delta = float(getattr(self.config.comms, "credit_power_min_delta", 0.05))
+        self._comms_credit_queue.append(
+            {
+                "poster": poster,
+                "reader": reader,
+                "baseline": baseline,
+                "credit": credit_amount,
+                "gen": self.generation_index,
+                "window": max(1, window),
+                "min_delta": max(0.0, min_delta),
+            }
+        )
+
+    def _log_comms_event(self, event_type: str, **payload: object) -> None:
+        entry: dict[str, object] = {"gen": self.generation_index, "type": event_type}
+        entry.update(payload)
+        self._comms_events_gen.append(entry)
+
+    def _process_comms_credit(self) -> None:
+        if not self._comms_credit_queue:
+            return
+        new_queue: list[dict[str, object]] = []
+        rng = getattr(self.environment, "rng", None)
+        for event in self._comms_credit_queue:
+            max_window = int(event.get("window", 6))
+            if self.generation_index - int(event.get("gen", self.generation_index)) > max_window:
+                continue
+            reader = str(event.get("reader", ""))
+            poster = str(event.get("poster", ""))
+            baseline = float(event.get("baseline", 0.0))
+            min_delta = float(event.get("min_delta", 0.0))
+            credit_amount = float(event.get("credit", 0.0))
+            current_power = self._estimate_power(reader)
+            delta = current_power - baseline
+            if delta >= min_delta:
+                try:
+                    self.host.ledger.credit_energy(poster, credit_amount)
+                    self._comms_stats_gen["credits"] = self._comms_stats_gen.get("credits", 0) + 1
+                    self._log_comms_event("credit", poster=poster, reader=reader, delta=delta, amount=credit_amount)
+                except Exception:
+                    pass
+                continue
+            # allow small stochastic decay to prevent infinite queue
+            if rng is not None and rng.random() < 0.05:
+                continue
+            new_queue.append(event)
+        self._comms_credit_queue = new_queue
+
+    def _apply_prompt_scaffold(self, task: GridTask, prompt_text: str) -> tuple[str, bool]:
+        cfg = getattr(self.config, "prompting", None)
+        if cfg is None or not getattr(cfg, "few_shot_enabled", False):
+            return prompt_text, False
+        examples = (getattr(cfg, "few_shot_examples", {}) or {}).get(task.family)
+        if not examples:
+            return prompt_text, False
+        header = getattr(cfg, "few_shot_header", "")
+        footer = getattr(cfg, "few_shot_footer", "")
+        separator = getattr(cfg, "few_shot_separator", "\n") or "\n"
+        lines: list[str] = []
+        if header:
+            lines.append(header)
+        added = 0
+        for entry in examples:
+            prompt_example = str(entry.get("prompt", "")).strip()
+            answer_example = str(entry.get("answer", "")).strip()
+            if not prompt_example or not answer_example:
+                continue
+            lines.append(f"Example Input: {prompt_example}")
+            lines.append(f"Example Output: {answer_example}")
+            added += 1
+        if added == 0:
+            return prompt_text, False
+        if footer:
+            lines.append(footer)
+        lines.append(f"Task: {prompt_text}")
+        scaffolded = separator.join(lines)
+        return scaffolded, True
+
+    def _update_winter_cycle(self) -> None:
+        cfg = getattr(self.config, "winter", None)
+        if cfg is None or not getattr(cfg, "enabled", False):
+            self._winter_active = False
+            self._winter_price_factor = 1.0
+            self._winter_ticket_multiplier = 1.0
+            return
+
+        interval = max(1, int(getattr(cfg, "winter_interval", 40)))
+        duration = max(1, int(getattr(cfg, "winter_duration", 4)))
+        price_mult = max(0.0, float(getattr(cfg, "price_multiplier", 1.0)))
+        ticket_mult = max(0.0, float(getattr(cfg, "ticket_multiplier", 1.0)))
+
+        if self._winter_active:
+            self._winter_price_factor = price_mult
+            self._winter_ticket_multiplier = ticket_mult
+            self._winter_timer -= 1
+            if self._winter_timer <= 0:
+                self._winter_active = False
+                self._winter_timer = 0
+                self._winter_price_factor = 1.0
+                self._winter_ticket_multiplier = 1.0
+                post_roi = self._population_roi_mean(limit=6)
+                pre_roi = float(self._winter_pre_roi)
+                pre_assim = int(self._winter_pre_assim_attempts)
+                post_assim = int(getattr(self, "_last_assim_attempts", 0))
+                self._winter_events_gen.append(
+                    {
+                        "gen": self.generation_index,
+                        "type": "winter_end",
+                        "pre_roi": pre_roi,
+                        "post_roi": post_roi,
+                        "delta_roi": post_roi - pre_roi,
+                        "pre_assim": pre_assim,
+                        "post_assim": post_assim,
+                        "delta_assim": post_assim - pre_assim,
+                    }
+                )
+                self._winter_pre_roi = 0.0
+                self._winter_pre_assim_attempts = 0
+                bonus = float(self.config.energy.m) * max(0.0, float(getattr(cfg, "post_winter_bonus", 0.0)))
+                if bonus > 0.0:
+                    credited = self._apply_post_winter_bonus(bonus)
+                    if credited:
+                        self._winter_events_gen.append({
+                            "gen": self.generation_index,
+                            "type": "winter_bonus",
+                            "credited": credited,
+                            "amount": bonus,
+                        })
+                self._winter_counter = 0
+            return
+
+        # not currently in winter
+        self._winter_price_factor = 1.0
+        self._winter_ticket_multiplier = 1.0
+        self._winter_counter += 1
+        if self._winter_counter >= interval:
+            self._winter_active = True
+            self._winter_timer = duration
+            self._winter_counter = 0
+            self._winter_price_factor = price_mult
+            self._winter_ticket_multiplier = ticket_mult
+            self._winter_pre_roi = self._population_roi_mean(limit=6)
+            self._winter_pre_assim_attempts = int(getattr(self, "_last_assim_attempts", 0))
+            self._winter_events_gen.append(
+                {
+                    "gen": self.generation_index,
+                    "type": "winter_start",
+                    "duration": duration,
+                    "price_multiplier": price_mult,
+                    "ticket_multiplier": ticket_mult,
+                    "pre_roi": float(self._winter_pre_roi),
+                    "pre_assim": int(self._winter_pre_assim_attempts),
+                }
+            )
+
+    def _apply_post_winter_bonus(self, amount: float) -> dict[str, float]:
+        credited: dict[str, float] = {}
+        if amount <= 0.0:
+            return credited
+        for organelle_id in self.population.population.keys():
+            try:
+                before = self.host.ledger.energy_balance(organelle_id)
+                cap = getattr(self.host.ledger, "energy_cap", before + amount)
+            except Exception:
+                continue
+            available = max(0.0, cap - before)
+            grant = min(amount, available)
+            if grant <= 0.0:
+                continue
+            try:
+                self.host.ledger.credit_energy(organelle_id, grant)
+            except Exception:
+                continue
+            credited[organelle_id] = float(grant)
+        return credited
 
     def _consume_c2c_latents(
         self,
@@ -1188,6 +2490,122 @@ class EcologyLoop:
         except Exception:
             pass
 
+    def _knowledge_cfg(self):
+        return getattr(self.config, "knowledge", None)
+
+    def _knowledge_enabled(self) -> bool:
+        cfg = self._knowledge_cfg()
+        return bool(cfg and getattr(cfg, "enabled", False))
+
+    def _prune_knowledge_cache(self) -> None:
+        if not self._knowledge_enabled() or not self._knowledge_store:
+            return
+        cfg = self._knowledge_cfg()
+        ttl = max(1, int(getattr(cfg, "ttl", 20)))
+        limit = max(1, int(getattr(cfg, "max_items", 8)))
+        now = self.generation_index
+        expired = 0
+        for organelle_id, entries in list(self._knowledge_store.items()):
+            pruned: list[dict[str, object]] = []
+            for entry in entries:
+                created = int(entry.get("gen", now))
+                if now - created <= ttl:
+                    pruned.append(entry)
+                else:
+                    expired += 1
+            if len(pruned) > limit:
+                pruned = pruned[:limit]
+            if pruned:
+                self._knowledge_store[organelle_id] = pruned
+            else:
+                self._knowledge_store.pop(organelle_id, None)
+        if expired:
+            self._knowledge_stats_gen["expired"] = self._knowledge_stats_gen.get("expired", 0) + expired
+
+    def _prepare_knowledge_prompt(self, organelle_id: str, task: GridTask) -> str:
+        if not self._knowledge_enabled():
+            return ""
+        if self._reserve_state.get(organelle_id, {}).get("active"):
+            return ""
+        if self._hazard_state.get(organelle_id, {}).get("active"):
+            return ""
+        entries = self._knowledge_store.get(organelle_id)
+        if not entries:
+            return ""
+        cfg = self._knowledge_cfg()
+        ttl = max(1, int(getattr(cfg, "ttl", 20)))
+        now = self.generation_index
+        relevant: list[str] = []
+        for entry in entries:
+            if entry.get("cell") != task.cell:
+                continue
+            created = int(entry.get("gen", now))
+            if now - created > ttl:
+                continue
+            note = entry.get("note")
+            if isinstance(note, str) and note:
+                relevant.append(note)
+        if not relevant:
+            return ""
+        read_cost = max(0.0, float(getattr(cfg, "read_cost", 0.0)))
+        if read_cost > 0.0 and not self.host.ledger.consume_energy(organelle_id, read_cost):
+            self._knowledge_stats_gen["read_denied"] = self._knowledge_stats_gen.get("read_denied", 0) + 1
+            return ""
+        max_items = max(1, int(getattr(cfg, "max_items", len(relevant))))
+        snippet = "\n".join(f"- {relevant[idx]}" for idx in range(min(len(relevant), max_items)))
+        self._knowledge_stats_gen["reads"] = self._knowledge_stats_gen.get("reads", 0) + 1
+        self._knowledge_stats_gen["hits"] = self._knowledge_stats_gen.get("hits", 0) + 1
+        return f"Memory cache for this cell:\n{snippet}"
+
+    def _record_knowledge_entry(self, organelle_id: str, task: GridTask, metrics: RouteMetrics) -> None:
+        if not self._knowledge_enabled():
+            return
+        answer = getattr(metrics, "answer", "")
+        if not isinstance(answer, str):
+            return
+        clean_answer = answer.strip()
+        if not clean_answer:
+            return
+        collapsed = textwrap.shorten(clean_answer.replace("\n", " "), width=160, placeholder="…")
+        note = f"{task.family}/{task.depth}: {collapsed}"
+        existing = self._knowledge_store.get(organelle_id, [])
+        if any(entry.get("note") == note and entry.get("cell") == task.cell for entry in existing):
+            return
+        cfg = self._knowledge_cfg()
+        write_cost = max(0.0, float(getattr(cfg, "write_cost", 0.0)))
+        if write_cost > 0.0 and not self.host.ledger.consume_energy(organelle_id, write_cost):
+            self._knowledge_stats_gen["write_denied"] = self._knowledge_stats_gen.get("write_denied", 0) + 1
+            return
+        updated = [{"cell": task.cell, "note": note, "gen": self.generation_index}]
+        updated.extend(entry for entry in existing if entry.get("note") != note)
+        max_items = max(1, int(getattr(cfg, "max_items", len(updated))))
+        if len(updated) > max_items:
+            updated = updated[:max_items]
+        self._knowledge_store[organelle_id] = updated
+        self._knowledge_stats_gen["writes"] = self._knowledge_stats_gen.get("writes", 0) + 1
+
+    def _log_colony_event(self, meta: dict[str, object], generation: int, event_type: str, **payload: object) -> None:
+        events = meta.setdefault("events", [])
+        entry: dict[str, object] = {"gen": generation, "type": event_type}
+        entry.update(payload)
+        if isinstance(events, list):
+            events.append(entry)
+            if len(events) > 120:
+                del events[:-120]
+        archive_entry = dict(entry)
+        archive_entry["colony"] = meta.get("id")
+        self._colony_events_archive.append(archive_entry)
+        if len(self._colony_events_archive) > 240:
+            self._colony_events_archive = self._colony_events_archive[-240:]
+
+    def _find_member_colony(self, organelle_id: str) -> tuple[str, dict[str, object]] | None:
+        for cid, meta in self.colonies.items():
+            members = meta.get("members", [])
+            if isinstance(members, list) and organelle_id in members:
+                meta.setdefault("id", cid)
+                return cid, meta
+        return None
+
     def _request_and_apply_policy(self, organelle_id: str) -> None:
         # Count attempt
         try:
@@ -1195,10 +2613,19 @@ class EcologyLoop:
         except Exception:
             self._policy_attempts_gen = 1
         allowed = list(getattr(self.config.policy, "allowed_fields", []))
+        example_payload = {
+            key: round(0.5 if idx == 0 else 0.1, 2)
+            for idx, key in enumerate(allowed)
+        }
+        example_json = json.dumps(example_payload) if example_payload else "{}"
+        keys_clause = ", ".join(allowed) if allowed else ""
         prompt = (
-            "Emit ONLY a single minified JSON object with these keys: "
-            + ", ".join(allowed)
-            + ". No prose, no code fences, no trailing commas. If unsure, emit {}."
+            "Respond ONLY with a minified JSON object containing the keys "
+            + keys_clause
+            + ". No prose, comments, Markdown, or additional keys."
+            " Example format: "
+            + example_json
+            + "\nIf you are uncertain, return {}."
         )
         result = self.host.step(
             prompt=prompt,
@@ -1279,6 +2706,8 @@ class EcologyLoop:
             "topup_cap_blocked": 0,
             "topup_already_sufficient": 0,
             "topup_disabled": 0,
+            "reserve_guard": 0,
+            "cautious_skip": 0,
         }
         merges_per_cell: Dict[GridKey, int] = {}
         per_cell_interval = self.config.assimilation_tuning.per_cell_interval
@@ -1298,6 +2727,7 @@ class EcologyLoop:
                     )
                     continue
             self._assim_attempt_total += 1
+
             if self.environment.canary_failed(genome.organelle_id):
                 gating["canary_failed"] += 1
                 self._record_assimilation_gate(
@@ -1306,6 +2736,7 @@ class EcologyLoop:
                     details={"generation": self.generation_index},
                 )
                 continue
+
             balance = self.host.ledger.energy_balance(genome.organelle_id)
             balance, topup_info = self._maybe_top_up_energy(genome, balance)
             status = topup_info.get("status", "unknown")
@@ -1319,6 +2750,21 @@ class EcologyLoop:
                 gating["topup_already_sufficient"] += 1
             elif status == "disabled":
                 gating["topup_disabled"] += 1
+
+            reserve_block = self._should_block_assimilation(genome.organelle_id)
+            if reserve_block is not None:
+                gating["reserve_guard"] += 1
+                self._record_assimilation_gate(
+                    reason="reserve_guard",
+                    organelle_id=genome.organelle_id,
+                    details=reserve_block,
+                )
+                continue
+
+            hazard_state = self._hazard_state.get(genome.organelle_id, {})
+            hazard_active = bool(hazard_state.get("active"))
+            cooldown = int(hazard_state.get("cooldown", 0))
+
             if balance < self.config.energy.m:
                 gating["low_energy"] += 1
                 self._record_assimilation_gate(
@@ -1332,6 +2778,47 @@ class EcologyLoop:
                     },
                 )
                 continue
+
+            if hazard_active:
+                gating["cautious_skip"] += 1
+                self._record_assimilation_gate(
+                    reason="cautious_skip",
+                    organelle_id=genome.organelle_id,
+                    details={"generation": self.generation_index, "z": hazard_state.get("z"), "roi": hazard_state.get("roi")},
+                )
+                self._log_survival_event(
+                    genome.organelle_id,
+                    "cautious_skip",
+                    mode="hazard",
+                    z=hazard_state.get("z"),
+                    roi=hazard_state.get("roi"),
+                )
+                continue
+
+            min_power_recovery = float(getattr(self.config.survival, "min_power_recovery", 0.0)) if getattr(self.config, "survival", None) else 0.0
+            if cooldown > 0 and min_power_recovery > 0.0:
+                recent_roi = float(self.population.average_roi(genome.organelle_id, limit=5))
+                if recent_roi < min_power_recovery:
+                    gating["cautious_skip"] += 1
+                    self._record_assimilation_gate(
+                        reason="cautious_skip",
+                        organelle_id=genome.organelle_id,
+                        details={"generation": self.generation_index, "cooldown": cooldown, "roi": recent_roi},
+                    )
+                    self._log_survival_event(
+                        genome.organelle_id,
+                        "cautious_skip",
+                        mode="recovery",
+                        cooldown=cooldown,
+                        roi=recent_roi,
+                    )
+                    continue
+
+            threshold = self.config.evolution.assimilation_threshold
+            hazard_margin = getattr(self.config.survival, "hazard_holdout_margin", 0.0) if getattr(self.config, "survival", None) else 0.0
+            if cooldown > 0 and hazard_margin:
+                threshold += float(hazard_margin)
+
             best_cell = self.environment.best_cell_score(genome.organelle_id)
             if best_cell is None:
                 gating["no_best_cell"] += 1
@@ -1367,7 +2854,7 @@ class EcologyLoop:
             if relief > 0.0:
                 tau = max(0.2, tau - relief)
             uplift_gate = ema - tau
-            if uplift_gate < self.config.evolution.assimilation_threshold:
+            if uplift_gate < threshold:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["uplift_below_threshold"] += 1
                 self._record_assimilation_gate(
@@ -1378,7 +2865,7 @@ class EcologyLoop:
                         "ema": ema,
                         "tau": self.config.controller.tau,
                         "uplift_gate": uplift_gate,
-                        "threshold": self.config.evolution.assimilation_threshold,
+                        "threshold": threshold,
                         "relief": relief,
                     },
                 )
@@ -1407,6 +2894,9 @@ class EcologyLoop:
             elif family in {"logic.bool", "word.count"}:
                 desired_min = max(desired_min, 6)
             available = len(scores) - (len(scores) % 2)
+            tokens_available = self.population.evidence_tokens(genome.organelle_id)
+            token_window = int(getattr(self.config.assimilation_tuning, "evidence_token_window", 0))
+            token_spent = False
             if available < base_min:
                 min_window = base_min
             else:
@@ -1415,18 +2905,36 @@ class EcologyLoop:
             if family in {"math", "math.sequence"}:
                 step = max(step, 4)
             if available < min_window:
-                self.assimilation_cooldown[key] = self.generation_index
-                gating["insufficient_scores"] += 1
-                self._record_assimilation_gate(
-                    reason="insufficient_scores",
-                    organelle_id=genome.organelle_id,
-                    details={
-                        "generation": self.generation_index,
-                        "scores_available": len(scores),
-                        "min_window": min_window,
-                    },
-                )
-                continue
+                usable_available = available - (available % 2)
+                if (
+                    not token_spent
+                    and token_window > 0
+                    and tokens_available > 0
+                    and usable_available >= max(4, min_window - token_window)
+                    and usable_available >= 4
+                ):
+                    if self.population.consume_evidence(genome.organelle_id, 1):
+                        tokens_available -= 1
+                        usable_available = usable_available - (usable_available % 2)
+                        if usable_available >= 4:
+                            available = usable_available
+                            min_window = min(min_window, usable_available)
+                            token_spent = True
+                            if self._power_econ_stats is not None:
+                                self._power_econ_stats["tokens_used"] = int(self._power_econ_stats.get("tokens_used", 0)) + 1
+                if not token_spent:
+                    self.assimilation_cooldown[key] = self.generation_index
+                    gating["insufficient_scores"] += 1
+                    self._record_assimilation_gate(
+                        reason="insufficient_scores",
+                        organelle_id=genome.organelle_id,
+                        details={
+                            "generation": self.generation_index,
+                            "scores_available": len(scores),
+                            "min_window": min_window,
+                        },
+                    )
+                    continue
             window_len = available
             while window_len > min_window and window_len - step >= min_window:
                 window_len_candidate = window_len - step
@@ -1601,6 +3109,24 @@ class EcologyLoop:
                             audit_info = {"post_roi": float(post_roi), "pre_roi": float(pre_roi) if pre_roi is not None else None, "tasks": len(tasks)}
                         except Exception:
                             audit_info = {"post_roi": None, "pre_roi": None, "tasks": 0}
+                    if audit_info is not None:
+                        attempt_detail["audit"] = audit_info
+                        pre_roi_val = audit_info.get("pre_roi")
+                        post_roi_val = audit_info.get("post_roi")
+                        delta_val: float | None = None
+                        if isinstance(pre_roi_val, (int, float)) and isinstance(post_roi_val, (int, float)):
+                            delta_val = float(post_roi_val) - float(pre_roi_val)
+                        audit_info["delta"] = delta_val
+                        audit_entry = {
+                            "generation": self.generation_index,
+                            "organelle_id": genome.organelle_id,
+                            "cell": {"family": cell[0], "depth": cell[1]},
+                            "pre_roi": audit_info.get("pre_roi"),
+                            "post_roi": audit_info.get("post_roi"),
+                            "delta": delta_val,
+                            "tasks": int(audit_info.get("tasks", 0) or 0),
+                        }
+                        self._merge_audits_gen.append(self._sanitize_telemetry(audit_entry))
                     self._spawn_replacement_from(genome)
                     removable.append(genome.organelle_id)
                     merges += 1
@@ -1680,7 +3206,21 @@ class EcologyLoop:
                             accept = len(team_series) >= min_power_tasks and (ci_low > baseline + margin)
                             if accept:
                                 cid = f"col_{genome.organelle_id[:4]}_{partner[:4]}"
-                                self.colonies.setdefault(cid, {"members": [genome.organelle_id, partner], "pot": 0.0, "reserve_ratio": 0.25, "created_gen": self.generation_index})
+                                meta = self.colonies.setdefault(
+                                    cid,
+                                    {
+                                        "members": [genome.organelle_id, partner],
+                                        "pot": 0.0,
+                                        "reserve_ratio": 0.25,
+                                        "created_gen": self.generation_index,
+                                    },
+                                )
+                                self._log_colony_event(
+                                    meta,
+                                    self.generation_index,
+                                    "create",
+                                    members=list(meta.get("members", [])),
+                                )
                                 self.promotions_this_gen += 1
                                 attempt_detail["team_promoted_colony"] = cid
                             # log team acceptance stats
@@ -1697,6 +3237,29 @@ class EcologyLoop:
                 except Exception:
                     pass
             self._record_assimilation_attempt(attempt_detail)
+            history_record = {
+                "generation": self.generation_index,
+                "uplift": float(result.event.uplift),
+                "p_value": float(result.event.p_value),
+                "passed": bool(decision_final),
+                "ema": float(self.environment.organism_stats.get(genome.organelle_id, {}).get(cell, 0.0)),
+                "roi": float(self.population.average_roi(genome.organelle_id)),
+                "probes": probe_records,
+                "holdout": holdout_info,
+                "sample_size": result.event.sample_size,
+                "control_mean": result.event.control_mean,
+                "control_std": result.event.control_std,
+                "treatment_mean": result.event.treatment_mean,
+                "treatment_std": result.event.treatment_std,
+                "energy_balance": result.event.energy_balance,
+                "energy_top_up": (
+                    result.event.energy_top_up.model_dump(mode="json")
+                    if result.event.energy_top_up is not None
+                    else None
+                ),
+            }
+            if audit_info is not None:
+                history_record["audit"] = audit_info
             if self.sink:
                 event = result.event.model_copy(
                     update={
@@ -1711,28 +3274,10 @@ class EcologyLoop:
             self.population.record_assimilation(
                 genome.organelle_id,
                 cell,
-                {
-                    "generation": self.generation_index,
-                    "uplift": float(result.event.uplift),
-                    "p_value": float(result.event.p_value),
-                    "passed": bool(decision_final),
-                    "ema": float(self.environment.organism_stats.get(genome.organelle_id, {}).get(cell, 0.0)),
-                    "roi": float(self.population.average_roi(genome.organelle_id)),
-                    "probes": probe_records,
-                    "holdout": holdout_info,
-                    "sample_size": result.event.sample_size,
-                    "control_mean": result.event.control_mean,
-                    "control_std": result.event.control_std,
-                    "treatment_mean": result.event.treatment_mean,
-                    "treatment_std": result.event.treatment_std,
-                    "energy_balance": result.event.energy_balance,
-                    "energy_top_up": (
-                        result.event.energy_top_up.model_dump(mode="json")
-                        if result.event.energy_top_up is not None
-                        else None
-                    ),
-                },
+                history_record,
             )
+            if token_spent:
+                attempt_detail["evidence_token_used"] = True
         for organelle_id in removable:
             self.host.retire_organelle(organelle_id)
             self.population.remove(organelle_id)
@@ -1774,7 +3319,30 @@ class EcologyLoop:
             stipend = float(getattr(self.config.assimilation_tuning, "trial_stipend", 0.5))
             self.host.ledger.set_energy(child_id, stipend)
             # register in population
-            self.population.register(Genome(organelle_id=child_id, drive_weights={"novelty": 0.1}, gate_bias=0.0, rank=target_rank))
+            donors = [
+                self.population.population.get(oid)
+                for oid in soup_ids
+                if oid in self.population.population
+            ]
+
+            def _avg_trait(attr: str) -> float:
+                values = [float(getattr(gen, attr, 0.0)) for gen in donors if gen is not None]
+                if not values:
+                    return 0.0
+                return max(0.0, min(1.0, sum(values) / len(values)))
+
+            self.population.register(
+                Genome(
+                    organelle_id=child_id,
+                    drive_weights={"novelty": 0.1},
+                    gate_bias=0.0,
+                    rank=target_rank,
+                    explore_rate=_avg_trait("explore_rate"),
+                    post_rate=_avg_trait("post_rate"),
+                    read_rate=_avg_trait("read_rate"),
+                    hint_weight=_avg_trait("hint_weight"),
+                )
+            )
             # track probation
             self.trial_offspring[child_id] = {
                 "parents": list(soup_ids),
@@ -1980,9 +3548,32 @@ class EcologyLoop:
             (family, depth), ema = best
             key = (str(family), str(depth), cost_bin(energies.get(oid, 0.0)))
             roi = float(self.population.average_roi(oid, limit=5))
+            novelty = float(
+                self.population.cell_novelty(
+                    oid,
+                    (str(family), str(depth)),
+                    scale=float(getattr(self.config.qd, "novelty_weight", 0.3)),
+                    floor=float(getattr(self.config.qd, "novelty_min", 0.05)),
+                )
+            )
             prev = self._qd_archive.get(key)
             if prev is None or roi > float(prev.get("roi", 0.0)):
-                self._qd_archive[key] = {"organelle_id": oid, "roi": roi, "ema": float(ema), "energy": energies.get(oid, 0.0)}
+                self._qd_archive[key] = {
+                    "organelle_id": oid,
+                    "roi": roi,
+                    "ema": float(ema),
+                    "energy": energies.get(oid, 0.0),
+                    "novelty": novelty,
+                }
+        cap = max(1, int(getattr(self.config.qd, "archive_cap", 256)))
+        if len(self._qd_archive) > cap:
+            excess = len(self._qd_archive) - cap
+            worst_keys = sorted(
+                self._qd_archive.items(),
+                key=lambda kv: (float(kv[1].get("roi", 0.0)), float(kv[1].get("novelty", 0.0))),
+            )[:excess]
+            for key, _ in worst_keys:
+                self._qd_archive.pop(key, None)
         return len(self._qd_archive)
 
     def _sample_team_synergy(self) -> None:
@@ -1995,25 +3586,73 @@ class EcologyLoop:
         tasks = self._sample_holdout_tasks()
         if not tasks:
             return
+        tune = self.config.assimilation_tuning
+        delta_cfg = float(getattr(tune, "team_probe_synergy_delta", 0.12))
+        nu_cfg = float(getattr(tune, "team_probe_variance_nu", 0.25))
+        sustain_required = max(1, int(getattr(tune, "team_probe_sustain", 3)))
         for a, b in pairs:
-            solo_a = self._evaluate_holdout_roi(a, tasks)
-            solo_b = self._evaluate_holdout_roi(b, tasks)
-            # Cheap team ROI proxy: best-of-two per task (approximates routing)
-            team_roi = max(solo_a, solo_b)
-            synergy = team_roi - (solo_a + solo_b)
+            solo_a_stats = self._team_holdout_stats([a], tasks)
+            solo_b_stats = self._team_holdout_stats([b], tasks)
+            team_stats = self._team_holdout_stats([a, b], tasks)
+            solo_means = [float(solo_a_stats["mean"]), float(solo_b_stats["mean"])]
+            solo_vars = [float(solo_a_stats["variance"]), float(solo_b_stats["variance"])]
+            team_mean = float(team_stats["mean"])
+            solo_sum = sum(solo_means)
+            synergy_sum = team_mean - solo_sum
+            delta = team_mean - max(solo_means)
+            min_solo_var = min((v for v in solo_vars if v > 1e-6), default=0.0)
+            if min_solo_var > 0.0:
+                variance_ratio = float(team_stats["variance"]) / min_solo_var
+                variance_delta = float(team_stats["variance"]) - min_solo_var
+            else:
+                variance_ratio = 0.0 if float(team_stats["variance"]) <= 1e-6 else 1.0
+                variance_delta = float(team_stats["variance"])
+            synergy = delta
+            pair = (min(a, b), max(a, b))
+            meets_synergy = solo_sum > 0.0 and synergy_sum >= delta_cfg * solo_sum
+            if min_solo_var > 1e-6:
+                meets_variance = variance_delta <= -nu_cfg * min_solo_var
+            else:
+                meets_variance = float(team_stats["variance"]) <= nu_cfg
+            pass_condition = meets_synergy and meets_variance
+            sustain_count = 0
+            if pass_condition:
+                sustain_count = self._synergy_sustain.get(pair, 0) + 1
+            else:
+                sustain_count = 0
+            self._synergy_sustain[pair] = sustain_count
             sample = {
                 "generation": self.generation_index,
                 "a": a,
                 "b": b,
-                "solo_a": float(solo_a),
-                "solo_b": float(solo_b),
-                "team": float(team_roi),
+                "solo_a": float(solo_means[0]),
+                "solo_b": float(solo_means[1]),
+                "team": team_mean,
                 "synergy": float(synergy),
+                "synergy_sum": float(synergy_sum),
+                "solo_sum": float(solo_sum),
                 "tasks": int(len(tasks)),
+                "team_var": float(team_stats["variance"]),
+                "solo_var_min": float(min_solo_var),
+                "variance_ratio": float(variance_ratio),
+                "variance_delta": float(variance_delta),
+                "passes_threshold": bool(pass_condition),
+                "sustain": sustain_count,
             }
             self._synergy_window.append(self._sanitize_telemetry(sample))
             if len(self._synergy_window) > 24:
                 self._synergy_window = self._synergy_window[-24:]
+            if pass_condition and sustain_count >= sustain_required:
+                candidate = {
+                    "pair": pair,
+                    "generation": self.generation_index,
+                    "synergy_sum": float(synergy_sum),
+                    "solo_sum": float(solo_sum),
+                    "variance_delta": float(variance_delta),
+                    "variance_ratio": float(variance_ratio),
+                    "sustain": sustain_count,
+                }
+                self._team_probe_candidates_gen.append(candidate)
 
     def _maybe_promote_colonies(self) -> None:
         if not bool(getattr(self.config.assimilation_tuning, "colonies_enabled", False)):
@@ -2030,48 +3669,307 @@ class EcologyLoop:
         margin = float(getattr(self.config.assimilation_tuning, "holdout_margin", 0.03))
         review_interval = int(getattr(self.config.assimilation_tuning, "colony_review_interval", max(3, windows)))
         required_passes = int(getattr(self.config.assimilation_tuning, "colony_required_passes", 2))
+        expand_delta = float(getattr(self.config.assimilation_tuning, "colony_expand_delta", margin))
         for (a, b), records in by_pair.items():
             if len(records) < windows:
                 continue
             window_records = records[-windows:]
-            synergies = [float(rec.get("synergy", 0.0)) for rec in window_records]
-            mean_s = sum(synergies) / windows if synergies else 0.0
-            if mean_s >= delta and (a in self.population.population) and (b in self.population.population):
-                cid = f"col_{a[:4]}_{b[:4]}"
-                if cid in self.colonies:
-                    continue
-                team_vals = [float(rec.get("team", 0.0)) for rec in window_records]
-                solo_a_vals = [float(rec.get("solo_a", 0.0)) for rec in window_records]
-                solo_b_vals = [float(rec.get("solo_b", 0.0)) for rec in window_records]
+            if not (a in self.population.population and b in self.population.population):
+                continue
+            if not all(isinstance(rec.get("synergy"), (int, float)) for rec in window_records):
+                continue
+            if not all(float(rec.get("synergy", 0.0)) >= delta for rec in window_records):
+                continue
+            if not all(float(rec.get("synergy", 0.0)) >= expand_delta for rec in window_records):
+                continue
+            variance_pass = True
+            for rec in window_records:
+                ratio = float(rec.get("variance_ratio", 1.0))
+                if ratio > 1.0 - variance_improve + 1e-6:
+                    variance_pass = False
+                    break
+            if not variance_pass:
+                continue
+            mean_s = sum(float(rec.get("synergy", 0.0)) for rec in window_records) / windows
+            cid = f"col_{a[:4]}_{b[:4]}"
+            if cid in self.colonies:
+                continue
+            colony_meta = self._create_colony_meta(cid, [a, b])
+            colony_meta.update({
+                "last_delta": mean_s,
+                "margin": margin,
+                "last_variance_ratio": float(window_records[-1].get("variance_ratio", 1.0)),
+            })
+            colony_meta["review_interval"] = review_interval
+            colony_meta["required_passes"] = required_passes
+            colony_meta["holdout_passes"] = 0
+            colony_meta["holdout_failures"] = 0
+            colony_meta["last_review"] = self.generation_index
+            colony_meta.setdefault("expand_history", [])
+            self.colonies[cid] = colony_meta
+            self._log_colony_event(colony_meta, self.generation_index, "create", members=list(colony_meta.get("members", [])), reason="synergy")
+
+    def _colony_refresh_roles(self, meta: dict[str, object]) -> None:
+        members = [str(x) for x in meta.get("members", [])]
+        meta["members"] = members
+        roles: dict[str, int] = {}
+        for idx, member in enumerate(members):
+            roles[member] = idx
+        meta["roles"] = roles
+
+    def _create_colony_meta(
+        self,
+        cid: str,
+        members: list[str],
+        *,
+        template: dict[str, object] | None = None,
+        pot: float = 0.0,
+    ) -> dict[str, object]:
+        cfg = self.config.assimilation_tuning
+        meta: dict[str, object] = {
+            "id": cid,
+            "members": list(members),
+            "pot": float(pot),
+            "reserve_ratio": float(getattr(cfg, "colony_reserve_ratio", 0.25)),
+            "created_gen": self.generation_index,
+            "last_review": self.generation_index,
+            "holdout_passes": 0,
+            "holdout_failures": 0,
+            "review_interval": int(getattr(cfg, "colony_review_interval", 6)),
+            "required_passes": int(getattr(cfg, "colony_required_passes", 2)),
+            "expand_history": [],
+        }
+        tier_count = int(getattr(cfg, "colony_tier_count", 1))
+        base_tier = 0
+        if template is not None:
+            base_tier = int(template.get("tier", 0))
+        base_tier = max(0, min(tier_count - 1, base_tier))
+        meta["tier"] = base_tier
+        meta["tier_cooldown"] = 0
+        base_tax = float(getattr(cfg, "colony_tax_rate", 0.1))
+        base_subsidy = float(getattr(cfg, "colony_subsidy_fraction", 0.25))
+        mutation_scale = float(getattr(cfg, "colony_trait_mutation_scale", 0.05))
+        if template is not None:
+            tax = float(template.get("tax_rate", base_tax))
+            subsidy = float(template.get("subsidy_frac", base_subsidy))
+            cohesion = float(template.get("cohesion_weight", 0.5))
+            tax += random.gauss(0.0, mutation_scale)
+            subsidy += random.gauss(0.0, mutation_scale)
+            cohesion += random.gauss(0.0, mutation_scale)
+            meta["comms_bonus"] = float(template.get("comms_bonus", 0.0))
+        else:
+            tax = base_tax
+            subsidy = base_subsidy
+            cohesion = 0.5
+            meta["comms_bonus"] = 0.0
+        meta["tax_rate"] = max(0.0, min(0.5, tax))
+        meta["subsidy_frac"] = max(0.0, min(1.0, subsidy))
+        meta["cohesion_weight"] = max(0.0, min(1.0, cohesion))
+        meta["roi_mean"] = 0.0
+        meta["fitness"] = 0.0
+        meta["fitness_components"] = {"roi_mean": 0.0, "pot_ratio": 0.0, "bandwidth": 0.0}
+        self._colony_refresh_roles(meta)
+        return meta
+
+    def _dissolve_colony(self, cid: str, *, reason: str, reassign_pot: bool = False) -> tuple[list[str], float]:
+        meta = self.colonies.get(cid)
+        if meta is None:
+            return [], 0.0
+        members = [str(x) for x in meta.get("members", [])]
+        pot = float(meta.get("pot", 0.0))
+        share = pot / max(len(members), 1) if members else 0.0
+        inherited_pot = pot if reassign_pot else 0.0
+        if share > 0.0 and not reassign_pot:
+            for member in members:
                 try:
-                    team_var = float(pstdev(team_vals)) if len(team_vals) >= 2 else 0.0
-                except Exception:
-                    team_var = 0.0
-                solo_var_candidates: list[float] = []
-                try:
-                    if len(solo_a_vals) >= 2:
-                        solo_var_candidates.append(float(pstdev(solo_a_vals)))
-                    if len(solo_b_vals) >= 2:
-                        solo_var_candidates.append(float(pstdev(solo_b_vals)))
+                    self.host.ledger.credit_energy(member, share)
                 except Exception:
                     pass
-                min_variance = min((v for v in solo_var_candidates if math.isfinite(v)), default=0.0)
-                if min_variance > 0.0 and team_var > (1.0 - variance_improve) * min_variance:
-                    continue
-                colony_meta = {
-                    "members": [a, b],
-                    "pot": 0.0,
-                    "reserve_ratio": 0.25,
-                    "created_gen": self.generation_index,
-                    "last_review": self.generation_index,
-                    "holdout_passes": 0,
-                    "holdout_failures": 0,
-                    "review_interval": review_interval,
-                    "required_passes": required_passes,
-                    "last_delta": mean_s,
-                    "margin": margin,
+        meta["pot"] = 0.0
+        self._log_colony_event(meta, self.generation_index, "dissolve", reason=reason, members=list(members), pot=float(pot))
+        self.colonies.pop(cid, None)
+        return members, float(inherited_pot)
+
+    def _replicate_colony(self, parent_cid: str, candidates: list[str], *, inherited_pot: float = 0.0) -> dict[str, object] | None:
+        parent = self.colonies.get(parent_cid)
+        if parent is None:
+            return None
+        cfg = self.config.assimilation_tuning
+        min_size = int(getattr(cfg, "colony_min_size", 2))
+        pool = [oid for oid in candidates if oid in self.population.population]
+        if len(pool) < min_size:
+            return None
+        pool.sort(key=lambda oid: self.population.average_roi(oid, limit=5), reverse=True)
+        members = pool[:min_size]
+        for member in members:
+            if member in candidates:
+                candidates.remove(member)
+        parent_pot = max(0.0, float(parent.get("pot", 0.0)))
+        max_share = parent_pot * 0.25
+        pot_share = min(max_share, parent_pot)
+        parent["pot"] = parent_pot - pot_share
+        inherited_pot = max(0.0, float(inherited_pot))
+        child_cid = f"{parent_cid}_c{self.generation_index}"
+        child_meta = self._create_colony_meta(child_cid, members, template=parent, pot=pot_share + inherited_pot)
+        self.colonies[child_cid] = child_meta
+        self._log_colony_event(parent, self.generation_index, "selection_win", child=child_cid, fitness=float(parent.get("fitness", 0.0)))
+        self._log_colony_event(
+            child_meta,
+            self.generation_index,
+            "create",
+            members=list(members),
+            parent=parent_cid,
+            inherited_pot=float(inherited_pot),
+        )
+        return child_meta
+
+    def _colony_selection_step(self) -> None:
+        cfg = self.config.assimilation_tuning
+        if not getattr(cfg, "colony_selection_enabled", False):
+            return
+        interval = max(1, int(getattr(cfg, "colony_selection_interval", 20)))
+        if self.generation_index % interval != 0:
+            return
+        if len(self.colonies) < 2:
+            return
+        min_size = int(getattr(cfg, "colony_min_size", 2))
+        colonies: list[tuple[str, float, dict[str, object]]] = []
+        for cid, meta in self.colonies.items():
+            members = meta.get("members", [])
+            if not isinstance(members, list) or len(members) < min_size:
+                continue
+            fitness = float(meta.get("fitness", float("-inf")))
+            colonies.append((cid, fitness, meta))
+        if len(colonies) < 2:
+            return
+        colonies.sort(key=lambda item: item[1])
+        worst_cid, worst_fit, worst_meta = colonies[0]
+        best_cid, best_fit, best_meta = colonies[-1]
+        margin = float(getattr(cfg, "colony_selection_margin", 0.05))
+        if best_fit - worst_fit < margin:
+            return
+        freed_members, freed_pot = self._dissolve_colony(worst_cid, reason="selection", reassign_pot=True)
+        if not freed_members and freed_pot <= 0.0:
+            return
+        pool = self._colony_selection_pool
+        pool_members: list[str] = pool.setdefault("members", [])
+        pool_events: list[dict[str, object]] = pool.setdefault("events", [])
+        existing = set(pool_members)
+        for member in freed_members:
+            if member not in existing:
+                pool_members.append(member)
+                existing.add(member)
+        reward_frac = float(getattr(cfg, "colony_selection_reward_frac", 0.25))
+        reward_frac = max(0.0, min(1.0, reward_frac))
+        reward_bonus = freed_pot * reward_frac
+        pool_pot = float(pool.get("pot", 0.0)) + freed_pot
+        if reward_bonus > 0.0 and best_meta is not None:
+            pool_pot -= reward_bonus
+            best_meta["pot"] = float(best_meta.get("pot", 0.0)) + reward_bonus
+            self._log_colony_event(best_meta, self.generation_index, "selection_bonus", amount=float(reward_bonus), source=worst_cid)
+        pool["pot"] = max(0.0, pool_pot)
+        event_payload = {
+            "gen": self.generation_index,
+            "type": "pool_add",
+            "colony": worst_cid,
+            "count": len(freed_members),
+            "pot": float(freed_pot),
+        }
+        pool_events.append(event_payload)
+        if len(pool_events) > 200:
+            del pool_events[:-200]
+        self._colony_selection_stats["dissolved"] = int(self._colony_selection_stats.get("dissolved", 0)) + 1
+        min_pool = float(getattr(cfg, "colony_selection_min_pool", 0.0))
+        created = 0
+        min_pool = max(0.0, min_pool)
+        while len(pool_members) >= min_size:
+            if pool["pot"] < min_pool:
+                break
+            reserve_floor = float(best_meta.get("reserve_floor", self.config.energy.m)) if best_meta else self.config.energy.m
+            inherit_target = max(min_pool, reserve_floor * 0.5)
+            inherit_amount = min(float(pool["pot"]), inherit_target)
+            if inherit_amount <= 0.0:
+                break
+            pool["pot"] = max(0.0, float(pool["pot"]) - inherit_amount)
+            child_meta = self._replicate_colony(best_cid, pool_members, inherited_pot=inherit_amount)
+            if child_meta is None:
+                pool["pot"] = float(pool.get("pot", 0.0)) + inherit_amount
+                break
+            created += 1
+            pool_events.append(
+                {
+                    "gen": self.generation_index,
+                    "type": "replicate",
+                    "from": best_cid,
+                    "child": child_meta.get("id"),
+                    "inherit_pot": float(inherit_amount),
                 }
-                self.colonies[cid] = colony_meta
+            )
+            if pool["pot"] < min_pool:
+                break
+        if created:
+            self._colony_selection_stats["replicated"] = int(self._colony_selection_stats.get("replicated", 0)) + created
+        self._colony_selection_stats["pool_members"] = len(pool_members)
+        self._colony_selection_stats["pool_pot"] = round(float(pool.get("pot", 0.0)), 4)
+        events = self._colony_selection_stats.setdefault("events", [])
+        events.append(
+            {
+                "gen": self.generation_index,
+                "type": "selection",
+                "dissolved": worst_cid,
+                "best": best_cid,
+                "created": created,
+                "pool_pot": float(pool.get("pot", 0.0)),
+            }
+        )
+        if len(events) > 200:
+            del events[:-200]
+
+    def _colony_tier_migration(self) -> None:
+        cfg = self.config.assimilation_tuning
+        tier_count = int(getattr(cfg, "colony_tier_count", 1))
+        if tier_count <= 1 or not self.colonies:
+            return
+        promote_passes = int(getattr(cfg, "colony_tier_promote_passes", 3))
+        promote_delta = float(getattr(cfg, "colony_tier_promote_delta", 0.1))
+        demote_failures = int(getattr(cfg, "colony_tier_demote_failures", 3))
+        demote_delta = float(getattr(cfg, "colony_tier_demote_delta", -0.05))
+        hazard_floor = float(getattr(cfg, "colony_tier_hazard_floor", -2.0))
+        cooldown_default = int(getattr(cfg, "colony_tier_cooldown", 3))
+        for cid, meta in self.colonies.items():
+            tier = int(meta.get("tier", 0))
+            cooldown = int(meta.get("tier_cooldown", 0))
+            if cooldown > 0:
+                meta["tier_cooldown"] = cooldown - 1
+                continue
+            passes = int(meta.get("holdout_passes", 0))
+            failures = int(meta.get("holdout_failures", 0))
+            delta = float(meta.get("last_delta", 0.0))
+            hazard = float(meta.get("hazard_z", 0.0))
+            new_tier = tier
+            reason = None
+            if tier < tier_count - 1 and passes >= promote_passes and delta >= promote_delta:
+                new_tier = tier + 1
+                reason = "tier_promote"
+            elif tier > 0 and (failures >= demote_failures or delta <= demote_delta or hazard <= hazard_floor):
+                new_tier = tier - 1
+                reason = "tier_demote"
+            if new_tier != tier:
+                meta["tier"] = new_tier
+                meta["tier_cooldown"] = max(0, cooldown_default)
+                if reason == "tier_promote":
+                    meta["holdout_passes"] = 0
+                else:
+                    meta["holdout_failures"] = 0
+                self._log_colony_event(
+                    meta,
+                    self.generation_index,
+                    reason if reason else "tier_change",
+                    tier=int(tier),
+                    new_tier=int(new_tier),
+                    delta=float(delta),
+                    hazard=float(hazard),
+                )
 
     def _tick_colonies(self) -> None:
         if not self.colonies:
@@ -2079,59 +3977,235 @@ class EcologyLoop:
         cfg = self.config.assimilation_tuning
         max_failures = int(getattr(cfg, "colony_max_failures", 2))
         for cid, meta in list(self.colonies.items()):
+            meta.setdefault("id", cid)
+            meta.setdefault("tax_rate", float(getattr(cfg, "colony_tax_rate", 0.1)))
+            meta.setdefault("subsidy_frac", float(getattr(cfg, "colony_subsidy_fraction", 0.25)))
+            meta.setdefault("cohesion_weight", 0.5)
+            meta.setdefault("comms_bonus", 0.0)
             members: list[str] = [str(x) for x in meta.get("members", [])]
+            meta["members"] = members
+            self._colony_refresh_roles(meta)
             pot = float(meta.get("pot", 0.0))
-            earn = 0.0
-            for m in members:
-                deltas = self.population.recent_energy_deltas(m, limit=4)
-                earn += sum(d for d in deltas if isinstance(d, (int, float))) * 0.10
-            pot = max(0.0, pot + earn)
+            earn = float(meta.pop("_pot_earn_gen", 0.0))
+            if earn:
+                self._log_colony_event(meta, self.generation_index, "pot_update", pot=float(pot), earn=float(earn))
+            reserve_ticket_mult = float(getattr(cfg, "colony_reserve_ticket_multiplier", 3.0))
+            reserve_ratio_cfg = float(getattr(cfg, "colony_reserve_ratio", 0.25))
+            reserve_cost_window = int(getattr(cfg, "colony_reserve_cost_window", 6))
+            expected_cost = self._colony_expected_cost(members, reserve_cost_window)
+            reserve_floor = max(self.config.energy.m * reserve_ticket_mult, reserve_ratio_cfg * expected_cost)
+            meta["reserve_floor"] = float(reserve_floor)
+            reserve_prev = bool(meta.get("reserve_active"))
+            reserve_active = pot < reserve_floor
+            meta["reserve_active"] = reserve_active
+            if reserve_active:
+                meta["freeze_reproduction"] = True
+                if not reserve_prev:
+                    self._log_colony_event(
+                        meta,
+                        self.generation_index,
+                        "reserve_enter",
+                        pot=float(pot),
+                        floor=float(reserve_floor),
+                    )
+            else:
+                meta.pop("freeze_reproduction", None)
+                if reserve_prev:
+                    self._log_colony_event(
+                        meta,
+                        self.generation_index,
+                        "reserve_exit",
+                        pot=float(pot),
+                        floor=float(reserve_floor),
+                    )
+            hazard_window = int(getattr(cfg, "colony_winter_window", 6))
+            roi_history, roi_latest = self._colony_roi_series(members, hazard_window)
+            hazard_z = 0.0
+            if len(roi_history) >= max(3, hazard_window):
+                try:
+                    hist_mean = sum(roi_history) / len(roi_history)
+                    hist_std = pstdev(roi_history) if len(roi_history) > 1 else 0.0
+                    latest_mean = (
+                        sum(roi_latest) / len(roi_latest) if roi_latest else hist_mean
+                    )
+                    if hist_std > 1e-6:
+                        hazard_z = (latest_mean - hist_mean) / hist_std
+                except Exception:
+                    hazard_z = 0.0
+            meta["hazard_z"] = float(hazard_z)
+            subsidy_threshold = float(getattr(cfg, "colony_subsidy_threshold", 1.0))
+            subsidy_frac = float(meta.get("subsidy_frac", getattr(cfg, "colony_subsidy_fraction", 0.25)))
+            subsidies: list[tuple[str, float]] = []
+            if subsidy_frac > 0.0 and subsidy_threshold > 0.0:
+                threshold_balance = subsidy_threshold * self.config.energy.m
+                for member in members:
+                    try:
+                        bal = float(self.host.ledger.energy_balance(member))
+                    except Exception:
+                        bal = 0.0
+                    if bal >= threshold_balance or pot <= 0.0:
+                        continue
+                    deficit = threshold_balance - bal
+                    grant = min(pot * subsidy_frac, deficit)
+                    if grant <= 0.0:
+                        continue
+                    try:
+                        self.host.ledger.credit_energy(member, grant)
+                    except Exception:
+                        continue
+                    pot -= grant
+                    subsidies.append((member, grant))
+            for member, amount in subsidies:
+                self._log_colony_event(meta, self.generation_index, "subsidy", member=member, amount=float(amount))
+            meta["pot"] = pot
+            roi_vals = [
+                float(self.population.average_roi(m, limit=5))
+                for m in members
+                if m in self.population.population
+            ]
+            roi_vals = [v for v in roi_vals if math.isfinite(v)]
+            roi_mean = sum(roi_vals) / len(roi_vals) if roi_vals else 0.0
+            meta["roi_mean"] = roi_mean
+            reserve_floor = float(meta.get("reserve_floor", max(self.config.energy.m, 1.0)))
+            pot_ratio = pot / max(reserve_floor, 1e-6) if reserve_floor > 0 else 0.0
+            pot_ratio = max(0.0, min(2.0, pot_ratio))
+            alpha = float(getattr(cfg, "colony_selection_alpha", 1.0))
+            beta_weight = float(getattr(cfg, "colony_selection_beta", 0.2))
+            gamma_weight = float(getattr(cfg, "colony_selection_gamma", 0.0))
+            bandwidth_val = float(meta.get("bandwidth_budget", meta.get("bandwidth_left", 0.0)))
+            fitness = alpha * roi_mean + beta_weight * pot_ratio + gamma_weight * bandwidth_val
+            meta["fitness"] = fitness
+            meta["fitness_components"] = {
+                "roi_mean": roi_mean,
+                "pot_ratio": pot_ratio,
+                "bandwidth": bandwidth_val,
+            }
+            winter_prev = bool(meta.get("winter_mode"))
+            winter_threshold = -abs(float(getattr(cfg, "colony_winter_z_kappa", 1.0)))
+            winter_mode = hazard_z <= winter_threshold
+            meta["winter_mode"] = winter_mode
+            if winter_mode and not winter_prev:
+                self._log_colony_event(
+                    meta,
+                    self.generation_index,
+                    "winter_enter",
+                    z=float(hazard_z),
+                )
+                self._enter_colony_winter(cid, meta, members)
+            elif not winter_mode and winter_prev:
+                self._log_colony_event(
+                    meta,
+                    self.generation_index,
+                    "winter_exit",
+                    z=float(hazard_z),
+                )
+                self._exit_colony_winter(meta)
             review_interval = int(meta.get("review_interval", 5))
             last_review = int(meta.get("last_review", meta.get("created_gen", self.generation_index)))
             required_passes = int(meta.get("required_passes", 2))
             margin = float(meta.get("margin", getattr(cfg, "holdout_margin", 0.03)))
+            variance_improve = float(getattr(cfg, "colony_variance_improve", 0.2))
+            expand_delta = float(getattr(cfg, "colony_expand_delta", margin))
+            expand_windows = int(getattr(cfg, "colony_expand_windows", max(2, review_interval)))
+            shrink_delta = float(getattr(cfg, "colony_shrink_delta", -0.02))
             if len(members) >= 2 and self.generation_index - last_review >= review_interval:
                 tasks = self._sample_holdout_tasks()
-                deltas: list[float] = []
+                delta = float("-inf")
+                variance_ratio = 1.0
+                pass_gate = False
                 if tasks:
                     try:
-                        team_roi = self._evaluate_team_holdout_roi(members[0], members[1], tasks)
-                        baselines = [self._evaluate_holdout_roi(mem, tasks) for mem in members]
-                        baseline = max(baselines)
-                        delta = team_roi - baseline
+                        team_stats = self._team_holdout_stats(members, tasks)
+                        solo_stats = [self._team_holdout_stats([mem], tasks) for mem in members]
+                        solo_means = [float(stat["mean"]) for stat in solo_stats]
+                        solo_vars = [float(stat["variance"]) for stat in solo_stats]
+                        delta = float(team_stats["mean"]) - max(solo_means) if solo_means else float(team_stats["mean"])
+                        min_var = min((v for v in solo_vars if v > 1e-6), default=0.0)
+                        team_var = float(team_stats["variance"])
+                        if min_var > 0.0:
+                            variance_ratio = team_var / min_var
+                        else:
+                            variance_ratio = 0.0 if team_var <= 1e-6 else 1.0
+                        pass_gate = delta >= margin and variance_ratio <= (1.0 - variance_improve + 1e-6)
                     except Exception:
                         delta = float("-inf")
-                else:
-                    delta = float("-inf")
+                        variance_ratio = 1.0
+                        pass_gate = False
+                meta.setdefault("delta_history", []).append(float(delta))
+                meta["delta_history"] = meta["delta_history"][-24:]
+                meta.setdefault("variance_history", []).append(float(variance_ratio))
+                meta["variance_history"] = meta["variance_history"][-24:]
                 meta["last_review"] = self.generation_index
                 meta["last_delta"] = float(delta)
-                if delta >= margin:
+                meta["last_variance_ratio"] = float(variance_ratio)
+                variance_leash = float(getattr(cfg, "colony_variance_leash", 1.5))
+                variance_guard = variance_ratio >= variance_leash
+                meta["variance_guard"] = bool(variance_guard)
+                if variance_guard:
+                    if not meta.get("_variance_logged"):
+                        self._log_colony_event(
+                            meta,
+                            self.generation_index,
+                            "variance_guard",
+                            variance_ratio=float(variance_ratio),
+                        )
+                        meta["_variance_logged"] = True
+                else:
+                    meta.pop("_variance_logged", None)
+                if pass_gate:
                     meta["holdout_passes"] = int(meta.get("holdout_passes", 0)) + 1
+                    meta["holdout_failures"] = max(0, int(meta.get("holdout_failures", 0)) - 1)
+                    self._log_colony_event(
+                        meta,
+                        self.generation_index,
+                        "holdout_pass",
+                        delta=float(delta),
+                        variance_ratio=float(variance_ratio),
+                    )
                 else:
                     meta["holdout_failures"] = int(meta.get("holdout_failures", 0)) + 1
+                    self._log_colony_event(
+                        meta,
+                        self.generation_index,
+                        "holdout_fail",
+                        delta=float(delta),
+                        variance_ratio=float(variance_ratio),
+                    )
                 # Shrink instead of dissolve when feasible
                 try:  # pragma: no cover - exercised in long runs
                     min_size = int(getattr(cfg, "colony_min_size", 2))
                 except Exception:  # pragma: no cover
                     min_size = 2
+                shrink_trigger = (
+                    float(meta.get("last_delta", 0.0)) <= shrink_delta
+                    or variance_ratio > (1.0 - variance_improve + 1e-6)
+                    or variance_guard
+                )
                 if (
                     len(members) > min_size
-                    and float(meta.get("last_delta", 0.0)) < 0.0
+                    and shrink_trigger
                     and int(meta.get("holdout_failures", 0)) >= 1
                 ):
                     try:  # pragma: no cover
                         worst = min(members, key=lambda oid: self.population.average_roi(oid, limit=5))
                         members.remove(worst)
                         meta["members"] = members
+                        self._colony_refresh_roles(meta)
+                        self._log_colony_event(meta, self.generation_index, "shrink", removed=worst)
                         meta["holdout_failures"] = max(0, int(meta.get("holdout_failures", 0)) - 1)
                     except Exception:  # pragma: no cover
                         pass
                 if int(meta.get("holdout_failures", 0)) >= max_failures:
+                    self._log_colony_event(meta, self.generation_index, "dissolve", reason="failures")
                     self.colonies.pop(cid, None)
                     continue
+                expand_ok = delta >= expand_delta and variance_ratio <= (1.0 - variance_improve + 1e-6)
+                history = meta.setdefault("expand_history", [])
+                history.append(bool(expand_ok))
+                meta["expand_history"] = history[-max(1, expand_windows):]
             reserve_ratio = float(meta.get("reserve_ratio", 0.25))
             privileges_unlocked = int(meta.get("holdout_passes", 0)) >= required_passes
-            if privileges_unlocked:
+            if privileges_unlocked and not meta.get("freeze_reproduction") and not meta.get("winter_mode"):
                 for m in members:
                     bal = self.host.ledger.energy_balance(m)
                     ticket = self.config.energy.m
@@ -2141,26 +4215,53 @@ class EcologyLoop:
                         if amount > 0:
                             self.host.ledger.credit_energy(m, amount)
                             pot -= amount
+                            self._log_colony_event(meta, self.generation_index, "topup", member=m, amount=float(amount))
             meta["pot"] = pot
             # Attempt cautious expansion to a 3rd member if synergy persists
             try:
                 max_size = int(getattr(cfg, "colony_max_size", 3))
-                if len(members) < max_size and int(meta.get("holdout_passes", 0)) >= required_passes:
+                can_expand = (
+                    len(members) < max_size
+                    and int(meta.get("holdout_passes", 0)) >= required_passes
+                    and len(meta.get("expand_history", [])) >= expand_windows
+                    and all(meta.get("expand_history", [])[-expand_windows:])
+                    and not meta.get("freeze_reproduction")
+                    and not meta.get("winter_mode")
+                )
+                if can_expand:
                     # Pick a candidate outside the colony with highest recent ROI
                     candidates = [oid for oid in self.population.population.keys() if oid not in members]
                     if candidates:
                         best_cand = max(candidates, key=lambda oid: self.population.average_roi(oid, limit=5))
                         tasks = self._sample_holdout_tasks()
                         if tasks:
-                            current = self._evaluate_multi_team_holdout_roi(members, tasks)
-                            expanded = self._evaluate_multi_team_holdout_roi(members + [best_cand], tasks)
-                            delta = expanded - current
-                            margin = float(getattr(cfg, "holdout_margin", 0.03))
-                            if delta >= margin:
+                            current_stats = self._team_holdout_stats(members, tasks)
+                            expanded_stats = self._team_holdout_stats(members + [best_cand], tasks)
+                            delta_expand = float(expanded_stats["mean"]) - float(current_stats["mean"])
+                            current_var = float(current_stats["variance"])
+                            expanded_var = float(expanded_stats["variance"])
+                            if current_var > 1e-6:
+                                variance_gain = expanded_var <= (1.0 - variance_improve + 1e-6) * current_var
+                            else:
+                                variance_gain = expanded_var <= 1e-6
+                            if delta_expand >= expand_delta and variance_gain:
                                 members.append(best_cand)
                                 meta["members"] = members
+                                self._colony_refresh_roles(meta)
                                 meta["last_review"] = self.generation_index
-                                meta["last_delta"] = float(delta)
+                                meta["last_delta"] = float(delta_expand)
+                                meta["last_variance_ratio"] = (
+                                    expanded_var / max(current_var, 1e-6) if current_var > 1e-6 else 0.0
+                                )
+                                meta["expand_history"] = []
+                                self._log_colony_event(
+                                    meta,
+                                    self.generation_index,
+                                    "expand",
+                                    added=best_cand,
+                                    delta=float(delta_expand),
+                                    variance=float(expanded_var),
+                                )
             except Exception:
                 pass
 
@@ -2284,6 +4385,8 @@ class EcologyLoop:
         streak = max(0, int(getattr(self, "assim_fail_streak", 0)))
         dynamic_bonus = min(1.5, float(roi_bonus) + 0.15 * float(roi_std) + 0.02 * float(streak))
         effective_threshold = max(0.0, float(roi_threshold) - dynamic_bonus - relief)
+        ledger = self.host.ledger
+        tokens_available = self.population.evidence_tokens(genome.organelle_id)
         info: dict[str, float | str] = {
             "status": "disabled" if floor <= 0.0 else "pending",
             "before": float(balance),
@@ -2295,7 +4398,23 @@ class EcologyLoop:
             "roi_std": float(roi_std),
             "fail_streak": float(streak),
             "relief": relief,
+            "tokens_available": int(tokens_available),
         }
+        survival_cfg = getattr(self.config, "survival", None)
+        if survival_cfg is not None and getattr(survival_cfg, "enabled", False):
+            reserve_state = self._reserve_state.get(genome.organelle_id, {})
+            hazard_state = self._hazard_state.get(genome.organelle_id, {})
+            bonus = 0.0
+            if reserve_state.get("active"):
+                bonus += float(getattr(survival_cfg, "hazard_topup_bonus", 0.0)) * 0.5
+            if hazard_state.get("active"):
+                bonus += float(getattr(survival_cfg, "hazard_topup_bonus", 0.0))
+            if bonus > 0.0:
+                effective_threshold = max(0.0, effective_threshold - bonus)
+                info["survival_bonus"] = bonus
+                info["roi_threshold_effective"] = float(effective_threshold)
+            info["reserve_active"] = bool(reserve_state.get("active"))
+            info["hazard_active"] = bool(hazard_state.get("active"))
         if floor <= 0.0:
             return balance, info
         if balance >= floor:
@@ -2305,14 +4424,33 @@ class EcologyLoop:
         roi = self.population.average_roi(genome.organelle_id, limit=5)
         info["roi"] = float(roi)
         if roi < effective_threshold:
-            # attempt evidence-bypass top-up (only if credit present)
-            try:
-                pre_credit = 0
-                credits = getattr(self.population, "evidence_credit", {})
-                if isinstance(credits, dict):
-                    pre_credit = int(credits.get(genome.organelle_id, 0) or 0)
-                if pre_credit > 0 and bool(self.population.consume_evidence(genome.organelle_id, 1)):
-                    ledger = self.host.ledger
+            # attempt evidence-bypass top-up (only if tokens present)
+            if tokens_available > 0 and self.population.consume_evidence(genome.organelle_id, 1):
+                tokens_available -= 1
+                info["tokens_available"] = int(tokens_available)
+                available = max(0.0, min(floor - balance, ledger.energy_cap - balance))
+                if available > 0.0:
+                    ledger.credit_energy(genome.organelle_id, available)
+                    new_balance = ledger.energy_balance(genome.organelle_id)
+                    info["status"] = "credited"
+                    info["credited"] = float(new_balance - balance)
+                    info["after"] = float(new_balance)
+                    info["floor"] = float(floor)
+                    info["roi_threshold"] = float(roi_threshold)
+                    info["evidence_bypass"] = True
+                    self._register_roi_success(genome.organelle_id)
+                    if self._power_econ_stats is not None:
+                        self._power_econ_stats["tokens_used"] = int(self._power_econ_stats.get("tokens_used", 0)) + 1
+                    return new_balance, info
+            info["status"] = "skip_low_roi"
+            # info-aware top-up when close to required window
+            info_gap = int(getattr(tuning, "info_topup_gap", 0))
+            info_slack = float(getattr(tuning, "info_topup_roi_slack", 0.0))
+            if info_gap > 0:
+                scores_available = len(self.population.recent_scores(genome.organelle_id, limit=16))
+                base_min = max(4, tuning.min_window)
+                info_need = max(0, base_min - scores_available)
+                if 0 < info_need <= info_gap and roi >= (effective_threshold - info_slack):
                     available = max(0.0, min(floor - balance, ledger.energy_cap - balance))
                     if available > 0.0:
                         ledger.credit_energy(genome.organelle_id, available)
@@ -2322,15 +4460,13 @@ class EcologyLoop:
                         info["after"] = float(new_balance)
                         info["floor"] = float(floor)
                         info["roi_threshold"] = float(roi_threshold)
-                        info["evidence_bypass"] = True
+                        info["info_topup"] = int(info_need)
                         self._register_roi_success(genome.organelle_id)
+                        if self._power_econ_stats is not None:
+                            self._power_econ_stats["info_topups"] = int(self._power_econ_stats.get("info_topups", 0)) + 1
                         return new_balance, info
-            except Exception:
-                pass
-            info["status"] = "skip_low_roi"
             self._register_roi_skip(genome.organelle_id)
             return balance, info
-        ledger = self.host.ledger
         available = max(0.0, min(floor - balance, ledger.energy_cap - balance))
         if available <= 0.0:
             info["status"] = "skip_no_capacity"
@@ -2412,45 +4548,9 @@ class EcologyLoop:
             return float("-inf")
         return sum(rois) / len(rois)
 
-    def _evaluate_team_holdout_roi(self, a_id: str, b_id: str, tasks: list[EvaluationTask]) -> float:
-        if not tasks:
-            return 0.0
-        energy_cfg = self.config.energy
-        rois: list[float] = []
-        for index, task in enumerate(tasks, start=1):
-            grid_task = task.to_grid_task(self.environment, task_id=f"team_{index:04d}")
-            best_roi = 0.0
-            for oid in (a_id, b_id):
-                result = self.host.step(
-                    prompt=grid_task.prompt,
-                    intent="team holdout",
-                    max_routes=1,
-                    allowed_organelle_ids=[oid],
-                )
-                metrics = result.responses.get(oid)
-                if metrics is None:
-                    continue
-                success, reward = grid_task.evaluate(metrics.answer)
-                revenue = grid_task.price * reward.total
-                cost = (
-                    energy_cfg.alpha * metrics.flops_estimate
-                    + energy_cfg.beta * metrics.memory_gb
-                    + energy_cfg.gamma * metrics.latency_ms
-                    + energy_cfg.lambda_p * metrics.trainable_params
-                )
-                if cost <= 0.0:
-                    roi_value = float("inf") if revenue > 0 else 0.0
-                else:
-                    roi_value = revenue / cost
-                if not math.isfinite(roi_value):
-                    roi_value = max(0.0, min(roi_value, 10.0)) if revenue > 0 else 0.0
-                best_roi = max(best_roi, float(roi_value))
-            rois.append(best_roi)
-        return float(sum(rois) / max(len(rois), 1)) if rois else 0.0
-
-    def _evaluate_multi_team_holdout_roi(self, member_ids: list[str], tasks: list[EvaluationTask]) -> float:
+    def _team_holdout_stats(self, member_ids: list[str], tasks: list[EvaluationTask]) -> dict[str, object]:
         if not tasks or not member_ids:
-            return 0.0
+            return {"mean": 0.0, "variance": 0.0, "series": []}
         energy_cfg = self.config.energy
         rois: list[float] = []
         for index, task in enumerate(tasks, start=1):
@@ -2482,7 +4582,19 @@ class EcologyLoop:
                     roi_value = max(0.0, min(roi_value, 10.0)) if revenue > 0 else 0.0
                 best_roi = max(best_roi, float(roi_value))
             rois.append(best_roi)
-        return float(sum(rois) / max(len(rois), 1)) if rois else 0.0
+        if not rois:
+            return {"mean": 0.0, "variance": 0.0, "series": []}
+        mean_val = float(sum(rois) / len(rois))
+        variance = float(pstdev(rois)) if len(rois) >= 2 else 0.0
+        return {"mean": mean_val, "variance": variance, "series": rois}
+
+    def _evaluate_team_holdout_roi(self, a_id: str, b_id: str, tasks: list[EvaluationTask]) -> float:
+        stats = self._team_holdout_stats([a_id, b_id], tasks)
+        return float(stats.get("mean", 0.0))
+
+    def _evaluate_multi_team_holdout_roi(self, member_ids: list[str], tasks: list[EvaluationTask]) -> float:
+        stats = self._team_holdout_stats(member_ids, tasks)
+        return float(stats.get("mean", 0.0))
 
     @staticmethod
     def _compute_mean_ci(series: list[float], alpha: float = 0.05) -> tuple[float, float, float, float]:
@@ -2614,7 +4726,16 @@ class EcologyLoop:
             power = self._power_proxy(team_mu, baseline, margin, team_se)
             if power >= min_power and self._team_accept(ci_low, baseline, margin, len(team_series), min_tasks):
                 cid = f"col_{a_id[:4]}_{b_id[:4]}"
-                self.colonies.setdefault(cid, {"members": [a_id, b_id], "pot": 0.0, "reserve_ratio": 0.25, "created_gen": self.generation_index})
+                meta = self.colonies.setdefault(
+                    cid,
+                    {
+                        "members": [a_id, b_id],
+                        "pot": 0.0,
+                        "reserve_ratio": 0.25,
+                        "created_gen": self.generation_index,
+                    },
+                )
+                self._log_colony_event(meta, self.generation_index, "create", members=list(meta.get("members", [])))
                 promotions += 1
         if promotions > 0:
             self.promotions_this_gen += promotions
@@ -2927,6 +5048,7 @@ class EcologyLoop:
 
     def _spawn_replacement_from(self, genome: Genome) -> None:
         mutant_template = self.population.mutate(genome)
+        self._record_mutation_stats(mutant_template)
         new_id = self.host.spawn_organelle(
             rank=mutant_template.rank,
             hebbian_config=self.config.hebbian,
@@ -2937,8 +5059,33 @@ class EcologyLoop:
             drive_weights=mutant_template.drive_weights,
             gate_bias=mutant_template.gate_bias,
             rank=mutant_template.rank,
+            explore_rate=mutant_template.explore_rate,
+            post_rate=mutant_template.post_rate,
+            read_rate=mutant_template.read_rate,
+            hint_weight=mutant_template.hint_weight,
+            beta_exploit=mutant_template.beta_exploit,
+            q_decay=mutant_template.q_decay,
+            ucb_bonus=mutant_template.ucb_bonus,
+            budget_aggressiveness=mutant_template.budget_aggressiveness,
+            rank_noise=dict(mutant_template.rank_noise),
+            adapter_dropout=set(mutant_template.adapter_dropout),
+            duplication_factors=dict(mutant_template.duplication_factors),
         )
         self.population.register(child_genome)
+
+    def _record_mutation_stats(self, mutant: Genome) -> None:
+        stats = self._mutation_stats_gen
+        if not isinstance(stats, dict):
+            stats = {"rank_noise": 0, "dropout": 0, "duplication": 0}
+            self._mutation_stats_gen = stats
+        if getattr(mutant, "rank_noise", None):
+            stats["rank_noise"] = stats.get("rank_noise", 0) + 1
+        if getattr(mutant, "adapter_dropout", None):
+            if len(mutant.adapter_dropout) > 0:
+                stats["dropout"] = stats.get("dropout", 0) + 1
+        if getattr(mutant, "duplication_factors", None):
+            if len(mutant.duplication_factors) > 0:
+                stats["duplication"] = stats.get("duplication", 0) + 1
 
     def _compute_viability_map(self) -> Dict[str, bool]:
         threshold = self.config.energy.m
@@ -3051,7 +5198,6 @@ class EcologyLoop:
         stats_map: dict[str, dict[str, float]] = {}
         candidate_roi = max(self.population.average_roi(candidate_id, limit=5), 0.0)
         candidate_ema = float(self.environment.organism_stats.get(candidate_id, {}).get(cell, 0.0))
-        stats_map[candidate_id] = {"roi": float(candidate_roi), "ema": candidate_ema}
         # Compute simple cost bins (QD) from recent average energy to prefer similar-cost merges
         energies: dict[str, float] = {}
         for oid in self.population.population.keys():
@@ -3064,6 +5210,8 @@ class EcologyLoop:
                 bins = [float(x) for x in qs]
             except Exception:
                 bins = [energy_values[len(energy_values) // 2]]
+        candidates: list[tuple[str, float, float, int, float]] = []
+
         def cost_bin(val: float) -> int:
             if not bins:
                 return 0
@@ -3073,7 +5221,16 @@ class EcologyLoop:
             return len(bins)
         cand_bin = cost_bin(energies.get(candidate_id, 0.0))
 
-        mates: list[tuple[str, float, float, int]] = []
+        novelty_weight = float(getattr(self.config.qd, "novelty_weight", 0.3))
+        novelty_floor = float(getattr(self.config.qd, "novelty_min", 0.05))
+        candidate_novelty = self.population.cell_novelty(candidate_id, cell, scale=novelty_weight, floor=novelty_floor)
+        stats_map[candidate_id] = {
+            "roi": float(candidate_roi),
+            "ema": candidate_ema,
+            "novelty": float(candidate_novelty),
+            "cost_bin": cand_bin,
+        }
+
         for organelle_id, per_cell in self.environment.organism_stats.items():
             if organelle_id == candidate_id:
                 continue
@@ -3082,12 +5239,42 @@ class EcologyLoop:
                 continue
             roi = self.population.average_roi(organelle_id, limit=5)
             mbin = cost_bin(energies.get(organelle_id, 0.0))
-            mates.append((organelle_id, float(ema), float(roi), mbin))
+            novelty = self.population.cell_novelty(organelle_id, cell, scale=novelty_weight, floor=novelty_floor)
+            candidates.append((organelle_id, float(ema), float(roi), mbin, float(novelty)))
         # Prefer same-bin mates; fallback to global best if insufficient
-        mates.sort(key=lambda item: (item[3] == cand_bin, item[1], item[2]), reverse=True)
-        selected = mates[: max(0, soup_size - 1)]
-        for organelle_id, ema, roi, _mbin in selected:
-            stats_map[organelle_id] = {"roi": max(roi, 0.0), "ema": float(ema)}
+        candidates.sort(
+            key=lambda item: (
+                item[3] == cand_bin,
+                item[4],
+                item[1],
+                item[2],
+            ),
+            reverse=True,
+        )
+        # ensure unique energy bins represented when possible
+        seen_bins: set[int] = set()
+        selected: list[tuple[str, float, float, int, float]] = []
+        for entry in candidates:
+            if len(selected) >= max(0, soup_size - 1):
+                break
+            bin_id = entry[3]
+            if bin_id not in seen_bins or len(seen_bins) < soup_size - 1:
+                selected.append(entry)
+                seen_bins.add(bin_id)
+        if len(selected) < max(0, soup_size - 1):
+            for entry in candidates:
+                if entry in selected:
+                    continue
+                selected.append(entry)
+                if len(selected) >= max(0, soup_size - 1):
+                    break
+        for organelle_id, ema, roi, _mbin, novelty in selected:
+            stats_map[organelle_id] = {
+                "roi": max(roi, 0.0),
+                "ema": float(ema),
+                "novelty": float(novelty),
+                "cost_bin": _mbin,
+            }
         soup_ids = [candidate_id] + [entry[0] for entry in selected]
         return soup_ids, stats_map
 
@@ -3108,24 +5295,87 @@ class EcologyLoop:
             if positives:
                 probe_boost += sum(positives) / max(len(positives), 1)
         method = str(getattr(self.config.assimilation_tuning, "merge_method", "naive")).lower()
+        novelty_weight = float(getattr(self.config.qd, "novelty_weight", 0.3))
         # optional fisher-style importance weighting
         importances: dict[str, float] = {}
         if method == "fisher_svd":
+            def _fallback_importance(org: object | None) -> float:
+                if org is None:
+                    return 0.0
+                try:
+                    state = org.export_adapter_state()  # type: ignore[attr-defined]
+                except Exception:
+                    state = {}
+                total = 0.0
+                if isinstance(state, dict):
+                    for tensor in state.values():
+                        if isinstance(tensor, torch.Tensor):
+                            try:
+                                total += float(tensor.float().pow(2).sum().item())
+                            except Exception:
+                                continue
+                return total
+
             for oid in soup_ids:
                 org = self.host.get_organelle(oid)
-                imp = 1.0
-                try:
-                    adapter = getattr(org, "adapter", None)
-                    if adapter is not None and hasattr(adapter, "lora_A") and hasattr(adapter, "lora_B"):
-                        a = adapter.lora_A.detach()
-                        b = adapter.lora_B.detach()
-                        imp = float(a.norm().item() * b.norm().item() + 1e-6)
-                except Exception:
-                    imp = 1.0
-                importances[oid] = imp
-            # normalize importances
-            s = sum(importances.values()) or 1.0
-            importances = {k: (v / s) for k, v in importances.items()}
+                imp = 0.0
+                if org is not None and hasattr(org, "fisher_importance"):
+                    try:
+                        imp = float(org.fisher_importance())  # type: ignore[attr-defined]
+                    except Exception:
+                        imp = 0.0
+                if not imp or not math.isfinite(imp):
+                    imp = _fallback_importance(org)
+                importances[oid] = max(imp, 1e-6)
+            max_importance = max(importances.values()) if importances else 1.0
+            if max_importance <= 0.0 or not math.isfinite(max_importance):
+                max_importance = 1.0
+            importances = {k: (v / max_importance) for k, v in importances.items()}
+        organelle = self.host.get_organelle(candidate_id)
+        target_rank = int(getattr(organelle, "rank", self.config.host.max_lora_rank)) if organelle is not None else self.config.host.max_lora_rank
+        target_rank = max(1, min(target_rank, self.config.host.max_lora_rank))
+        block_roles: dict[str, int] | None = None
+        block_mode = False
+        block_rank = target_rank
+        if getattr(self.config.assimilation_tuning, "team_block_diagonal_merges", False):
+            colony = self._find_member_colony(candidate_id)
+            if colony is not None:
+                _cid, meta = colony
+                roles_meta = meta.get("roles")
+                if isinstance(roles_meta, dict):
+                    membership = set(meta.get("members", []))
+                    if all(oid in membership for oid in soup_ids):
+                        role_map: dict[str, int] = {}
+                        valid = True
+                        for oid in soup_ids:
+                            role_val = roles_meta.get(oid)
+                            if not isinstance(role_val, int):
+                                valid = False
+                                break
+                            role_map[oid] = role_val
+                        if valid and len(role_map) == len(soup_ids):
+                            block_roles = role_map
+                            rank_cap = int(
+                                getattr(
+                                    self.config.assimilation_tuning,
+                                    "team_block_rank_cap",
+                                    self.config.host.max_lora_rank,
+                                )
+                            )
+                            summed_rank = 0
+                            for oid in soup_ids:
+                                genome = self.population.population.get(oid)
+                                if genome is not None:
+                                    summed_rank += max(1, int(getattr(genome, "rank", 1)))
+                                else:
+                                    organelle = self.host.get_organelle(oid)
+                                    summed_rank += max(
+                                        1, int(getattr(organelle, "rank", target_rank)) if organelle is not None else target_rank
+                                    )
+                            block_rank = max(1, min(self.config.host.max_lora_rank, rank_cap, summed_rank))
+                            block_mode = True
+
+        mutation_meta: dict[str, dict[str, object]] = {}
         for oid in soup_ids:
             stats = stats_map.get(oid, {"roi": 0.0, "ema": 0.0})
             roi = max(stats.get("roi", 0.0), 0.0)
@@ -3133,16 +5383,65 @@ class EcologyLoop:
             weight = (roi + 1e-3) * (ema + 1e-3)
             if method == "fisher_svd":
                 weight *= importances.get(oid, 1.0)
+            if "novelty" in stats:
+                weight *= 1.0 + max(0.0, float(stats["novelty"]))
             if oid == candidate_id:
                 weight *= probe_boost
-            summary.append({"organelle_id": oid, "weight": float(weight), "roi": float(roi), "ema": float(ema)})
+            if "novelty" in stats:
+                weight *= 1.0 + novelty_weight * max(0.0, float(stats["novelty"]))
+            record = {
+                "organelle_id": oid,
+                "weight": float(weight),
+                "roi": float(roi),
+                "ema": float(ema),
+            }
+            if importances:
+                record["importance"] = float(importances.get(oid, 0.0))
+            if "novelty" in stats:
+                record["novelty"] = float(stats["novelty"])
+            if "cost_bin" in stats:
+                record["cost_bin"] = int(stats["cost_bin"])
+            if block_roles and oid in block_roles:
+                record["role"] = int(block_roles[oid])
+            genome_meta = self.population.population.get(oid)
+            if genome_meta is not None:
+                if getattr(genome_meta, "rank_noise", None):
+                    record["rank_noise"] = {
+                        key: round(float(value), 3)
+                        for key, value in genome_meta.rank_noise.items()
+                    }
+                if getattr(genome_meta, "adapter_dropout", None):
+                    if genome_meta.adapter_dropout:
+                        record["dropout"] = sorted(genome_meta.adapter_dropout)
+                if getattr(genome_meta, "duplication_factors", None):
+                    if genome_meta.duplication_factors:
+                        record["duplication"] = {
+                            key: round(float(value), 3)
+                            for key, value in genome_meta.duplication_factors.items()
+                        }
+                mutation_meta[oid] = {
+                    "rank_noise": dict(getattr(genome_meta, "rank_noise", {})),
+                    "dropout": sorted(getattr(genome_meta, "adapter_dropout", [])),
+                    "duplication": dict(getattr(genome_meta, "duplication_factors", {})),
+                }
+            summary.append(record)
             weights.append(weight)
         weight_sum = sum(weights) or 1.0
         soup_map = {oid: (weight / weight_sum) for oid, weight in zip(soup_ids, weights)}
-        organelle = self.host.get_organelle(candidate_id)
-        target_rank = int(getattr(organelle, "rank", self.config.host.max_lora_rank)) if organelle is not None else self.config.host.max_lora_rank
-        target_rank = max(1, min(target_rank, self.config.host.max_lora_rank))
-        self.host.merge_lora_soup(soup_map, target_rank)
+        if block_mode and block_roles:
+            self.host.merge_lora_soup(
+                soup_map,
+                block_rank,
+                roles=block_roles,
+                mode="block",
+                mutation_meta=mutation_meta or None,
+            )
+        else:
+            self.host.merge_lora_soup(
+                soup_map,
+                target_rank,
+                mutation_meta=mutation_meta or None,
+            )
         return summary
 
     def _run_hf_probes(self, organelle_id: str) -> list[dict[str, object]]:
