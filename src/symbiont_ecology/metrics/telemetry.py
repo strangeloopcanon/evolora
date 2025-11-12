@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+SoupEntry = float | str | dict[str, Any] | list[Any]
+
 
 class RouteEvent(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -54,7 +56,7 @@ class AssimilationEvent(BaseModel):
     energy_balance: float | None = None
     energy_top_up: EnergyTopUpEvent | None = None
     cell: dict[str, str] | None = None
-    soup: list[dict[str, float]] = Field(default_factory=list)
+    soup: list[SoupEntry] = Field(default_factory=list)
     probes: list[dict[str, object]] = Field(default_factory=list)
     method: str = "z_test"
     dr_used: bool = False

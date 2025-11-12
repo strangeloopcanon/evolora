@@ -27,6 +27,24 @@ class HostConfig(BaseModel):
     temperature: float = Field(0.0, ge=0.0, le=1.0)
     top_p: float = Field(1.0, ge=0.0, le=1.0)
     gen_max_new_tokens: int = Field(48, ge=1, le=512, description="Max new tokens to generate per answer")
+    recurrence_enabled: bool = Field(
+        False, description="Allow a single organelle to run multiple internal reasoning passes per call."
+    )
+    recurrence_train_passes: int = Field(
+        1,
+        ge=1,
+        description="How many passes to run during normal/task episodes when recurrence is enabled.",
+    )
+    recurrence_eval_passes: int = Field(
+        1,
+        ge=1,
+        description="How many passes to run during evaluation/holdout intents when recurrence is enabled.",
+    )
+    recurrence_history_template: str = Field(
+        "Previous passes:\\n{history}\\nRefine your answer (pass {pass_idx}/{total_passes}).",
+        description="Template appended to the base prompt when recurrence history exists. "
+        "{history} expands to formatted prior answers.",
+    )
 
 
 class OrganismConfig(BaseModel):

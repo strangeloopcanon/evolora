@@ -31,6 +31,7 @@ class RouteMetrics:
     flops_estimate: float
     memory_gb: float
     active_adapters: dict[str, int]
+    recurrent_passes: int = 1
 
 
 @dataclass
@@ -100,6 +101,7 @@ class HostKernel:
         allowed_organelle_ids: Sequence[str] | None = None,
         latent_prefix: list[float] | None = None,
         latent_mix: float | None = None,
+        recurrent_passes: int | None = None,
     ) -> HostStepResult:
         observation = Observation(state={"text": prompt})
         plan = Plan(steps=[], confidence=0.1)
@@ -131,7 +133,24 @@ class HostKernel:
         prompt_tokens = self._count_tokens(prompt)
         hidden = getattr(self.backbone, "hidden_size", prompt_tokens)
         for organelle in routed:
-            envelope = organelle.forward(envelope)
+            env = envelope.model_copy(deep=True)
+            base_prompt = prompt
+            history: list[str] = []
+            passes = recurrent_passes or self._default_recurrence_passes(intent)
+            passes = max(1, passes)
+            for pass_idx in range(passes):
+                working_text = self._format_recurrence_prompt(
+                    base_prompt, history, pass_idx + 1, passes
+                )
+                env.observation.state["text"] = working_text
+                env.observation.state["recurrent_pass"] = pass_idx + 1
+                env.observation.state["recurrent_total"] = passes
+                env.observation.state["recurrent_history"] = list(history)
+                env = organelle.forward(env)
+                answer_step = env.observation.state.get("answer", "")
+                if answer_step:
+                    history.append(answer_step)
+            envelope = env
             answer = envelope.observation.state.get("answer", "")
             trainable = self._trainable_params(organelle)
             adapters = self._active_adapters(organelle)
@@ -149,8 +168,8 @@ class HostKernel:
                     latency_ms=0.0,
                 )
             )
-            flops = float(prompt_tokens * hidden * 2)
-            memory_gb = float(prompt_tokens * hidden * 2) / (1024**3)
+            flops = float(prompt_tokens * hidden * 2 * passes)
+            memory_gb = float(prompt_tokens * hidden * 2 * passes) / (1024**3)
             responses[organelle.organelle_id] = RouteMetrics(
                 answer=answer,
                 tokens=prompt_tokens,
@@ -160,6 +179,7 @@ class HostKernel:
                 flops_estimate=flops,
                 memory_gb=memory_gb,
                 active_adapters=adapters,
+                recurrent_passes=passes,
             )
         latency_ms = (time.time() - t0) * 1000.0
         for evt in route_events:
@@ -175,6 +195,7 @@ class HostKernel:
                     flops_estimate=metrics.flops_estimate,
                     memory_gb=metrics.memory_gb,
                     active_adapters=metrics.active_adapters,
+                    recurrent_passes=metrics.recurrent_passes,
                 )
         return HostStepResult(
             envelope=envelope, routes=route_events, responses=responses, latency_ms=latency_ms
@@ -194,6 +215,38 @@ class HostKernel:
             net_gain = max(0.0, breakdown.total)
             self.ledger.credit(organelle_id, net_gain * self.config.organism.atp_mint_rate)
             self.router.observe(organelle_id, breakdown.total)
+
+    def _default_recurrence_passes(self, intent: str) -> int:
+        host_cfg = self.config.host
+        if not getattr(host_cfg, "recurrence_enabled", False):
+            return 1
+        intent_lower = intent.lower()
+        eval_markers = ("evaluation", "assimilation", "holdout", "team probe", "team holdout", "colony infer")
+        if any(marker in intent_lower for marker in eval_markers):
+            passes = getattr(host_cfg, "recurrence_eval_passes", 1)
+        else:
+            passes = getattr(host_cfg, "recurrence_train_passes", 1)
+        return max(1, int(passes))
+
+    def _format_recurrence_prompt(
+        self,
+        base_prompt: str,
+        history: list[str],
+        pass_idx: int,
+        total_passes: int,
+    ) -> str:
+        if not history:
+            return base_prompt
+        template = getattr(self.config.host, "recurrence_history_template", "")
+        scratch = "\n".join([f"[Pass {i + 1}] {entry}" for i, entry in enumerate(history)])
+        if template:
+            try:
+                suffix = template.format(history=scratch, pass_idx=pass_idx, total_passes=total_passes)
+            except Exception:
+                suffix = f"Previous passes:\n{scratch}\nRefine your answer (pass {pass_idx}/{total_passes})."
+        else:
+            suffix = f"Previous passes:\n{scratch}\nRefine your answer (pass {pass_idx}/{total_passes})."
+        return f"{base_prompt}\n\n{suffix}".strip()
 
     def _compute_energy_cost(self, prompt: str, organelle: Organelle) -> float:
         base = self.config.organism.atp_burn_per_call
@@ -300,8 +353,22 @@ class HostKernel:
                 self.assimilation_weights[key] = self.assimilation_weights.get(key, 0.0) + alpha
         self.ledger.charge(organelle_id, self.ledger.accounts[organelle_id].balance)
 
-    def merge_lora_soup(self, soup: dict[str, float], target_rank: int) -> None:
-        soup_state, total_alpha_map = self.build_lora_soup_state(soup, target_rank)
+    def merge_lora_soup(
+        self,
+        soup: dict[str, float],
+        target_rank: int,
+        *,
+        roles: dict[str, int] | None = None,
+        mode: str | None = None,
+        mutation_meta: dict[str, dict[str, object]] | None = None,
+    ) -> None:
+        soup_state, total_alpha_map = self.build_lora_soup_state(
+            soup,
+            target_rank,
+            roles=roles,
+            mode=mode,
+            mutation_meta=mutation_meta,
+        )
         for key, combined in soup_state.items():
             if key not in self.assimilation_state:
                 self.assimilation_state[key] = torch.zeros_like(combined)
@@ -315,22 +382,68 @@ class HostKernel:
         self.ledger.accounts.pop(organelle_id, None)
         self.ledger.energy_accounts.pop(organelle_id, None)
 
-    def build_lora_soup_state(self, soup: dict[str, float], target_rank: int) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
+    def build_lora_soup_state(
+        self,
+        soup: dict[str, float],
+        target_rank: int,
+        *,
+        roles: dict[str, int] | None = None,
+        mode: str | None = None,
+        mutation_meta: dict[str, dict[str, object]] | None = None,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
         """Construct a weighted LoRA soup state without committing it to the host.
 
         Returns a tuple of (state_dict, alpha_sum_per_key).
         """
-        contributions: dict[str, list[tuple[float, torch.Tensor]]] = {}
+        contributions: dict[str, list[dict[str, object]]] = {}
+        if roles:
+            # ensure only include roles for known members
+            roles = {str(k): int(v) for k, v in roles.items() if isinstance(v, int)}
         alpha_sum: dict[str, float] = {}
         for organelle_id, alpha in soup.items():
             organelle = self.organelles.get(organelle_id)
             if organelle is None:
                 continue
             snapshot = organelle.export_adapter_state()
+            meta = (mutation_meta or {}).get(organelle_id, {}) if mutation_meta else {}
+            dropout_patterns = {
+                str(item)
+                for item in meta.get("dropout", [])
+                if isinstance(item, str) and item
+            }
+            duplication_map = {
+                str(key): float(value)
+                for key, value in (meta.get("duplication", {}) or {}).items()
+                if isinstance(key, str)
+            }
+            rank_noise_map = {
+                str(key): float(value)
+                for key, value in (meta.get("rank_noise", {}) or {}).items()
+                if isinstance(key, str)
+            }
             for key, tensor in snapshot.items():
                 tensor_cpu = tensor.detach().cpu().clone()
-                contributions.setdefault(key, []).append((alpha, tensor_cpu))
-                alpha_sum[key] = alpha_sum.get(key, 0.0) + alpha
+                if dropout_patterns and any(pattern in key for pattern in dropout_patterns):
+                    continue
+                scale = 1.0
+                for pattern, factor in duplication_map.items():
+                    if pattern in key:
+                        scale += max(0.0, factor)
+                role_value = None
+                if roles and organelle_id in roles:
+                    role_value = roles[organelle_id]
+                noise = 0.0
+                for pattern, delta in rank_noise_map.items():
+                    if pattern in key:
+                        noise += float(delta)
+                contribution = {
+                    "alpha": float(alpha) * scale,
+                    "tensor": tensor_cpu,
+                    "role": role_value,
+                    "noise": noise,
+                }
+                contributions.setdefault(key, []).append(contribution)
+                alpha_sum[key] = alpha_sum.get(key, 0.0) + float(contribution["alpha"])
             account = self.ledger.accounts.get(organelle_id)
             if account is not None:
                 self.ledger.charge(organelle_id, account.balance)
@@ -338,20 +451,64 @@ class HostKernel:
         for key, parts in contributions.items():
             if not parts:
                 continue
-            combined = None
-            for alpha, tensor in parts:
-                combined = tensor * alpha if combined is None else combined + tensor * alpha
+            use_block = (
+                mode == "block"
+                and roles
+                and all(part.get("role") is not None for part in parts)
+            )
+            noise_total = sum(float(part.get("noise", 0.0)) for part in parts)
+            effective_rank = target_rank
+            if noise_total:
+                effective_rank = int(round(target_rank + noise_total))
+            effective_rank = max(1, min(self.config.host.max_lora_rank, effective_rank))
+            if use_block:
+                try:
+                    combined = self._combine_block_diagonal(parts, effective_rank)
+                except Exception:
+                    combined = None
+            else:
+                combined = None
+                for part in parts:
+                    alpha_val = float(part.get("alpha", 0.0))
+                    tensor = part["tensor"]
+                    combined = tensor * alpha_val if combined is None else combined + tensor * alpha_val
             if combined is None:
                 continue
-            if combined.ndim == 2 and target_rank > 0:
+            if combined.ndim == 2 and effective_rank > 0 and mode != "block":
                 try:
                     u, s, vh = torch.linalg.svd(combined, full_matrices=False)
-                    rank = min(target_rank, s.shape[0])
+                    rank = min(effective_rank, s.shape[0])
                     combined = (u[:, :rank] * s[:rank]) @ vh[:rank, :]
                 except Exception:
                     pass
             soup_state[key] = combined
         return soup_state, alpha_sum
+
+    @staticmethod
+    def _combine_block_diagonal(parts: list[dict[str, object]], target_rank: int) -> torch.Tensor:
+        ordered = sorted(parts, key=lambda item: int(item.get("role", -1)))
+        if not ordered:
+            raise ValueError("No parts to combine")
+        base = ordered[0]["tensor"]
+        if base.ndim != 2:
+            raise ValueError("Block-diagonal merge expects 2D tensors")
+        axis = 0 if base.shape[0] <= base.shape[1] else 1
+        other_dim = base.shape[1 - axis]
+        scaled: list[torch.Tensor] = []
+        for part in ordered:
+            tensor = part["tensor"]
+            if tensor.ndim != 2:
+                raise ValueError("Incompatible tensor rank for block merge")
+            if tensor.shape[1 - axis] != other_dim:
+                raise ValueError("Mismatched dimensions for block merge")
+            alpha_val = float(part.get("alpha", 0.0))
+            scaled.append(tensor * alpha_val)
+        combined = torch.cat(scaled, dim=axis)
+        if axis == 0:
+            combined = combined[: target_rank if target_rank > 0 else combined.shape[0], :]
+        else:
+            combined = combined[:, : target_rank if target_rank > 0 else combined.shape[1]]
+        return combined
 
     def list_organelle_ids(self) -> list[str]:
         return list(self.organelles.keys())
