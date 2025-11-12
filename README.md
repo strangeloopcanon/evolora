@@ -18,7 +18,7 @@ If the colony keeps earning more than it spends, the population should drift tow
 - Latest 40‑gen smoke (Nov 10 2025, `artifacts_qwen3_endogenous_colonies_memory_20251110_114241`): avg ROI **1.68 ± 0.27**, 2 666 episodes, **32 merges / 83 trials / 29 promotions**, eval accuracy **19% (7/36, only math succeeds)**, no bankruptcies.
 - Assimilation gating is now statistical: low_power 172, uplift_below_threshold 136, insufficient_scores 130, versus low_energy 58. Mean sample size 4.6 after dropping `min_window` to 2 and minting evidence tokens (1 615 minted / 209 spent), but power still misses targets ~60 % of the time.
 - Team/colony path still stalled: 438 team routes yielded **0 promotions**, so no colonies formed and colony telemetry stayed at zero. We need instrumentation on `_maybe_team_probes` + `_team_accept` before dialing knobs again.
-- Policy system still inert (0/573 parses) and evaluation set remains misaligned (ΔROI ≈ ‑22). Documentation now calls this out so we stop assuming policies influence routing.
+- Policy system still inert (0/573 parses) and evaluation set remains misaligned (ΔROI ≈ ‑22). Documentation now calls this out so we stop assuming policies influence routing, and we’re refocusing the eval set + parser with the next run.
 - macOS runner still emits `malloc … out of space` during heavy gens; keep runs to short/medium grids, set `MPLCONFIGDIR=$(mktemp -d)`, and monitor RSS when enabling more eval tasks.
 
 ## What’s New (Oct 2025)
@@ -35,6 +35,8 @@ If the colony keeps earning more than it spends, the population should drift tow
 - Assimilation history: every organelle/cell pair retains a configurable trail of uplift + probe stats; summaries/analyzer expose the latest slices so dashboards can track where real learning is happening (and the telemetry survives restarts).
 - Promotion guardrails relaxed: holdout windows and statistical-power thresholds now match the small synthetic batch sizes, and reserve/hazard guards no longer block every attempt. Colonies are re-enabled so team routing can actually promote synergistic pairs.
 - Retrofitted recurrence: the host can now run an organelle through multiple internal reasoning passes per episode (`host.recurrence_*`). Training episodes default to two passes while holdouts/evals stay at one; scratchpad history is appended automatically and telemetry reports `recurrent_passes` so we can measure the extra compute budget.
+- Evaluation/holdout set retargeted to math, word-count, and code-formatting cells (short/medium) with a smaller sample size, so we measure the same skills we train.
+- Policy prompt/parser now demand strict `key=value` pairs with key-value fallback parsing, so budget/reserve requests finally register instead of silently failing JSON repairs.
 - Fisher-aware LoRA soups: assimilation weighting now uses activation-derived Fisher importances (with fallback to adapter energy) so high-signal organelles dominate merges; analyzer surfaces mean/max Fisher importance alongside merge weight stats.
 - Evidence auto-tune for assimilation windows to reduce “insufficient_scores”. DR small-n deferral (low_power_dr) grants evidence credit instead of forcing bad calls.
 - Doubly‑robust uplift with stratified holdout telemetry (method, power, strata), plus snapshots of assimilation gates and attempts.

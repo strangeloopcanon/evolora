@@ -8,7 +8,7 @@ host:
   gen_max_new_tokens: 32
   recurrence_enabled: true
   recurrence_train_passes: 2
-  recurrence_eval_passes: 1
+  recurrence_eval_passes: 2
 grid:
   # Easy-mode curriculum: words + math variants + formatting.
   families:
@@ -40,6 +40,8 @@ knowledge:
   read_cost: 0.05
   ttl: 40
   max_items: 12
+hebbian:
+  learning_rate: 0.003
 assimilation_tuning:
   per_cell_interval: 1
   max_merges_per_cell: 3
@@ -153,6 +155,7 @@ assimilation_tuning:
   team_router_enabled: true
   team_max_routes_per_gen: 12
   team_min_power: 0.0
+  team_holdout_sample_size: 4
   team_routing_probe_per_gen: 3
   team_probe_synergy_delta: 0.12
   team_probe_variance_nu: 0.25
@@ -261,7 +264,7 @@ evaluation:
   enabled: true
   cadence: 10
   tasks_path: config/evaluation/holdout_simple.jsonl
-  sample_size: 9
+  sample_size: 6
   reward_weight: 0.75
 diversity:
   enabled: true

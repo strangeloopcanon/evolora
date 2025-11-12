@@ -1,15 +1,12 @@
-{"prompt": "Count the number of words in the sentence: 'Symbiotic agents cooperate'. Respond with an integer.", "target": 3, "family": "word.count", "depth": "short"}
-{"prompt": "Count the number of words in the sentence: 'LoRA adapters evolve rapidly'. Respond with an integer.", "target": 4, "family": "word.count", "depth": "short"}
-{"prompt": "Count the number of words in the sentence: 'Energy tickets enforce scarcity'. Respond with an integer.", "target": 4, "family": "word.count", "depth": "short"}
-{"prompt": "Count the number of words in the sentence: 'Autonomous organelles coordinate'. Respond with an integer.", "target": 3, "family": "word.count", "depth": "short"}
-{"prompt": "Count the number of words in the sentence: 'Telemetry snapshots surface ROI variance'. Respond with an integer.", "target": 5, "family": "word.count", "depth": "short"}
-{"prompt": "Add 3 and 7. Respond with the number only.", "target": 10, "family": "math", "depth": "short"}
-{"prompt": "Multiply 2 by 5. Respond with the number only.", "target": 10, "family": "math", "depth": "short"}
-{"prompt": "Add 4 and 9. Respond with the number only.", "target": 13, "family": "math", "depth": "short"}
-{"prompt": "Multiply 3 by 3. Respond with the number only.", "target": 9, "family": "math", "depth": "short"}
-{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div>Adaptive <strong>agents</strong> coordinate</div>`. Respond with an integer.", "target": 3, "family": "word.count", "depth": "medium"}
-{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Stage 3 allocates 5 tickets before the final freeze window'. Respond with an integer.", "target": 8, "family": "word.count", "depth": "medium"}
-{"prompt": "Compute (4 + 5) * 3 - 6. Respond with the number only.", "target": 21, "family": "math.multi_step", "depth": "medium"}
-{"prompt": "Compute (7 + 8) * 2 - (3 + 4). Respond with the number only.", "target": 22, "family": "math.multi_step", "depth": "medium"}
-{"prompt": "Convert the variable name `AdaptiveSignalFlow` to snake_case. Respond with the new name only.", "target": "adaptive_signal_flow", "family": "code.format", "depth": "medium"}
-{"prompt": "Convert the variable name `ReserveEnergyBudget` to snake_case. Respond with the new name only.", "target": "reserve_energy_budget", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'Symbiotic agents cooperate efficiently'. Respond with an integer.", "target": 4, "family": "word.count", "depth": "short"}
+{"prompt": "Count the words in 'Adapters share cache hints'. Respond with an integer.", "target": 4, "family": "word.count", "depth": "short"}
+{"prompt": "Count the words (ignore digits) in 'Stage 2 locks 5 cells before the fatal merge window'. Respond with an integer.", "target": 8, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the words in the HTML snippet `<p>Agents <em>learn</em> faster</p>`. Respond with an integer.", "target": 3, "family": "word.count", "depth": "medium"}
+{"prompt": "Add 8 and 13. Respond with the number only.", "target": 21, "family": "math", "depth": "short"}
+{"prompt": "Multiply 7 by 6. Respond with the number only.", "target": 42, "family": "math", "depth": "short"}
+{"prompt": "Subtract 19 from 43. Respond with the number only.", "target": 24, "family": "math", "depth": "short"}
+{"prompt": "Compute 18 / 3. Respond with the number only.", "target": 6, "family": "math", "depth": "short"}
+{"prompt": "Compute (9 + 11) * 2 - 8. Respond with the number only.", "target": 32, "family": "math.multi_step", "depth": "medium"}
+{"prompt": "Compute (15 - 4) * 3 + 6. Respond with the number only.", "target": 39, "family": "math.multi_step", "depth": "medium"}
+{"prompt": "Convert the variable name `EnergyTicketRatio` to snake_case. Respond with the new name only.", "target": "energy_ticket_ratio", "family": "code.format", "depth": "medium"}
+{"prompt": "Convert `TeamRouterBudget` to snake_case. Respond with the new name only.", "target": "team_router_budget", "family": "code.format", "depth": "medium"}
