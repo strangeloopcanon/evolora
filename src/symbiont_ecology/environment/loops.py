@@ -109,6 +109,8 @@ class EcologyLoop:
     _synergy_window: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
     _synergy_sustain: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
     _team_probe_candidates_gen: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _team_gate_samples: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _team_gate_counts_gen: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     colonies: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _lp_mix_history: list[float] = field(default_factory=list, init=False, repr=False)
     _last_lp_mix: float = field(default=0.0, init=False, repr=False)
@@ -851,6 +853,10 @@ class EcologyLoop:
         attempt_samples = getattr(self, "assim_attempt_samples_snapshot", None)
         if attempt_samples:
             summary["assimilation_attempts"] = attempt_samples
+        if getattr(self, "_team_gate_counts_gen", None):
+            summary["team_gate_counts"] = dict(self._team_gate_counts_gen)
+        if self._team_gate_samples:
+            summary["team_gate_samples"] = list(self._team_gate_samples[-24:])
         if self._merge_audits_gen:
             summary["merge_audits"] = list(self._merge_audits_gen)
         if self.population.assimilation_history:
@@ -2887,36 +2893,28 @@ class EcologyLoop:
             if not score_records:
                 continue
             scores = [float(record.get("score", 0.0) or 0.0) for record in score_records]
-            base_min = max(4, self.config.assimilation_tuning.min_window)
-            desired_min = base_min
-            if family in {"math", "math.sequence"}:
-                desired_min = max(desired_min, 8)
-            elif family in {"logic.bool", "word.count"}:
-                desired_min = max(desired_min, 6)
+            tuning = self.config.assimilation_tuning
+            min_samples_required = self._min_samples_required(tuning)
+            base_min = self._min_window_requirement(tuning)
             available = len(scores) - (len(scores) % 2)
             tokens_available = self.population.evidence_tokens(genome.organelle_id)
-            token_window = int(getattr(self.config.assimilation_tuning, "evidence_token_window", 0))
+            token_window = int(getattr(tuning, "evidence_token_window", 0))
             token_spent = False
-            if available < base_min:
-                min_window = base_min
-            else:
-                min_window = min(desired_min, available)
-            step = max(2, self.config.assimilation_tuning.window_step)
-            if family in {"math", "math.sequence"}:
-                step = max(step, 4)
+            min_window = base_min if available < base_min else min(base_min, available)
+            step = max(2, int(getattr(tuning, "window_step", 2)))
             if available < min_window:
                 usable_available = available - (available % 2)
                 if (
                     not token_spent
                     and token_window > 0
                     and tokens_available > 0
-                    and usable_available >= max(4, min_window - token_window)
-                    and usable_available >= 4
+                    and usable_available >= max(2 * min_samples_required, min_window - token_window)
+                    and usable_available >= 2 * min_samples_required
                 ):
                     if self.population.consume_evidence(genome.organelle_id, 1):
                         tokens_available -= 1
                         usable_available = usable_available - (usable_available % 2)
-                        if usable_available >= 4:
+                        if usable_available >= 2 * min_samples_required:
                             available = usable_available
                             min_window = min(min_window, usable_available)
                             token_spent = True
@@ -2952,7 +2950,7 @@ class EcologyLoop:
             treatment = window[split:]
             control_records = window_records[:split]
             treatment_records = window_records[split:]
-            if len(control) < 2 or len(treatment) < 2:
+            if len(control) < min_samples_required or len(treatment) < min_samples_required:
                 self.assimilation_cooldown[key] = self.generation_index
                 gating["insufficient_scores"] += 1
                 self._record_assimilation_gate(
@@ -4448,7 +4446,7 @@ class EcologyLoop:
             info_slack = float(getattr(tuning, "info_topup_roi_slack", 0.0))
             if info_gap > 0:
                 scores_available = len(self.population.recent_scores(genome.organelle_id, limit=16))
-                base_min = max(4, tuning.min_window)
+                base_min = self._min_window_requirement(tuning)
                 info_need = max(0, base_min - scores_available)
                 if 0 < info_need <= info_gap and roi >= (effective_threshold - info_slack):
                     available = max(0.0, min(floor - balance, ledger.energy_cap - balance))
@@ -4596,6 +4594,59 @@ class EcologyLoop:
         stats = self._team_holdout_stats(member_ids, tasks)
         return float(stats.get("mean", 0.0))
 
+    def _min_samples_required(self, tuning: object | None = None) -> int:
+        cfg = tuning or self.config.assimilation_tuning
+        try:
+            value = int(getattr(cfg, "min_uplift_samples", 2))
+        except Exception:
+            value = 2
+        return max(1, value)
+
+    def _normalize_min_window_candidate(self, candidate: int, tuning: object | None = None) -> int:
+        cfg = tuning or self.config.assimilation_tuning
+        min_samples = self._min_samples_required(cfg)
+        floor = max(2 * min_samples, 2)
+        try:
+            floor_override = int(getattr(cfg, "min_window_min", floor))
+            if floor_override > 0:
+                floor = max(floor, floor_override)
+        except Exception:
+            pass
+        try:
+            ceiling = int(getattr(cfg, "min_window_max", max(floor, candidate)))
+        except Exception:
+            ceiling = max(floor, candidate, 2 * min_samples)
+        if ceiling < floor:
+            ceiling = floor
+        normalized = max(floor, min(candidate, ceiling))
+        if normalized % 2 != 0:
+            if normalized + 1 <= ceiling:
+                normalized += 1
+            else:
+                normalized -= 1
+                if normalized < floor:
+                    normalized = floor
+        return normalized
+
+    def _min_window_requirement(self, tuning: object | None = None) -> int:
+        cfg = tuning or self.config.assimilation_tuning
+        min_samples = self._min_samples_required(cfg)
+        base = max(2 * min_samples, 2)
+        try:
+            configured = int(getattr(cfg, "min_window", base))
+        except Exception:
+            configured = base
+        value = max(base, configured)
+        if value % 2 != 0:
+            value += 1
+        return value
+
+    def _set_min_window(self, tuning: object, candidate: int) -> int:
+        normalized = self._normalize_min_window_candidate(candidate, tuning)
+        if getattr(tuning, "min_window", None) != normalized:
+            tuning.min_window = normalized
+        return normalized
+
     @staticmethod
     def _compute_mean_ci(series: list[float], alpha: float = 0.05) -> tuple[float, float, float, float]:
         """Compute a normal-approximation CI for the mean of a series.
@@ -4644,6 +4695,18 @@ class EcologyLoop:
         per_gen = int(getattr(self.config.assimilation_tuning, "team_probe_per_gen", 0))
         if per_gen <= 0 or len(self.population.population) < 2:
             return 0
+        gate_counts: dict[str, int] = {}
+        self._team_gate_counts_gen = gate_counts
+
+        def _record_team_gate(reason: str, data: dict[str, object]) -> None:
+            payload = self._sanitize_telemetry(data)
+            payload["reason"] = reason
+            payload["generation"] = self.generation_index
+            self._team_gate_samples.append(payload)
+            if len(self._team_gate_samples) > 120:
+                self._team_gate_samples = self._team_gate_samples[-120:]
+            gate_counts[reason] = gate_counts.get(reason, 0) + 1
+
         # Pick top-K candidates by recent ROI
         scored = [
             (oid, float(self.population.average_roi(oid, limit=5)))
@@ -4724,7 +4787,22 @@ class EcologyLoop:
             # Power proxy gate
             min_power = float(getattr(self.config.assimilation_tuning, "team_min_power", 0.2))
             power = self._power_proxy(team_mu, baseline, margin, team_se)
-            if power >= min_power and self._team_accept(ci_low, baseline, margin, len(team_series), min_tasks):
+            has_tasks = len(team_series) >= min_tasks
+            ci_gate = ci_low > (baseline + margin)
+            attempt_info = {
+                "pair": [a_id, b_id],
+                "tasks": len(team_series),
+                "team_mu": float(team_mu),
+                "ci_low": float(ci_low),
+                "ci_high": float(ci_high),
+                "baseline": float(baseline),
+                "margin": float(margin),
+                "power": float(power),
+                "min_power": float(min_power),
+                "min_tasks": int(min_tasks),
+                "team_se": float(team_se),
+            }
+            if power >= min_power and has_tasks and ci_gate:
                 cid = f"col_{a_id[:4]}_{b_id[:4]}"
                 meta = self.colonies.setdefault(
                     cid,
@@ -4737,6 +4815,18 @@ class EcologyLoop:
                 )
                 self._log_colony_event(meta, self.generation_index, "create", members=list(meta.get("members", [])))
                 promotions += 1
+                attempt_info["colony_id"] = cid
+                _record_team_gate("accepted", attempt_info)
+            else:
+                if not has_tasks:
+                    reason = "insufficient_tasks"
+                elif power < min_power:
+                    reason = "low_power"
+                elif not ci_gate:
+                    reason = "ci_low"
+                else:
+                    reason = "unknown"
+                _record_team_gate(reason, attempt_info)
         if promotions > 0:
             self.promotions_this_gen += promotions
         return promotions
@@ -4897,7 +4987,7 @@ class EcologyLoop:
         # Initialize baselines once
         if not hasattr(self, "_nudge_baseline"):
             self._nudge_baseline = {
-                "min_window": int(getattr(tuning, "min_window", 4)),
+                "min_window": self._min_window_requirement(tuning),
                 "holdout": int(getattr(tuning, "holdout_sample_size", 4)),
                 "cap": int(getattr(tuning, "trial_per_gen_cap", 2)),
                 "prob": int(getattr(tuning, "trial_probation_gens", 5)),
@@ -4911,16 +5001,19 @@ class EcologyLoop:
         changed: dict[str, float] = {}
         # Optional: auto-tune min_window downward when insufficient_scores dominates
         if bool(getattr(tuning, "window_autotune", False)) and insufficient >= 50:
-            mw = int(getattr(tuning, "min_window", 4))
-            lower = int(getattr(tuning, "min_window_min", 6))
+            mw = self._min_window_requirement(tuning)
+            min_samples_floor = self._min_samples_required(tuning)
+            lower = max(2 * min_samples_floor, int(getattr(tuning, "min_window_min", 2 * min_samples_floor)))
+            if lower % 2 != 0:
+                lower += 1
             if mw > lower:
-                new_mw = max(lower, mw - 2)
-                if new_mw % 2 == 1:
-                    new_mw -= 1
-                tuning.min_window = max(lower, new_mw)
+                new_target = mw - 2
+                normalized = self._set_min_window(tuning, new_target)
+                if normalized != mw:
+                    changed["min_window"] = normalized
         if stall:
             # Increase evidence and budget within bounds
-            mw = int(getattr(tuning, "min_window", 4))
+            mw = self._min_window_requirement(tuning)
             ho = int(getattr(tuning, "holdout_sample_size", 4))
             cap = int(getattr(tuning, "trial_per_gen_cap", 2))
             prob = int(getattr(tuning, "trial_probation_gens", 5))
@@ -4928,17 +5021,15 @@ class EcologyLoop:
             bonus = float(getattr(tuning, "energy_topup_roi_bonus", 0.0))
             tau = float(self.config.controller.tau)
             new_mw = min(12, mw + 2)
-            if new_mw % 2 == 1:
-                new_mw += 1
             new_ho = min(24, ho + 2)
             new_cap = min(4, cap + 1)
             new_prob = min(12, prob + 2)
             new_stipend = min(1.2, stipend + 0.1)
             new_bonus = min(1.5, bonus + 0.1)
             new_tau = max(0.35, tau - 0.01)
-            if new_mw != mw:
-                tuning.min_window = new_mw
-                changed["min_window"] = new_mw
+            normalized_mw = self._set_min_window(tuning, new_mw)
+            if normalized_mw != mw:
+                changed["min_window"] = normalized_mw
             if new_ho != ho:
                 tuning.holdout_sample_size = new_ho
                 changed["holdout_sample_size"] = new_ho
@@ -4959,7 +5050,7 @@ class EcologyLoop:
                 changed["tau"] = new_tau
         elif promotions > 0 or merges > 0:
             # Softly revert towards baselines after successes
-            mw = int(getattr(tuning, "min_window", 4))
+            mw = self._min_window_requirement(tuning)
             ho = int(getattr(tuning, "holdout_sample_size", 4))
             cap = int(getattr(tuning, "trial_per_gen_cap", 2))
             prob = int(getattr(tuning, "trial_probation_gens", 5))
@@ -4973,17 +5064,15 @@ class EcologyLoop:
                     return min(tgt, cur + step)
                 return cur
             new_mw = int(step_towards(mw, base["min_window"], 2.0))
-            if new_mw % 2 == 1:
-                new_mw -= 1
             new_ho = int(step_towards(ho, base["holdout"], 2.0))
             new_cap = int(step_towards(cap, base["cap"], 1.0))
             new_prob = int(step_towards(prob, base["prob"], 2.0))
             new_stipend = step_towards(stipend, base["stipend"], 0.1)
             new_bonus = step_towards(bonus, base["bonus"], 0.1)
             new_tau = step_towards(tau, base["tau"], 0.01)
-            if new_mw != mw:
-                tuning.min_window = new_mw
-                changed["min_window"] = new_mw
+            normalized_mw = self._set_min_window(tuning, new_mw)
+            if normalized_mw != mw:
+                changed["min_window"] = normalized_mw
             if new_ho != ho:
                 tuning.holdout_sample_size = new_ho
                 changed["holdout_sample_size"] = new_ho

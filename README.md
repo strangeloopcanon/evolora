@@ -15,9 +15,11 @@ We want to see whether a colony of tiny LoRA adapters can learn useful behaviour
 If the colony keeps earning more than it spends, the population should drift toward better answers all on its own.
 
 ## Current Status
-- Long run (300 gens): avg ROI ≈ 0.94; merges 0; promotions 0; eval 0/360.
-- Assimilation blockers: low_energy and low statistical power dominate; uplift windows too short; top‑ups often ROI‑blocked.
-- Recent changes: added low‑power gating (defer decisions), larger evidence windows, easier evidence top‑ups, and trial offspring with promotion checks.
+- Latest 40‑gen smoke (Nov 10 2025, `artifacts_qwen3_endogenous_colonies_memory_20251110_114241`): avg ROI **1.68 ± 0.27**, 2 666 episodes, **32 merges / 83 trials / 29 promotions**, eval accuracy **19% (7/36, only math succeeds)**, no bankruptcies.
+- Assimilation gating is now statistical: low_power 172, uplift_below_threshold 136, insufficient_scores 130, versus low_energy 58. Mean sample size 4.6 after dropping `min_window` to 2 and minting evidence tokens (1 615 minted / 209 spent), but power still misses targets ~60 % of the time.
+- Team/colony path still stalled: 438 team routes yielded **0 promotions**, so no colonies formed and colony telemetry stayed at zero. We need instrumentation on `_maybe_team_probes` + `_team_accept` before dialing knobs again.
+- Policy system still inert (0/573 parses) and evaluation set remains misaligned (ΔROI ≈ ‑22). Documentation now calls this out so we stop assuming policies influence routing.
+- macOS runner still emits `malloc … out of space` during heavy gens; keep runs to short/medium grids, set `MPLCONFIGDIR=$(mktemp -d)`, and monitor RSS when enabling more eval tasks.
 
 ## What’s New (Oct 2025)
 - Policy hook (per‑org JSON policy) with energy micro‑cost. Policies can bias routing (cell_pref), adjust per‑org budget_frac, enable comms, and set a small gate_bias delta. Analyzer shows policy usage and ROI when policy is on vs off.
@@ -31,13 +33,21 @@ If the colony keeps earning more than it spends, the population should drift tow
 - MAP-Elites coverage is now first-class: merge candidate ranking blends ROI/EMA with novelty, the archive keeps a novelty-weighted elite set with configurable caps, analyzer plots archive size & coverage, and EvoScope surfaces top bins so you can spot emerging specialists at a glance.
 - Knowledge tokens: each organelle maintains a small energy-priced memory cache; successful answers persist as short hints, the loop prepends them during routing, and analyzer reports memory read/write rates so you can gauge usefulness.
 - Assimilation history: every organelle/cell pair retains a configurable trail of uplift + probe stats; summaries/analyzer expose the latest slices so dashboards can track where real learning is happening (and the telemetry survives restarts).
+- Promotion guardrails relaxed: holdout windows and statistical-power thresholds now match the small synthetic batch sizes, and reserve/hazard guards no longer block every attempt. Colonies are re-enabled so team routing can actually promote synergistic pairs.
+- Retrofitted recurrence: the host can now run an organelle through multiple internal reasoning passes per episode (`host.recurrence_*`). Training episodes default to two passes while holdouts/evals stay at one; scratchpad history is appended automatically and telemetry reports `recurrent_passes` so we can measure the extra compute budget.
 - Fisher-aware LoRA soups: assimilation weighting now uses activation-derived Fisher importances (with fallback to adapter energy) so high-signal organelles dominate merges; analyzer surfaces mean/max Fisher importance alongside merge weight stats.
 - Evidence auto-tune for assimilation windows to reduce “insufficient_scores”. DR small-n deferral (low_power_dr) grants evidence credit instead of forcing bad calls.
 - Doubly‑robust uplift with stratified holdout telemetry (method, power, strata), plus snapshots of assimilation gates and attempts.
 - Winter stress cycles: configurable price/ticket pulses with reserve bonuses on thaw. Analyzer now emits `winter_cycle.png`, `winter_events.png`, and `winter_events.jsonl`, and reports post‑winter ROI and assimilation recovery deltas so you can see whether the colony bounces back.
 - Foraging traits + Q-routing: organelles evolve `beta`, `q_decay`, `ucb_bonus`, and budget aggressiveness; Q-values update per cell, policy bias stays bounded, and analyzer reports `foraging_traits.png` plus top cell tables.
-- Learning‑progress curriculum heatmap (LP) and smoothed lp_mix. QD coverage readout (optional).
+- Learning-progress curriculum heatmap (LP) and smoothed lp_mix. QD coverage readout (optional).
 - Adaptive relief: τ/ROI guardrails relax when merges stall; analyzer surfaces relief snapshots.
+
+## Next Hypotheses & Instrumentation (Nov 2025)
+1. **Team acceptance trace** — instrument `_maybe_team_probes` / `_team_accept` to log tasks/CI/power gate outcomes so we can explain the current **0/438** team promotions and tune `team_probe_variance_nu`, `team_min_tasks`, and `team_min_power` with data.
+2. **Policy parser reality check** — capture raw policy outputs + parser failures, then A/B a KV-only fallback prompt for `budget_frac` / `reserve_ratio`. Hypothesis: Qwen‑0.6B needs structured hints, not strict JSON.
+3. **Evaluation alignment** — replicate the short/medium-only change from holdouts into `config/evaluation/*.jsonl` and remeasure. If accuracy jumps above 19%, keep the easier eval; otherwise lighten training tasks instead.
+4. **Memory pressure audit** — log RSS + `metrics.in_memory_log_limit` deltas each gen to pinpoint the `malloc` spikes; trim `evaluation.sample_size` or `max_episode_steps` if holdouts/evals drive the peaks.
 
 ## How Learning Emerges (Core Hypothesis)
 
@@ -143,6 +153,11 @@ The report now highlights ROI stats, assimilation gating totals, **recent gating
 - `environment.success_reward_bonus`, `environment.failure_cost_multiplier`: steer survival pressure.
 - `environment.*`: per-org budgeting (`budget_*` knobs) blends energy ratio, evolved traits, and policy `budget_frac`; `global_episode_cap` enforces a hard ceiling per generation and shows up in telemetry when hit.
 - `assimilation_tuning.*`: guard baselines, probe requirements, holdout settings, LoRA soup behaviour, **`energy_topup_roi_bonus` for lenient top-ups**, and `gating_snapshot_limit` for telemetry retention.
+- **Assimilation sanity checks (why merges can stall):**
+  1. **Evidence quota:** if `min_window` × `holdout_sample_size` exceeds the tasks an organelle sees per generation, every attempt will die as “insufficient_scores”. We now keep the quota in line with `environment.synthetic_batch_size`.
+  2. **Uplift margin:** noisy math tasks rarely clear a large `holdout_margin`. When we need the pipeline to move, we temporarily lower the margin or feed easier cells, then tighten it once merges start landing.
+  3. **Power target:** demanding 80% statistical power on tiny samples is wishful thinking. Dropping `power_target` (and letting evidence tokens bridge bigger gaps) keeps the hypothesis test from vetoing every attempt.
+  4. **Reserve/hazard guard:** safety rails are useful, but if they disable probes/assimilation whenever an organelle dips into reserve, nothing can promote. Lowering `reserve_ratio`, loosening the hazard band, or turning off `hazard_probe_disable` gives the population a chance to evolve before the guard kills experimentation.
 - `assimilation_tuning.colony_*`: synergy thresholds, expand/shrink windows, and bandwidth budgets (`colony_expand_delta`, `colony_expand_windows`, `colony_bandwidth_base`, `colony_hazard_bandwidth_scale`, etc.) so colonies grow only when holdout ROI keeps improving and comms spend stays within the pot.
 - `grid.families`: choose which mix of math, logic, sorting, sequence, and JSON cells make up the curriculum.
 - `diversity.*`: energy Gini cap and per-species share limit.
