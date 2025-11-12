@@ -1535,16 +1535,14 @@ class EcologyLoop:
 
     @staticmethod
     def _parse_policy_json(text: str, allowed: list[str]) -> dict[str, object]:
-        """Extract and repair a small JSON object with allowed fields.
+        """Extract a tiny policy payload.
 
         Strategy (best-effort, no heavy deps):
         1) Prefer fenced ```json blocks; else any fenced block; else the outermost {...} span.
-        2) Try strict json.loads; on failure, apply light repairs:
-           - strip code fences
-           - remove trailing commas before } or ]
-           - normalize Python literals to JSON (True/False/None -> true/false/null)
-           - convert simple single-quoted keys/values to double-quoted
-        3) Return only keys in `allowed`.
+        2) Try strict json.loads; on failure, apply light repairs (strip fences, drop trailing commas,
+           normalize Python literals, convert single quotes).
+        3) If JSON parsing fails, fall back to `key=value` pairs and coerce numbers/bools.
+        4) Return only keys in `allowed`.
         """
         import json as _json
         import re as _re
@@ -1601,45 +1599,49 @@ class EcologyLoop:
                 return None
             return {k: v for k, v in data.items() if k in allowed}
 
-        # Collect candidates
+        def _coerce_value(token: str) -> object:
+            raw = token.strip()
+            percent = raw.endswith("%")
+            if percent:
+                raw = raw[:-1].strip()
+            lower = raw.lower()
+            if lower in {"true", "false"}:
+                return lower == "true"
+            if lower == "null":
+                return None
+            if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
+                raw = raw[1:-1]
+            try:
+                if "." in raw or "e" in lower:
+                    value = float(raw)
+                else:
+                    value = float(int(raw))
+                if percent:
+                    value = value / 100.0
+                return value
+            except Exception:
+                return raw
+
+        def _parse_kv_pairs(block: str) -> dict[str, object]:
+            kvs: dict[str, object] = {}
+            for key, value in _re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=]\s*([^\s;,]+)", block):
+                if allowed and key not in allowed:
+                    continue
+                kvs[key] = _coerce_value(value)
+            return kvs
+
         candidates = _find_fenced(text)
         outer = _outer_object(text)
         if outer:
             candidates.append(outer)
+        candidates.append(text)
         for cand in candidates:
             parsed = _try_load(cand)
             if parsed:
                 return parsed
-        # Fallback: simple key:value extraction (very tolerant)
-        try:
-            kvs: dict[str, object] = {}
-            # match patterns like key: 0.5 or key=0.5 or key: true/false
-            for m in _re.finditer(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=]\s*([\-+]?[0-9]+(?:\.[0-9]+)?%?|true|false)", text, _re.IGNORECASE):
-                k = m.group(1)
-                vraw = m.group(2)
-                if k not in allowed:
-                    continue
-                if vraw.lower() in ("true", "false"):
-                    kvs[k] = (vraw.lower() == "true")
-                else:
-                    try:
-                        cleaned = vraw.strip()
-                        percent = cleaned.endswith("%")
-                        if percent:
-                            cleaned = cleaned[:-1]
-                        cleaned = cleaned.strip()
-                        if not cleaned:
-                            continue
-                        value = float(cleaned) if "." in cleaned else float(int(cleaned))
-                        if percent:
-                            value = value / 100.0
-                        kvs[k] = value
-                    except Exception:
-                        continue
-            if kvs:
-                return kvs
-        except Exception:
-            pass
+        kvs = _parse_kv_pairs(text)
+        if kvs:
+            return kvs
         return {}
 
     def run_colony_inference(self, member_ids: list[str], prompt: str, strategy: str = "best_of_two") -> dict[str, object]:
@@ -2619,19 +2621,19 @@ class EcologyLoop:
         except Exception:
             self._policy_attempts_gen = 1
         allowed = list(getattr(self.config.policy, "allowed_fields", []))
-        example_payload = {
-            key: round(0.5 if idx == 0 else 0.1, 2)
-            for idx, key in enumerate(allowed)
-        }
-        example_json = json.dumps(example_payload) if example_payload else "{}"
+        key_pairs = []
+        for idx, key in enumerate(allowed):
+            val = 0.5 if idx == 0 else 0.2
+            key_pairs.append(f"{key}={val:.2f}")
+        kv_example = " ".join(key_pairs) if key_pairs else ""
         keys_clause = ", ".join(allowed) if allowed else ""
         prompt = (
-            "Respond ONLY with a minified JSON object containing the keys "
-            + keys_clause
-            + ". No prose, comments, Markdown, or additional keys."
-            " Example format: "
-            + example_json
-            + "\nIf you are uncertain, return {}."
+            "Respond ONLY with space-separated key=value pairs for these keys: "
+            + (keys_clause or "none")
+            + ". Example: "
+            + (kv_example or "{}")
+            + ". Use decimals like 0.55 and `true`/`false` for booleans. "
+            "Do NOT return prose, Markdown, or JSON. If unsure, output `{}`."
         )
         result = self.host.step(
             prompt=prompt,
@@ -4500,11 +4502,15 @@ class EcologyLoop:
             self._holdout_tasks_cache = []
         return self._holdout_tasks_cache
 
-    def _sample_holdout_tasks(self) -> list[EvaluationTask]:
+    def _sample_holdout_tasks(self, override_size: int | None = None) -> list[EvaluationTask]:
         tasks = self._load_holdout_tasks()
         if not tasks:
             return []
-        sample_size = max(1, min(len(tasks), self.config.assimilation_tuning.holdout_sample_size))
+        if override_size is not None:
+            target = int(max(1, override_size))
+        else:
+            target = int(max(1, getattr(self.config.assimilation_tuning, "holdout_sample_size", 2)))
+        sample_size = max(1, min(len(tasks), target))
         if len(tasks) <= sample_size:
             return list(tasks)
         return self.holdout_rng.sample(tasks, sample_size)
@@ -4697,6 +4703,7 @@ class EcologyLoop:
             return 0
         gate_counts: dict[str, int] = {}
         self._team_gate_counts_gen = gate_counts
+        sample_override = int(getattr(self.config.assimilation_tuning, "team_holdout_sample_size", 0) or 0)
 
         def _record_team_gate(reason: str, data: dict[str, object]) -> None:
             payload = self._sanitize_telemetry(data)
@@ -4737,7 +4744,8 @@ class EcologyLoop:
         rng = self.environment.rng
         rng.shuffle(pairs)
         for (a_id, b_id) in pairs[:per_gen]:
-            tasks = self._sample_holdout_tasks()
+            override = sample_override if sample_override > 0 else None
+            tasks = self._sample_holdout_tasks(override)
             if not tasks:
                 continue
             # Compute best-of-two ROI series and baseline means
