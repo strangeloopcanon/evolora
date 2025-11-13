@@ -265,7 +265,7 @@ evaluation:
   enabled: true
   cadence: 20
   tasks_path: config/evaluation/holdout_simple.jsonl
-  sample_size: 6
+  sample_size: 4
   reward_weight: 0.75
 diversity:
   enabled: true
