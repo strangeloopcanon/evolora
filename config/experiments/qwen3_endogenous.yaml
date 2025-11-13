@@ -219,6 +219,7 @@ policy:
   allowed_fields:
   - budget_frac
   - reserve_ratio
+  failure_penalty: 0.05
 prompting:
   few_shot_enabled: true
 foraging:
@@ -237,7 +238,7 @@ winter:
   ticket_multiplier: 0.7
   post_winter_bonus: 0.25
 environment:
-  synthetic_batch_size: 4
+  synthetic_batch_size: 3
   auto_batch: true
   batch_min: 1
   batch_max: 4
@@ -262,7 +263,7 @@ human_bandit:
   frequency: 0.4
 evaluation:
   enabled: true
-  cadence: 10
+  cadence: 20
   tasks_path: config/evaluation/holdout_simple.jsonl
   sample_size: 6
   reward_weight: 0.75

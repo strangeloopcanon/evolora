@@ -124,6 +124,7 @@ class EcologyLoop:
     _policy_cost_total: float = field(default=0.0, init=False, repr=False)
     _policy_attempts_gen: int = field(default=0, init=False, repr=False)
     _policy_parsed_gen: int = field(default=0, init=False, repr=False)
+    _policy_fail_counts: int = field(default=0, init=False, repr=False)
     _co_routing_counts: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
     _reserve_state: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _hazard_state: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
@@ -180,6 +181,7 @@ class EcologyLoop:
         self._assim_attempt_total = 0
         self._policy_attempts_gen = 0
         self._policy_parsed_gen = 0
+        self._policy_fail_counts = 0
         self._comms_stats_gen = {"posts": 0, "reads": 0, "credits": 0}
         self._comms_events_gen: list[dict[str, object]] = []
         self._budget_snapshot_gen = None
@@ -829,6 +831,8 @@ class EcologyLoop:
                     summary["policy_cost_total"] = float(self._policy_cost_total)
             summary["policy_attempts"] = int(self._policy_attempts_gen)
             summary["policy_parsed"] = int(self._policy_parsed_gen)
+            if getattr(self, "_policy_fail_counts", 0):
+                summary["policy_failures"] = int(self._policy_fail_counts)
         if getattr(self, "_prompt_scaffold_counts", None):
             summary["prompt_scaffolds"] = dict(self._prompt_scaffold_counts)
         # QD coverage (family-depth cells with observed stats)
@@ -2648,6 +2652,7 @@ class EcologyLoop:
         allowed = list(getattr(self.config.policy, "allowed_fields", []))
         pol = self._parse_policy_json(str(answer), allowed)
         if not pol:
+            self._penalize_policy_failure(organelle_id)
             return
         # Count successful parse
         try:
@@ -2694,6 +2699,20 @@ class EcologyLoop:
                     genome.post_rate = 1.0 if pol["post"] else 0.0
         except Exception:
             pass
+
+    def _penalize_policy_failure(self, organelle_id: str) -> None:
+        penalty = float(getattr(self.config.policy, "failure_penalty", 0.0))
+        if penalty > 0.0:
+            try:
+                if self.host.ledger.energy_balance(organelle_id) >= penalty:
+                    self.host.ledger.consume_energy(organelle_id, penalty)
+                    self._policy_cost_total += penalty
+            except Exception:
+                pass
+        try:
+            self._policy_fail_counts += 1
+        except Exception:
+            self._policy_fail_counts = 1
 
     def _attempt_assimilation(self, capped: int | None = None) -> int:
         removable: list[str] = []
@@ -4704,6 +4723,15 @@ class EcologyLoop:
         gate_counts: dict[str, int] = {}
         self._team_gate_counts_gen = gate_counts
         sample_override = int(getattr(self.config.assimilation_tuning, "team_holdout_sample_size", 0) or 0)
+        handoff_enabled = bool(getattr(self.config.assimilation_tuning, "team_handoff_enabled", False))
+        handoff_prompt = str(
+            getattr(
+                self.config.assimilation_tuning,
+                "team_handoff_prompt",
+                "Partner answer:\n{answer}\nProvide a critique or improved answer.",
+            )
+        )
+        handoff_cap = int(getattr(self.config.assimilation_tuning, "team_handoff_cap_per_gen", 0) or 0)
 
         def _record_team_gate(reason: str, data: dict[str, object]) -> None:
             payload = self._sanitize_telemetry(data)
@@ -4756,28 +4784,58 @@ class EcologyLoop:
             for index, task in enumerate(tasks, start=1):
                 grid_task = task.to_grid_task(self.environment, task_id=f"team_probe_{index:04d}")
                 best_roi = 0.0
-                for oid, series in ((a_id, a_series), (b_id, b_series)):
-                    result_i = self.host.step(
-                        prompt=grid_task.prompt,
-                        intent="team probe",
-                        max_routes=1,
-                        allowed_organelle_ids=[oid],
+                partner_answer = ""
+                # First member
+                result_a = self.host.step(
+                    prompt=grid_task.prompt,
+                    intent="team probe",
+                    max_routes=1,
+                    allowed_organelle_ids=[a_id],
+                )
+                metrics_a = result_a.responses.get(a_id)
+                if metrics_a is not None:
+                    success_a, reward_a = grid_task.evaluate(metrics_a.answer)
+                    revenue_a = grid_task.price * reward_a.total
+                    cost_a = (
+                        energy_cfg.alpha * metrics_a.flops_estimate
+                        + energy_cfg.beta * metrics_a.memory_gb
+                        + energy_cfg.gamma * metrics_a.latency_ms
+                        + energy_cfg.lambda_p * metrics_a.trainable_params
                     )
-                    metrics_i = result_i.responses.get(oid)
-                    if metrics_i is None:
-                        continue
-                    success_i, reward_i = grid_task.evaluate(metrics_i.answer)
-                    revenue_i = grid_task.price * reward_i.total
-                    cost_i = (
-                        energy_cfg.alpha * metrics_i.flops_estimate
-                        + energy_cfg.beta * metrics_i.memory_gb
-                        + energy_cfg.gamma * metrics_i.latency_ms
-                        + energy_cfg.lambda_p * metrics_i.trainable_params
+                    roi_a = (float("inf") if revenue_a > 0 else 0.0) if cost_a <= 0.0 else (revenue_a / cost_a)
+                    roi_a = 0.0 if not math.isfinite(roi_a) else float(max(0.0, min(roi_a, 10.0)))
+                    a_series.append(roi_a)
+                    best_roi = max(best_roi, roi_a)
+                    partner_answer = str(metrics_a.answer)
+                # Second member with optional handoff
+                prompt_b = grid_task.prompt
+                if handoff_enabled and partner_answer:
+                    use_handoff = True
+                    if handoff_cap > 0 and getattr(self, "_team_handoff_used", 0) >= handoff_cap:
+                        use_handoff = False
+                    if use_handoff:
+                        prompt_b = f"{grid_task.prompt}\n\n{handoff_prompt.format(answer=partner_answer)}".strip()
+                        self._team_handoff_used = int(getattr(self, "_team_handoff_used", 0)) + 1
+                result_b = self.host.step(
+                    prompt=prompt_b,
+                    intent="team probe",
+                    max_routes=1,
+                    allowed_organelle_ids=[b_id],
+                )
+                metrics_b = result_b.responses.get(b_id)
+                if metrics_b is not None:
+                    success_b, reward_b = grid_task.evaluate(metrics_b.answer)
+                    revenue_b = grid_task.price * reward_b.total
+                    cost_b = (
+                        energy_cfg.alpha * metrics_b.flops_estimate
+                        + energy_cfg.beta * metrics_b.memory_gb
+                        + energy_cfg.gamma * metrics_b.latency_ms
+                        + energy_cfg.lambda_p * metrics_b.trainable_params
                     )
-                    roi_i = (float("inf") if revenue_i > 0 else 0.0) if cost_i <= 0.0 else (revenue_i / cost_i)
-                    roi_i = 0.0 if not math.isfinite(roi_i) else float(max(0.0, min(roi_i, 10.0)))
-                    series.append(roi_i)
-                    best_roi = max(best_roi, roi_i)
+                    roi_b = (float("inf") if revenue_b > 0 else 0.0) if cost_b <= 0.0 else (revenue_b / cost_b)
+                    roi_b = 0.0 if not math.isfinite(roi_b) else float(max(0.0, min(roi_b, 10.0)))
+                    b_series.append(roi_b)
+                    best_roi = max(best_roi, roi_b)
                 team_series.append(best_roi)
             base_a = sum(a_series) / max(len(a_series), 1)
             base_b = sum(b_series) / max(len(b_series), 1)

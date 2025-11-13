@@ -433,6 +433,7 @@ class AssimilationTuningConfig(BaseModel):
     team_max_routes_per_gen: int = Field(8, ge=0, description="Max team episodes per generation across all pairs")
     team_min_power: float = Field(0.2, ge=0.0, le=1.0, description="Minimum power proxy required for team promotions")
     team_holdout_margin: float | None = Field(None, description="Team-specific holdout margin; falls back to holdout_margin if None")
+    team_holdout_sample_size: int = Field(2, ge=1, description="How many holdout tasks to sample during team probes")
     team_block_diagonal_merges: bool = Field(
         True, description="Compose assimilation soups with block-diagonal structure when team/colony roles are known"
     )
@@ -592,6 +593,7 @@ class PolicyConfig(BaseModel):
     bias_strength: float = Field(0.3, ge=0.0, le=1.0, description="Probability to honor cell_pref over controller routing")
     reserve_min: float = Field(0.0, ge=0.0, le=1.0)
     reserve_max: float = Field(0.75, ge=0.0, le=1.0)
+    failure_penalty: float = Field(0.05, ge=0.0, description="Energy penalty when policy output is malformed")
 
 
 def _default_few_shot_examples() -> dict[str, list[dict[str, str]]]:
