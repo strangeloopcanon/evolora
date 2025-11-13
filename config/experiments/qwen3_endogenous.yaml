@@ -197,12 +197,12 @@ meta:
   catastrophe_interval: 0
   catastrophe_scale: 0.6
 curriculum:
-  lp_mix: 0.2
+  lp_mix: 0.45
   lp_alpha: 0.5
   alp_auto_mix: true
-  lp_mix_min: 0.1
-  lp_mix_max: 0.6
-  lp_window: 6
+  lp_mix_min: 0.25
+  lp_mix_max: 0.7
+  lp_window: 4
 controller:
   tau: 0.38
 qd:
@@ -220,6 +220,7 @@ policy:
   - budget_frac
   - reserve_ratio
   failure_penalty: 0.05
+  success_bonus: 0.02
 prompting:
   few_shot_enabled: true
 foraging:
@@ -250,7 +251,7 @@ environment:
   budget_policy_ceiling: 1.8
   global_episode_cap: 120
   human_bandit_batch_size: 4
-  max_episode_steps: 128
+  max_episode_steps: 96
   energy_budget: 50.0
   success_reward_bonus: 1.0
   failure_cost_multiplier: 0.5

@@ -125,6 +125,7 @@ class EcologyLoop:
     _policy_attempts_gen: int = field(default=0, init=False, repr=False)
     _policy_parsed_gen: int = field(default=0, init=False, repr=False)
     _policy_fail_counts: int = field(default=0, init=False, repr=False)
+    _policy_failure_samples: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
     _co_routing_counts: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
     _reserve_state: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _hazard_state: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
@@ -182,6 +183,7 @@ class EcologyLoop:
         self._policy_attempts_gen = 0
         self._policy_parsed_gen = 0
         self._policy_fail_counts = 0
+        self._policy_failure_samples = []
         self._comms_stats_gen = {"posts": 0, "reads": 0, "credits": 0}
         self._comms_events_gen: list[dict[str, object]] = []
         self._budget_snapshot_gen = None
@@ -833,6 +835,8 @@ class EcologyLoop:
             summary["policy_parsed"] = int(self._policy_parsed_gen)
             if getattr(self, "_policy_fail_counts", 0):
                 summary["policy_failures"] = int(self._policy_fail_counts)
+            if getattr(self, "_policy_failure_samples", None):
+                summary["policy_failure_samples"] = list(self._policy_failure_samples[-5:])
         if getattr(self, "_prompt_scaffold_counts", None):
             summary["prompt_scaffolds"] = dict(self._prompt_scaffold_counts)
         # QD coverage (family-depth cells with observed stats)
@@ -2650,9 +2654,10 @@ class EcologyLoop:
             return
         answer = result.envelope.observation.state.get("answer", "")
         allowed = list(getattr(self.config.policy, "allowed_fields", []))
-        pol = self._parse_policy_json(str(answer), allowed)
+        answer_text = str(answer)
+        pol = self._parse_policy_json(answer_text, allowed)
         if not pol:
-            self._penalize_policy_failure(organelle_id)
+            self._penalize_policy_failure(organelle_id, answer_text)
             return
         # Count successful parse
         try:
@@ -2700,7 +2705,15 @@ class EcologyLoop:
         except Exception:
             pass
 
-    def _penalize_policy_failure(self, organelle_id: str) -> None:
+        bonus = float(getattr(self.config.policy, "success_bonus", 0.0))
+        if bonus > 0.0:
+            try:
+                self.host.ledger.credit_energy(organelle_id, bonus)
+                self._policy_cost_total -= bonus
+            except Exception:
+                pass
+
+    def _penalize_policy_failure(self, organelle_id: str, answer: str) -> None:
         penalty = float(getattr(self.config.policy, "failure_penalty", 0.0))
         if penalty > 0.0:
             try:
@@ -2713,6 +2726,15 @@ class EcologyLoop:
             self._policy_fail_counts += 1
         except Exception:
             self._policy_fail_counts = 1
+        snippet = answer.strip().splitlines()
+        preview = snippet[0] if snippet else ""
+        preview = preview[:160]
+        self._policy_failure_samples.append({
+            "organelle_id": organelle_id,
+            "sample": preview,
+        })
+        if len(self._policy_failure_samples) > 10:
+            self._policy_failure_samples = self._policy_failure_samples[-10:]
 
     def _attempt_assimilation(self, capped: int | None = None) -> int:
         removable: list[str] = []

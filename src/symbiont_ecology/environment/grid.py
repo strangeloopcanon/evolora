@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from copy import deepcopy
@@ -39,9 +40,8 @@ class GridTask:
         success = False
         task_reward = 0.0
 
-        if self.family in {"math", "math.sequence"}:
+        if self.family in {"math", "math.sequence", "math.multi_step"}:
             # Be tolerant: extract the first numeric token anywhere in the string
-            import re
             match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", clean)
             predicted = float(match.group(0)) if match else None
             success = predicted is not None and math.isclose(predicted, float(self.target), rel_tol=1e-3)
@@ -117,7 +117,6 @@ class GridTask:
 
         elif self.family == "logic.bool":
             # Extract first boolean token ignoring markdown or prose
-            import re
             text = clean.strip().lower()
             m = re.search(r"\b(true|false|yes|no)\b", text)
             if m:
@@ -129,6 +128,19 @@ class GridTask:
             else:
                 predicted_bool = None
             success = predicted_bool is not None and predicted_bool == bool(self.target)
+            task_reward = 1.0 if success else 0.0
+
+        elif self.family == "code.format":
+            normalized = clean.strip()
+            if normalized.startswith("```"):
+                # Strip code fences, keep last non-empty line
+                stripped = normalized.strip("`")
+                lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+                if lines and lines[0].lower().startswith("python"):
+                    lines = lines[1:]
+                normalized = lines[-1] if lines else ""
+            normalized = normalized.strip("'\"")
+            success = normalized == str(self.target)
             task_reward = 1.0 if success else 0.0
 
         novelty = min(0.1, self.difficulty * 0.1)
@@ -225,7 +237,10 @@ class EnvironmentController:
         eta = self.ctrl.eta
         prev = state.success_ema
         state.success_ema = (1 - beta) * prev + beta * (1.0 if success else 0.0)
-        state.difficulty = min(0.95, max(0.05, state.difficulty + eta * (state.success_ema - tau)))
+        difficulty_delta = eta * (state.success_ema - tau)
+        state.difficulty = min(0.85, max(0.15, state.difficulty + difficulty_delta))
+        if not success:
+            state.difficulty = max(0.15, state.difficulty - eta * 0.5)
         state.price = min(
             self.pricing.max,
             max(self.pricing.min, self.pricing.base + self.pricing.k * (tau - state.success_ema)),
@@ -321,29 +336,135 @@ class GridEnvironment:
         self._bootstrap_canaries()
         # simple message board (off by default unless enabled in config via loop)
         self.message_board: list[dict[str, object]] = []
+        self._message_seq: int = 0
         # simple latent cache bus for C2C comms
         self.cache_bus: list[dict[str, object]] = []
 
-    def post_message(self, organelle_id: str, text: str, *, cost: float = 0.2, ttl: int = 10) -> bool:
+    def post_message(
+        self,
+        organelle_id: str,
+        text: str,
+        *,
+        cost: float = 0.2,
+        ttl: int = 10,
+        priority: float | None = None,
+        topic: str | None = None,
+        cell: tuple[str, str] | None = None,
+        meta: dict[str, object] | None = None,
+    ) -> bool:
+        ttl_int = max(int(ttl), 0)
+        if ttl_int <= 0:
+            return False
+        default_priority = getattr(self, "default_comm_priority", 0.0)
+        history_cap = max(1, int(getattr(self, "comms_history_cap", 64)))
         try:
-            entry = {"organelle_id": organelle_id, "text": text, "ttl": int(ttl)}
+            self._message_seq += 1
+            entry: dict[str, object] = {
+                "id": self._message_seq,
+                "organelle_id": str(organelle_id),
+                "text": str(text),
+                "ttl": ttl_int,
+                "priority": float(priority) if priority is not None else float(default_priority),
+                "topic": str(topic) if topic else None,
+                "cell": list(cell) if cell else None,
+                "meta": dict(meta) if meta else {},
+                "reads": 0,
+                "posted_at": self._message_seq,
+                "seen_by": set(),
+            }
             self.message_board.append(entry)
+            if len(self.message_board) > history_cap:
+                overflow = len(self.message_board) - history_cap
+                del self.message_board[0:overflow]
             return True
         except Exception:
             return False
 
-    def read_messages(self, max_items: int = 3) -> list[dict[str, str]]:
-        cleaned: list[dict[str, str]] = []
-        for entry in list(self.message_board):
+    def read_messages(
+        self,
+        max_items: int = 3,
+        *,
+        topics: list[str] | None = None,
+        exclude: set[str] | None = None,
+        reader: str | None = None,
+    ) -> list[dict[str, object]]:
+        if max_items <= 0:
+            return []
+        topics_set = {topic for topic in (topics or []) if topic}
+        exclude_set = {str(item) for item in (exclude or set())}
+        reader_id = str(reader) if reader is not None else None
+        ordered = sorted(
+            self.message_board,
+            key=lambda entry: (float(entry.get("priority", 0.0)), int(entry.get("posted_at", 0))),
+            reverse=True,
+        )
+        primary: list[dict[str, object]] = []
+        secondary: list[dict[str, object]] = []
+        for entry in ordered:
             ttl = int(entry.get("ttl", 0))
             if ttl <= 0:
-                self.message_board.remove(entry)
+                continue
+            poster = str(entry.get("organelle_id"))
+            if poster in exclude_set:
+                continue
+            seen_by: set[str] = entry.get("seen_by", set())  # type: ignore[assignment]
+            if reader_id and reader_id in seen_by:
+                continue
+            topic = entry.get("topic")
+            target_list = secondary
+            if topics_set and topic in topics_set:
+                target_list = primary
+            elif not topics_set:
+                target_list = primary
+            target_list.append(entry)
+        combined = primary + secondary
+        results: list[dict[str, object]] = []
+        for entry in combined:
+            if len(results) >= max_items:
+                break
+            ttl = int(entry.get("ttl", 0))
+            if ttl <= 0:
                 continue
             entry["ttl"] = ttl - 1
-            cleaned.append({"organelle_id": str(entry.get("organelle_id")), "text": str(entry.get("text"))})
-            if len(cleaned) >= max_items:
-                break
-        return cleaned
+            entry["reads"] = int(entry.get("reads", 0)) + 1
+            seen_by = entry.get("seen_by", set())
+            if isinstance(seen_by, set) and reader_id:
+                seen_by.add(reader_id)
+            cleaned = {
+                "organelle_id": str(entry.get("organelle_id")),
+                "text": str(entry.get("text")),
+                "topic": entry.get("topic"),
+                "priority": float(entry.get("priority", 0.0)),
+                "cell": entry.get("cell"),
+                "meta": dict(entry.get("meta", {})),
+                "ttl": int(entry.get("ttl", 0)),
+                "reads": int(entry.get("reads", 0)),
+            }
+            results.append(cleaned)
+        # purge expired messages
+        self.message_board = [entry for entry in self.message_board if int(entry.get("ttl", 0)) > 0]
+        return results
+
+    def peek_messages(self, limit: int = 5) -> list[dict[str, object]]:
+        ordered = sorted(
+            self.message_board,
+            key=lambda entry: (float(entry.get("priority", 0.0)), int(entry.get("posted_at", 0))),
+            reverse=True,
+        )
+        snapshot: list[dict[str, object]] = []
+        for entry in ordered[: max(1, limit)]:
+            snapshot.append(
+                {
+                    "organelle_id": str(entry.get("organelle_id")),
+                    "text": str(entry.get("text")),
+                    "topic": entry.get("topic"),
+                    "priority": float(entry.get("priority", 0.0)),
+                    "ttl": int(entry.get("ttl", 0)),
+                    "reads": int(entry.get("reads", 0)),
+                    "cell": entry.get("cell"),
+                }
+            )
+        return snapshot
 
     # C2C latent cache bus -------------------------------------------------
     def post_cache(self, organelle_id: str, latent: list[float], *, ttl: int = 5) -> bool:
@@ -471,15 +592,13 @@ class GridEnvironment:
             )
 
         if family == "word.count":
-            sentence = self._generate_word_count_sentence(depth)
-            prompt = f"Count the number of words in the sentence: '{sentence}'. Respond with an integer."
-            target = len(sentence.split())
+            prompt_text, target_count = self._make_word_count_task(depth)
             return GridTask(
                 task_id=task_id,
                 cell=cell,
-                prompt=prompt,
+                prompt=prompt_text,
                 price=price,
-                target=target,
+                target=int(target_count),
                 family="word.count",
                 depth=depth,
                 difficulty=difficulty,
@@ -576,24 +695,59 @@ class GridEnvironment:
                 + ", ".join(str(n) for n in sequence)
                 + ", what is the next number? Respond with the number only."
             )
-        return GridTask(
-            task_id=task_id,
-            cell=cell,
-            prompt=prompt,
-            price=price,
-            target=float(next_value),
-            family="math.sequence",
-            depth=depth,
-            difficulty=difficulty,
-            canary=canary,
-            reward_bonus=self.reward_bonus,
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt,
+                price=price,
+                target=float(next_value),
+                family="math.sequence",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "math.multi_step":
+            prompt_multi, target_multi = self._make_multi_step_math(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_multi,
+                price=price,
+                target=float(target_multi),
+                family="math.multi_step",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "code.format":
+            prompt_code, target_code = self._make_code_format_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_code,
+                price=price,
+                target=target_code,
+                family="code.format",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
                 failure_cost_scale=self.failure_cost_multiplier,
             )
 
         # fallback: math task
         return self._make_task(("math", depth), canary)
 
-    def _generate_word_count_sentence(self, depth: str) -> str:
+    def _count_alpha_words(self, text: str) -> int:
+        return len(re.findall(r"[A-Za-z]+", text))
+
+    def _make_word_count_task(self, depth: str) -> tuple[str, int]:
         base_sentences = {
             "short": [
                 "Symbiotic agents cooperate",
@@ -611,14 +765,13 @@ class GridEnvironment:
                 "Telemetry snapshots surface ROI variance, energy gini, and uplift deltas per cell",
             ],
         }
-        chaos_probability = {"short": 0.25, "medium": 0.45, "long": 0.65}.get(depth, 0.4)
-        if self.rng.random() > chaos_probability:
-            return self.rng.choice(base_sentences.get(depth, base_sentences["short"]))
+        if self.rng.random() < 0.45:
+            sentence = self.rng.choice(base_sentences.get(depth, base_sentences["short"]))
+            prompt = f"Count the number of words in the sentence: '{sentence}'. Respond with an integer."
+            return prompt, self._count_alpha_words(sentence)
 
-        length_map = {"short": (4, 6), "medium": (9, 13), "long": (16, 24)}
-        min_len, max_len = length_map.get(depth, length_map["medium"])
-        length = self.rng.randint(min_len, max_len)
-        lexicon = [
+        mode = self.rng.choice(["html", "punctuation", "digits"])
+        word_pool = [
             "adaptive",
             "agents",
             "align",
@@ -644,41 +797,104 @@ class GridEnvironment:
             "yield",
             "zenith",
         ]
-        connectors = ["and", "while", "because", "whenever", "although", "despite", "before", "after"]
-        numeric_tokens = ["3", "five", "seven", "twelve", "30%", "half", "twice"]
-        emphasis_tokens = ["really", "remarkably", "carefully", "boldly"]
 
-        tokens: list[str] = []
-        for idx in range(length):
-            pool = lexicon
-            if idx > 0 and self.rng.random() < 0.15:
-                pool = connectors
-            elif self.rng.random() < 0.12:
-                pool = numeric_tokens
-            word = self.rng.choice(pool)
-            if self.rng.random() < 0.1:
-                word = f"{self.rng.choice(['bio', 'neuro', 'meta', 'eco'])}-{word}"
-            if self.rng.random() < 0.12:
-                word = word.upper()
-            if self.rng.random() < 0.18:
-                word = f"{word}{self.rng.choice([',', ';', ':'])}"
-            if self.rng.random() < 0.12:
-                word = f"{word}({self.rng.choice(emphasis_tokens)})"
-            tokens.append(word)
+        if mode == "html":
+            count = {"short": 3, "medium": 4, "long": 5}.get(depth, 3)
+            chosen = self.rng.sample(word_pool, k=count)
+            decorated = []
+            for idx, word in enumerate(chosen):
+                if idx == 0:
+                    decorated.append(word)
+                elif idx == len(chosen) - 1:
+                    decorated.append(f"<em>{word}</em>")
+                else:
+                    decorated.append(f"<strong>{word}</strong>")
+            snippet = "<div>" + " ".join(decorated) + "</div>"
+            prompt = (
+                "Count the number of words (ignore HTML tags) in the snippet: "
+                f"`{snippet}` Respond with an integer."
+            )
+            return prompt, len(chosen)
 
-        if tokens:
-            tokens[0] = tokens[0][0].upper() + tokens[0][1:]
-        sentence = " ".join(tokens)
+        if mode == "punctuation":
+            length = {"short": 5, "medium": 9, "long": 14}.get(depth, 9)
+            punctuators = ["", ",", ";", ":", "!", "?"]
+            tokens: List[str] = []
+            for _ in range(length):
+                token = self.rng.choice(word_pool)
+                punct = self.rng.choice(punctuators)
+                if punct:
+                    token = f"{token}{punct}"
+                if self.rng.random() < 0.15:
+                    token = token.upper()
+                tokens.append(token)
+            sentence = " ".join(tokens)
+            sentence = re.sub(r"\s+", " ", sentence).strip()
+            prompt = (
+                "Count the number of words in the sentence (ignore punctuation): "
+                f"'{sentence}'. Respond with an integer."
+            )
+            return prompt, self._count_alpha_words(sentence)
+
+        templates = [
+            "Stage 3 executes 2 batches before the final freeze window",
+            "Pipeline run 7 completes after 4 retries and 1 fallback",
+            "Phase 2 allocates 5 tickets to tier three modules",
+        ]
+        sentence = self.rng.choice(templates)
+        prompt = (
+            "Count the number of alphabetic words (ignore digits) in the sentence: "
+            f"'{sentence}'. Respond with an integer."
+        )
+        return prompt, self._count_alpha_words(sentence)
+
+    def _make_multi_step_math(self, depth: str) -> tuple[str, float]:
+        a = self.rng.randint(3, 12)
+        b = self.rng.randint(2, 9)
+        c = self.rng.randint(2, 6)
+        d = self.rng.randint(1, 6)
+        e = self.rng.randint(1, 5)
+
+        if depth == "short":
+            expression = f"{a} + {b} * {c}"
+            target = a + b * c
+        elif depth == "medium":
+            expression = f"{a} + {b} * {c} - {d}"
+            target = a + b * c - d
+        else:
+            expression = f"({a} + {b}) * {c} - ({d} + {e})"
+            target = (a + b) * c - (d + e)
+        prompt = f"Compute {expression}. Respond with the number only."
+        return prompt, target
+
+    def _make_code_format_task(self, depth: str) -> tuple[str, str]:
+        parts_pool = [
+            "token",
+            "adapter",
+            "manager",
+            "gamma",
+            "delta",
+            "energy",
+            "reserve",
+            "budget",
+            "router",
+            "policy",
+            "reward",
+            "merge",
+            "audit",
+            "canvas",
+        ]
+        length_map = {"short": 2, "medium": 3, "long": 4}
+        parts = self.rng.sample(parts_pool, k=length_map.get(depth, 3))
+        camel = "".join(part.title() for part in parts)
         if self.rng.random() < 0.25:
-            sentence = f"\"{sentence}\""
-        if self.rng.random() < 0.3:
-            spaces = [i for i, ch in enumerate(sentence) if ch == " "]
-            if spaces:
-                idx = self.rng.choice(spaces)
-                sentence = sentence[:idx] + "  " + sentence[idx + 1 :]
-        sentence = sentence.rstrip(",;: ")
-        sentence += self.rng.choice([".", "!", "?"])
-        return sentence
+            camel = camel + "HTTP"
+            parts.append("http")
+        snake = "_".join(part.lower() for part in parts)
+        prompt = (
+            "Convert the variable name `{}` to snake_case. Respond with the new name only."
+        ).format(camel)
+        return prompt, snake
 
     # ------------------------------------------------------------------
     def register_result(self, organelle_id: str, task: GridTask, success: bool) -> None:

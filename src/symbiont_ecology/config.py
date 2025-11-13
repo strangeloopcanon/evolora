@@ -430,6 +430,10 @@ class AssimilationTuningConfig(BaseModel):
     team_handoff_enabled: bool = Field(False, description="If true, allow solver→checker single revise step (not yet implemented)")
     team_handoff_cap_per_gen: int = Field(4, ge=0, description="Max handoff revisions allowed per generation")
     team_handoff_cost: float = Field(0.05, ge=0.0, description="Energy cost charged to the checker for a handoff revision")
+    team_handoff_prompt: str = Field(
+        "Partner answer:\n{answer}\nProvide a critique and improved final answer.",
+        description="Prompt appended when handing off between team members",
+    )
     team_max_routes_per_gen: int = Field(8, ge=0, description="Max team episodes per generation across all pairs")
     team_min_power: float = Field(0.2, ge=0.0, le=1.0, description="Minimum power proxy required for team promotions")
     team_holdout_margin: float | None = Field(None, description="Team-specific holdout margin; falls back to holdout_margin if None")
@@ -594,6 +598,7 @@ class PolicyConfig(BaseModel):
     reserve_min: float = Field(0.0, ge=0.0, le=1.0)
     reserve_max: float = Field(0.75, ge=0.0, le=1.0)
     failure_penalty: float = Field(0.05, ge=0.0, description="Energy penalty when policy output is malformed")
+    success_bonus: float = Field(0.0, ge=0.0, description="Energy bonus when a policy is parsed successfully")
 
 
 def _default_few_shot_examples() -> dict[str, list[dict[str, str]]]:
