@@ -36,7 +36,7 @@ def test_morphogenesis_triggers_resize_and_merge() -> None:
     host = HostKernel(config=config, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
     organelle_id = host.spawn_organelle(rank=2)
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     genome = Genome(organelle_id=organelle_id, drive_weights={}, gate_bias=0.0, rank=2)
     population.register(genome)
     population.record_roi(organelle_id, 1.5)

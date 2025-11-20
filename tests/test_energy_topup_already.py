@@ -16,7 +16,7 @@ def test_topup_already_sufficient_branch() -> None:
     ledger.configure_energy_cap(2.0)
     ledger.ensure_energy(org, 0.8)
     host = SimpleNamespace(ledger=ledger)
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     genome = Genome(organelle_id=org, drive_weights={}, gate_bias=0.0, rank=1)
     loop = EcologyLoop(
         config=cfg,

@@ -118,6 +118,7 @@ class EcologyLoop:
     _tau_relief: dict[GridKey, float] = field(default_factory=dict, init=False, repr=False)
     _tau_fail_counts: dict[GridKey, int] = field(default_factory=dict, init=False, repr=False)
     _roi_relief: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _population_refresh_gen: dict[str, object] = field(default_factory=dict, init=False, repr=False)
     _topup_fail_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _active_policies: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _assim_attempt_total: int = field(default=0, init=False, repr=False)
@@ -211,6 +212,7 @@ class EcologyLoop:
         self._prompt_scaffold_counts = {}
         self._team_probe_candidates_gen = []
         self._winter_events_gen = []
+        self._population_refresh_gen = {}
         pool = self._colony_selection_pool
         pool_members = list(pool.get("members", []))
         pool_pot = float(pool.get("pot", 0.0))
@@ -738,6 +740,7 @@ class EcologyLoop:
         survivors = self._mu_lambda_selection(viability_map)
         self._apply_morphogenesis(survivors)
         self._spawn_offspring(survivors)
+        self._maybe_refresh_population(survivors)
         self.population.increment_ages()
         summary = {
             "active": len(active),
@@ -759,6 +762,8 @@ class EcologyLoop:
             },
             "mutation_stats": dict(self._mutation_stats_gen),
         }
+        if self._population_refresh_gen:
+            summary["population_refresh"] = dict(self._population_refresh_gen)
         # Promotion acceptance governor (adjust team thresholds toward target)
         try:
             target = float(getattr(self.config.assimilation_tuning, "promotion_target_rate", 0.0))
@@ -1385,7 +1390,13 @@ class EcologyLoop:
             return False
         a_id, b_id = pair
         results: list[tuple[str, RouteMetrics, bool, RewardBreakdown, dict[str, float]]] = []
-        for oid in (a_id, b_id):
+        rng = getattr(self.environment, "rng", random)
+        order = [a_id, b_id]
+        try:
+            rng.shuffle(order)
+        except Exception:
+            random.shuffle(order)
+        for oid in order:
             result = self.host.step(
                 prompt=task.prompt,
                 intent="team episode",
@@ -1431,7 +1442,16 @@ class EcologyLoop:
                 winner_id = best_pair[0]
                 checker_id = b_id if winner_id == a_id else a_id
                 winner_answer = str(best_pair[1].answer)
-                handoff_prompt = f"Review and improve this answer:\n{winner_answer}\n\nTask:\n{task.prompt}"
+                prompt_template = str(
+                    getattr(
+                        self.config.assimilation_tuning,
+                        "team_handoff_prompt",
+                        "Partner answer:\n{answer}\nRespond with a critique and improved answer that differs.",
+                    )
+                )
+                handoff_prompt = (
+                    f"{prompt_template.format(answer=winner_answer)}\n\nTask:\n{task.prompt}".strip()
+                )
                 # charge small energy to checker if possible
                 try:
                     if self.host.ledger.energy_balance(checker_id) >= cost:
@@ -1465,9 +1485,44 @@ class EcologyLoop:
                 pass
         return True
 
+    def _curriculum_allowed_cells(self) -> list[GridKey] | None:  # pragma: no cover - exercised indirectly in long runs
+        cfg = getattr(self.config, "curriculum", None)
+        if cfg is None:
+            return None
+        try:
+            warmup = int(getattr(cfg, "warmup_generations", 0) or 0)
+        except Exception:
+            warmup = 0
+        if warmup <= 0 or self.generation_index > warmup:
+            return None
+        families = [str(f) for f in getattr(cfg, "warmup_families", []) if f]
+        depths = [str(d) for d in getattr(cfg, "warmup_depths", []) if d]
+        controller_cells = getattr(self.environment.controller, "cells", {})
+        if not controller_cells:
+            return None
+        allowed: list[GridKey] = []
+        for cell in controller_cells.keys():
+            fam_ok = not families or cell[0] in families
+            depth_ok = not depths or cell[1] in depths
+            if fam_ok and depth_ok:
+                allowed.append(cell)
+        return allowed or None
+
+    def _sample_cell_with_curriculum(self, lp_mix: float) -> GridKey:  # pragma: no cover - randomness hinders determinism
+        allowed = self._curriculum_allowed_cells()
+        controller = self.environment.controller
+        if not allowed:
+            return controller.sample_cell(lp_mix=lp_mix)
+        for _ in range(8):
+            cell = controller.sample_cell(lp_mix=lp_mix)
+            if cell in allowed:
+                return cell
+        rng = getattr(self.environment, "rng", random)
+        return rng.choice(allowed)
+
     def _sample_task_lp(self, lp_mix: float) -> GridTask:
         try:
-            cell = self.environment.controller.sample_cell(lp_mix=lp_mix)
+            cell = self._sample_cell_with_curriculum(lp_mix)
             state = self.environment.controller.get_state(cell)
             use_canary = state.success_ema > self.environment.canary_q_min and self.environment.rng.random() < 0.1
             return self.environment.sample_task_from_cell(cell, canary=use_canary)
@@ -1477,6 +1532,12 @@ class EcologyLoop:
     def _foraging_select_cell(self, organelle_id: str) -> tuple[str, str]:
         forage_cfg = getattr(self.config, "foraging", None)
         cells = list(getattr(self.environment.controller, "cells", {}).keys())
+        allowed = self._curriculum_allowed_cells()
+        if allowed:
+            allowed_set = set(allowed)
+            filtered = [cell for cell in cells if cell in allowed_set]
+            if filtered:
+                cells = filtered
         if not cells:
             return self.environment.controller.sample_cell(lp_mix=0.0)
         genome = self.population.population.get(organelle_id)
@@ -1525,7 +1586,7 @@ class EcologyLoop:
         if getattr(self.config, "foraging", None) and getattr(self.config.foraging, "enabled", False):
             rng = getattr(self.environment, "rng", random)
             if lp_mix > 0.0 and rng.random() < lp_mix:
-                cell = self.environment.controller.sample_cell(lp_mix=0.0)
+                cell = self._sample_cell_with_curriculum(lp_mix)
             else:
                 cell = self._foraging_select_cell(organelle_id)
             return self.environment.sample_task_from_cell(cell)
@@ -1534,9 +1595,13 @@ class EcologyLoop:
             try:
                 fam = str(pol["cell_pref"].get("family"))
                 dep = str(pol["cell_pref"].get("depth"))
+                preferred = (fam, dep)
+                allowed = self._curriculum_allowed_cells()
+                if allowed and preferred not in allowed:
+                    preferred = random.choice(allowed)
                 bias = float(getattr(self.config.policy, "bias_strength", 0.3))
                 if 0.0 < bias <= 1.0 and self.environment.rng.random() < bias:
-                    return self.environment.sample_task_from_cell((fam, dep))
+                    return self.environment.sample_task_from_cell(preferred)
             except Exception:
                 pass
         return self._sample_task_lp(lp_mix)
@@ -1632,10 +1697,12 @@ class EcologyLoop:
 
         def _parse_kv_pairs(block: str) -> dict[str, object]:
             kvs: dict[str, object] = {}
-            for key, value in _re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=]\s*([^\s;,]+)", block):
+            equals_matches = _re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*([^\s;,]+)", block)
+            colon_matches = _re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*([^\s;,{}]+)", block)
+            for key, value in equals_matches + colon_matches:
                 if allowed and key not in allowed:
                     continue
-                kvs[key] = _coerce_value(value)
+                kvs.setdefault(key, _coerce_value(value))
             return kvs
 
         candidates = _find_fenced(text)
@@ -1772,6 +1839,7 @@ class EcologyLoop:
         budgets: dict[str, int] = {}
         per_org_meta: dict[str, dict[str, float]] = {}
         raw_total = 0
+        require_policy = bool(getattr(env_cfg, "budget_policy_requires_parse", False))
         for organelle_id in active_ids:
             try:
                 balance = float(self.host.ledger.energy_balance(organelle_id))
@@ -1790,9 +1858,11 @@ class EcologyLoop:
             pol = self._active_policies.get(organelle_id) if hasattr(self, "_active_policies") else None
             if isinstance(pol, dict) and isinstance(pol.get("budget_frac"), (int, float)):
                 policy_frac = float(pol["budget_frac"])
+            elif require_policy:
+                policy_frac = policy_floor
             policy_frac = max(policy_floor, min(policy_ceiling, policy_frac))
             raw_budget = base_bs * energy_factor * trait_factor * policy_frac
-            per_org = max(0, int(round(raw_budget)))
+            per_org = max(1, int(round(raw_budget)))
             budgets[organelle_id] = per_org
             raw_total += per_org
             per_org_meta[organelle_id] = {
@@ -2634,31 +2704,46 @@ class EcologyLoop:
             val = 0.5 if idx == 0 else 0.2
             key_pairs.append(f"{key}={val:.2f}")
         kv_example = " ".join(key_pairs) if key_pairs else ""
-        keys_clause = ", ".join(allowed) if allowed else ""
-        prompt = (
-            "Respond ONLY with space-separated key=value pairs for these keys: "
-            + (keys_clause or "none")
-            + ". Example: "
-            + (kv_example or "{}")
-            + ". Use decimals like 0.55 and `true`/`false` for booleans. "
-            "Do NOT return prose, Markdown, or JSON. If unsure, output `{}`."
-        )
-        result = self.host.step(
-            prompt=prompt,
-            intent="choose policy",
-            max_routes=1,
-            allowed_organelle_ids=[organelle_id],
-        )
+        keys_clause = ", ".join(allowed) if allowed else "none"
+        example_text = kv_example or "budget_frac=0.55 reserve_ratio=0.30"
+        prompt = textwrap.dedent(
+            (
+                f"You are the budgeting policy module. Ignore any previous question and respond ONLY with "
+                f"space-separated key=value pairs covering: {keys_clause}. Example: {example_text}. "
+                "Use decimals like 0.55 and `true`/`false` for booleans. Do NOT include prose, Markdown, or JSON. "
+                "If you cannot comply, output '{{}}' exactly."
+            )
+        ).strip()
+        try:
+            result = self.host.step(
+                prompt=prompt,
+                intent="choose policy",
+                max_routes=1,
+                allowed_organelle_ids=[organelle_id],
+                recurrent_passes=1,
+            )
+        except TypeError:
+            result = self.host.step(
+                prompt=prompt,
+                intent="choose policy",
+                max_routes=1,
+                allowed_organelle_ids=[organelle_id],
+            )
         metrics = result.responses.get(organelle_id)
         if metrics is None:
             return
-        answer = result.envelope.observation.state.get("answer", "")
         allowed = list(getattr(self.config.policy, "allowed_fields", []))
-        answer_text = str(answer)
+        answer_text = str(getattr(metrics, "answer", "")).strip()
+        if not answer_text:
+            answer_text = str(result.envelope.observation.state.get("answer", ""))
         pol = self._parse_policy_json(answer_text, allowed)
         if not pol:
-            self._penalize_policy_failure(organelle_id, answer_text)
-            return
+            fallback = {key: 0.5 for key in allowed}
+            if fallback:
+                pol = fallback
+            else:
+                self._penalize_policy_failure(organelle_id, answer_text)
+                return
         # Count successful parse
         try:
             self._policy_parsed_gen += 1
@@ -2744,6 +2829,7 @@ class EcologyLoop:
             "low_energy": 0,
             "low_power": 0,
             "no_best_cell": 0,
+            "no_activity": 0,
             "cooldown": 0,
             "uplift_below_threshold": 0,
             "cell_merges_exceeded": 0,
@@ -2868,6 +2954,15 @@ class EcologyLoop:
             if cooldown > 0 and hazard_margin:
                 threshold += float(hazard_margin)
 
+            stats_map = getattr(self.environment, "organism_stats", {})
+            if not stats_map.get(genome.organelle_id):
+                gating["no_activity"] += 1
+                self._record_assimilation_gate(
+                    reason="no_activity",
+                    organelle_id=genome.organelle_id,
+                    details={"generation": self.generation_index},
+                )
+                continue
             best_cell = self.environment.best_cell_score(genome.organelle_id)
             if best_cell is None:
                 gating["no_best_cell"] += 1
@@ -2941,28 +3036,19 @@ class EcologyLoop:
             base_min = self._min_window_requirement(tuning)
             available = len(scores) - (len(scores) % 2)
             tokens_available = self.population.evidence_tokens(genome.organelle_id)
-            token_window = int(getattr(tuning, "evidence_token_window", 0))
             token_spent = False
             min_window = base_min if available < base_min else min(base_min, available)
             step = max(2, int(getattr(tuning, "window_step", 2)))
             if available < min_window:
-                usable_available = available - (available % 2)
-                if (
-                    not token_spent
-                    and token_window > 0
-                    and tokens_available > 0
-                    and usable_available >= max(2 * min_samples_required, min_window - token_window)
-                    and usable_available >= 2 * min_samples_required
-                ):
-                    if self.population.consume_evidence(genome.organelle_id, 1):
-                        tokens_available -= 1
-                        usable_available = usable_available - (usable_available % 2)
-                        if usable_available >= 2 * min_samples_required:
-                            available = usable_available
-                            min_window = min(min_window, usable_available)
-                            token_spent = True
-                            if self._power_econ_stats is not None:
-                                self._power_econ_stats["tokens_used"] = int(self._power_econ_stats.get("tokens_used", 0)) + 1
+                adjusted_window, tokens_used = self._apply_evidence_tokens(
+                    genome.organelle_id,
+                    available - (available % 2),
+                    min_window,
+                    min_samples_required,
+                )
+                if tokens_used:
+                    token_spent = True
+                    min_window = adjusted_window
                 if not token_spent:
                     self.assimilation_cooldown[key] = self.generation_index
                     gating["insufficient_scores"] += 1
@@ -4688,6 +4774,46 @@ class EcologyLoop:
             value += 1
         return value
 
+    def _apply_evidence_tokens(
+        self,
+        organelle_id: str,
+        available_even: int,
+        min_window: int,
+        min_samples_required: int,
+    ) -> tuple[int, bool]:
+        tuning = self.config.assimilation_tuning
+        token_window = int(getattr(tuning, "evidence_token_window", 0))
+        if token_window <= 0 or available_even <= 0:
+            return min_window, False
+        tokens_used = False
+        tokens_available = self.population.evidence_tokens(organelle_id)
+        target_min = min_window
+        base_floor = max(2, 2 * max(1, min_samples_required))
+        try:
+            floor_override = int(getattr(tuning, "min_window_min", base_floor))
+        except Exception:
+            floor_override = base_floor
+        if floor_override <= 0:
+            min_floor = base_floor
+        else:
+            min_floor = max(2, floor_override)
+        while (
+            tokens_available > 0
+            and available_even < target_min
+        ):
+            reduced = max(min_floor, target_min - token_window)
+            if not self.population.consume_evidence(organelle_id, 1):
+                break
+            tokens_available -= 1
+            target_min = reduced
+            tokens_used = True
+            if self._power_econ_stats is not None:
+                stats = self._power_econ_stats
+                stats["tokens_used"] = int(stats.get("tokens_used", 0)) + 1
+            if target_min <= available_even:
+                break
+        return target_min, tokens_used
+
     def _set_min_window(self, tuning: object, candidate: int) -> int:
         normalized = self._normalize_min_window_candidate(candidate, tuning)
         if getattr(tuning, "min_window", None) != normalized:
@@ -4795,7 +4921,14 @@ class EcologyLoop:
         rng.shuffle(pairs)
         for (a_id, b_id) in pairs[:per_gen]:
             override = sample_override if sample_override > 0 else None
-            tasks = self._sample_holdout_tasks(override)
+            sampler = self._sample_holdout_tasks
+            if override is None:
+                tasks = sampler()
+            else:
+                try:
+                    tasks = sampler(override_size=override)
+                except TypeError:
+                    tasks = sampler()
             if not tasks:
                 continue
             # Compute best-of-two ROI series and baseline means
@@ -4803,6 +4936,8 @@ class EcologyLoop:
             team_series: list[float] = []
             a_series: list[float] = []
             b_series: list[float] = []
+            identical_answers = 0
+            answer_samples: list[tuple[str, str]] = []
             for index, task in enumerate(tasks, start=1):
                 grid_task = task.to_grid_task(self.environment, task_id=f"team_probe_{index:04d}")
                 best_roi = 0.0
@@ -4858,7 +4993,28 @@ class EcologyLoop:
                     roi_b = 0.0 if not math.isfinite(roi_b) else float(max(0.0, min(roi_b, 10.0)))
                     b_series.append(roi_b)
                     best_roi = max(best_roi, roi_b)
+                    answer_b = str(metrics_b.answer)
+                    if partner_answer.strip() and answer_b.strip() and partner_answer.strip() == answer_b.strip():
+                        identical_answers += 1
+                    if len(answer_samples) < 2:
+                        answer_samples.append((partner_answer.strip(), answer_b.strip()))
                 team_series.append(best_roi)
+            attempt_info: dict[str, object] = {
+                "pair": [a_id, b_id],
+                "tasks": len(team_series),
+            }
+            if team_series and (identical_answers * 2) >= len(team_series):
+                attempt_info["same_answers"] = int(identical_answers)
+                if answer_samples:
+                    attempt_info["answer_samples"] = [
+                        {
+                            "first": textwrap.shorten(pair[0], width=120, placeholder="…"),
+                            "second": textwrap.shorten(pair[1], width=120, placeholder="…"),
+                        }
+                        for pair in answer_samples
+                    ]
+                _record_team_gate("identical_answers", attempt_info)
+                continue
             base_a = sum(a_series) / max(len(a_series), 1)
             base_b = sum(b_series) / max(len(b_series), 1)
             baseline = max(base_a, base_b)
@@ -4876,20 +5032,33 @@ class EcologyLoop:
             min_power = float(getattr(self.config.assimilation_tuning, "team_min_power", 0.2))
             power = self._power_proxy(team_mu, baseline, margin, team_se)
             has_tasks = len(team_series) >= min_tasks
-            ci_gate = ci_low > (baseline + margin)
-            attempt_info = {
-                "pair": [a_id, b_id],
-                "tasks": len(team_series),
-                "team_mu": float(team_mu),
-                "ci_low": float(ci_low),
-                "ci_high": float(ci_high),
-                "baseline": float(baseline),
-                "margin": float(margin),
-                "power": float(power),
-                "min_power": float(min_power),
-                "min_tasks": int(min_tasks),
-                "team_se": float(team_se),
-            }
+            delta_mu = team_mu - baseline
+            ci_gate = team_mu >= (baseline + margin)
+            attempt_info.update(
+                {
+                    "team_mu": float(team_mu),
+                    "ci_low": float(ci_low),
+                    "ci_high": float(ci_high),
+                    "baseline": float(baseline),
+                    "margin": float(margin),
+                    "delta_mu": float(delta_mu),
+                    "power": float(power),
+                    "min_power": float(min_power),
+                    "min_tasks": int(min_tasks),
+                    "team_se": float(team_se),
+                    "same_answers": int(identical_answers),
+                }
+            )
+            if answer_samples:
+                samples_fmt = []
+                for first, second in answer_samples:
+                    samples_fmt.append(
+                        {
+                            "first": textwrap.shorten(first or "", width=120, placeholder="…"),
+                            "second": textwrap.shorten(second or "", width=120, placeholder="…"),
+                        }
+                    )
+                attempt_info["answer_samples"] = samples_fmt
             if power >= min_power and has_tasks and ci_gate:
                 cid = f"col_{a_id[:4]}_{b_id[:4]}"
                 meta = self.colonies.setdefault(
@@ -5304,6 +5473,41 @@ class EcologyLoop:
         for idx in range(lambda_quota):
             parent = survivors[idx % len(survivors)]
             self._spawn_replacement_from(parent)
+
+    def _maybe_refresh_population(self, survivors: list[Genome]) -> None:  # pragma: no cover - relies on stochastic long runs
+        strategy = getattr(self.config, "population_strategy", None)
+        if strategy is None:
+            return
+        interval = int(getattr(strategy, "refresh_interval", 0) or 0)
+        if interval <= 0 or self.no_merge_counter < interval:
+            return
+        refresh_count = int(getattr(strategy, "refresh_count", 1) or 1)
+        genomes = list(self.population.population.values())
+        if not genomes:
+            return
+        survivor_ids = {g.organelle_id for g in survivors}
+        genomes.sort(key=lambda g: self.population.average_roi(g.organelle_id, limit=5))
+        candidates = [g for g in genomes if g.organelle_id not in survivor_ids]
+        if len(candidates) < refresh_count:
+            candidates = genomes
+        retired = 0
+        for genome in candidates[:refresh_count]:
+            retired += 1
+            self.host.retire_organelle(genome.organelle_id)
+            self.population.remove(genome.organelle_id)
+        parents = survivors or genomes[:1]
+        if not parents:
+            self._population_refresh_gen = {"count": 0, "reason": "no_parents"}
+            return
+        for idx in range(retired):
+            parent = parents[idx % len(parents)]
+            self._spawn_replacement_from(parent)
+        self._population_refresh_gen = {
+            "count": retired,
+            "reason": "no_merges",
+            "no_merge_counter": int(self.no_merge_counter),
+        }
+        self.no_merge_counter = 0
 
     def _apply_morphogenesis(self, survivors: list[Genome]) -> None:
         if not survivors or self.morphogenesis is None:

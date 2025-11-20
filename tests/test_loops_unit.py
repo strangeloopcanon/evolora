@@ -102,3 +102,6 @@ def test_team_probe_can_promote_colony():
     loop._sample_holdout_tasks = lambda: [FakeTask(i) for i in range(1, 7)]  # type: ignore[method-assign]
     promoted = loop._maybe_team_probes()
     assert isinstance(promoted, int)
+    samples = getattr(loop, "_team_gate_samples", [])
+    assert samples, "team gate telemetry should record attempts"
+    assert any("answer_samples" in sample for sample in samples)

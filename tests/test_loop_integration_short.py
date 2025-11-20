@@ -20,7 +20,7 @@ def test_run_generation_with_comms_and_lp() -> None:
     cfg.environment.synthetic_batch_size = 1
     host = HostKernel(config=cfg, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     oid = host.spawn_organelle(rank=2)
     pop.register(Genome(organelle_id=oid, drive_weights={"novelty": 0.4}, gate_bias=0.0, rank=2))
     loop = EcologyLoop(

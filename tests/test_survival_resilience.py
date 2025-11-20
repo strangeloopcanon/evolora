@@ -22,7 +22,7 @@ def _make_loop(seed: int = 2025, ticket: float = 0.6) -> tuple[EcologyConfig, Ec
     config.assimilation_tuning.holdout_tasks_path = None
     host = HostKernel(config=config, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     organelle_id = host.spawn_organelle(rank=2)
     population.register(
         Genome(

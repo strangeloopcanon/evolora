@@ -37,7 +37,7 @@ def main() -> None:
     host = HostKernel(config=config, router=router, ledger=ledger)
     host.freeze_host()
 
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     for _ in range(3):
         organelle_id = host.spawn_organelle(rank=config.host.max_lora_rank)
         population.register(

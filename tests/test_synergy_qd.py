@@ -19,7 +19,7 @@ def test_synergy_and_qd_archive_in_summary(tmp_path) -> None:
     )
     host = HostKernel(config=cfg, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     a = host.spawn_organelle(rank=2)
     b = host.spawn_organelle(rank=2)
     pop.register(Genome(organelle_id=a, drive_weights={}, gate_bias=0.0, rank=2))

@@ -910,6 +910,15 @@ class GridEnvironment:
     def best_cell_score(self, organelle_id: str) -> Optional[Tuple[GridKey, float]]:
         stats = self.organism_stats.get(organelle_id)
         if not stats:
+            try:
+                baseline = float(getattr(self.controller.ctrl, "tau", 0.5))
+            except Exception:
+                baseline = 0.5
+            seeded = {cell: baseline for cell in self.controller.cells.keys()}
+            if seeded:
+                self.organism_stats[organelle_id] = seeded
+                stats = seeded
+        if not stats:
             return None
         cell, value = max(stats.items(), key=lambda item: item[1])
         return cell, value

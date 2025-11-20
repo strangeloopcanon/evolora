@@ -17,7 +17,7 @@ def make_loop(colonies: bool = False) -> EcologyLoop:
     cfg.assimilation_tuning.colonies_enabled = colonies
     host = HostKernel(config=cfg, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     a = host.spawn_organelle(rank=2)
     b = host.spawn_organelle(rank=2)
     pop.register(Genome(organelle_id=a, drive_weights={}, gate_bias=0.0, rank=2))
@@ -67,9 +67,39 @@ def test_colony_promotion_and_tick() -> None:
     # inject synergy samples across windows
     loop._synergy_window.extend(
         [
-            {"a": a, "b": b, "synergy": 0.2, "team": 1.20, "solo_a": 0.9, "solo_b": 0.7},
-            {"a": a, "b": b, "synergy": 0.17, "team": 1.21, "solo_a": 0.8, "solo_b": 0.95},
-            {"a": a, "b": b, "synergy": 0.19, "team": 1.19, "solo_a": 1.05, "solo_b": 0.85},
+            {
+                "a": a,
+                "b": b,
+                "synergy": 0.2,
+                "team": 1.20,
+                "solo_a": 0.9,
+                "solo_b": 0.7,
+                "variance_ratio": 0.4,
+                "team_var": 0.05,
+                "solo_var_min": 0.2,
+            },
+            {
+                "a": a,
+                "b": b,
+                "synergy": 0.17,
+                "team": 1.21,
+                "solo_a": 0.8,
+                "solo_b": 0.95,
+                "variance_ratio": 0.5,
+                "team_var": 0.06,
+                "solo_var_min": 0.22,
+            },
+            {
+                "a": a,
+                "b": b,
+                "synergy": 0.19,
+                "team": 1.19,
+                "solo_a": 1.05,
+                "solo_b": 0.85,
+                "variance_ratio": 0.45,
+                "team_var": 0.05,
+                "solo_var_min": 0.2,
+            },
         ]
     )
     loop._maybe_promote_colonies()
@@ -93,9 +123,39 @@ def test_colony_dissolves_on_holdout_failure() -> None:
     a, b = ids[0], ids[1]
     loop._synergy_window.extend(
         [
-            {"a": a, "b": b, "synergy": 0.2, "team": 1.22, "solo_a": 0.85, "solo_b": 0.75},
-            {"a": a, "b": b, "synergy": 0.18, "team": 1.21, "solo_a": 0.8, "solo_b": 1.0},
-            {"a": a, "b": b, "synergy": 0.19, "team": 1.20, "solo_a": 1.05, "solo_b": 0.9},
+            {
+                "a": a,
+                "b": b,
+                "synergy": 0.2,
+                "team": 1.22,
+                "solo_a": 0.85,
+                "solo_b": 0.75,
+                "variance_ratio": 0.4,
+                "team_var": 0.05,
+                "solo_var_min": 0.2,
+            },
+            {
+                "a": a,
+                "b": b,
+                "synergy": 0.18,
+                "team": 1.21,
+                "solo_a": 0.8,
+                "solo_b": 1.0,
+                "variance_ratio": 0.5,
+                "team_var": 0.06,
+                "solo_var_min": 0.24,
+            },
+            {
+                "a": a,
+                "b": b,
+                "synergy": 0.19,
+                "team": 1.20,
+                "solo_a": 1.05,
+                "solo_b": 0.9,
+                "variance_ratio": 0.45,
+                "team_var": 0.05,
+                "solo_var_min": 0.22,
+            },
         ]
     )
     loop._maybe_promote_colonies()
@@ -105,8 +165,12 @@ def test_colony_dissolves_on_holdout_failure() -> None:
     meta["holdout_failures"] = 0
     meta["review_interval"] = 1
     meta["last_review"] = loop.generation_index - 2
-    loop._evaluate_team_holdout_roi = lambda *args, **kwargs: 0.1  # type: ignore
-    loop._evaluate_holdout_roi = lambda *args, **kwargs: 0.2  # type: ignore
+    def failing_stats(member_ids, _tasks):
+        if len(member_ids) > 1:
+            return {"mean": 0.05, "variance": 0.3, "series": [0.05]}
+        return {"mean": 0.2, "variance": 0.05, "series": [0.2]}
+
+    loop._team_holdout_stats = failing_stats  # type: ignore[assignment]
     loop._sample_holdout_tasks = lambda: ["dummy"] * 8  # type: ignore
     loop._tick_colonies()
     assert cid in loop.colonies

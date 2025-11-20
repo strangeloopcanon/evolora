@@ -24,6 +24,9 @@ def _build_loop(roi: float, balance: float = 0.2) -> tuple[EcologyLoop, Genome, 
     host = SimpleNamespace(ledger=ledger)
     population = MagicMock(spec=PopulationManager)
     population.average_roi.return_value = roi
+    population.evidence_tokens.return_value = 0
+    population.consume_evidence.return_value = False
+    population.recent_scores.return_value = []
     loop = EcologyLoop(
         config=config,
         host=host,
@@ -72,7 +75,7 @@ def test_auto_tune_energy_floor_updates_config() -> None:
     ledger = ATPLedger()
     ledger.configure_energy_cap(3.0)
     host = SimpleNamespace(ledger=ledger)
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     genome = Genome(organelle_id="org-auto", drive_weights={}, gate_bias=0.0, rank=1)
     population.register(genome)
     samples = [

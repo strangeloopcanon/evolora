@@ -9,13 +9,13 @@ host:
   recurrence_enabled: true
   recurrence_train_passes: 2
   recurrence_eval_passes: 2
+  team_probe_temperature: 0.95
+  team_probe_top_p: 0.85
 grid:
   # Easy-mode curriculum: words + math variants + formatting.
   families:
   - word.count
   - math
-  - math.sequence
-  - math.multi_step
   - code.format
   depths:
   - short
@@ -34,6 +34,12 @@ pricing:
   k: 1.6
   min: 0.3
   max: 2.2
+population_strategy:
+  mu: 4
+  lambda: 12
+  max_population: 16
+  refresh_interval: 12
+  refresh_count: 1
 knowledge:
   enabled: true
   write_cost: 0.3
@@ -41,7 +47,7 @@ knowledge:
   ttl: 40
   max_items: 12
 hebbian:
-  learning_rate: 0.003
+  learning_rate: 0.01
 assimilation_tuning:
   per_cell_interval: 1
   max_merges_per_cell: 3
@@ -67,7 +73,7 @@ assimilation_tuning:
   bootstrap_uplift_enabled: true
   bootstrap_samples: 200
   permutation_samples: 200
-  min_uplift_samples: 2
+  min_uplift_samples: 1
   dr_enabled: true
   dr_strata:
   - family
@@ -85,11 +91,11 @@ assimilation_tuning:
   trial_min_power: 0.05
   price_premium_alpha: 0.3
   price_premium_cap: 1.25
-  power_target: 0.33
+  power_target: 0.25
   evidence_token_threshold: 0.25
-  evidence_token_mint: 1
+  evidence_token_mint: 2
   evidence_token_cap: 4
-  evidence_token_window: 8
+  evidence_token_window: 12
   info_topup_gap: 2
   info_topup_roi_slack: 0.2
   assimilation_history_limit: 180
@@ -150,21 +156,25 @@ assimilation_tuning:
   window_autotune: true
   min_window_min: 2
   min_window_max: 24
-  team_probe_per_gen: 3
+  team_probe_per_gen: 4
   team_min_tasks: 1
   team_router_enabled: true
   team_max_routes_per_gen: 12
   team_min_power: 0.0
-  team_holdout_sample_size: 4
+  team_holdout_sample_size: 3
   team_routing_probe_per_gen: 3
   team_probe_synergy_delta: 0.12
   team_probe_variance_nu: 0.25
   team_probe_sustain: 3
   evidence_boost_cap: 8
   evidence_boost_factor: 1
-  team_holdout_margin: 0.0
+  team_holdout_margin: -0.05
   team_handoff_enabled: true
-  promotion_target_rate: 0.2
+  team_handoff_prompt: |-
+    Partner answer:
+    {answer}
+    Critique the reasoning and produce a FINAL_ANSWER that differs from the partner (different number or wording). State issues before giving FINAL_ANSWER.
+  promotion_target_rate: 0.05
   promotion_adjust_step: 0.005
   team_margin_min: 0.0
   team_margin_max: 0.02
@@ -203,8 +213,16 @@ curriculum:
   lp_mix_min: 0.25
   lp_mix_max: 0.7
   lp_window: 4
+  warmup_generations: 8
+  warmup_families:
+  - word.count
+  - math
+  - code.format
+  warmup_depths:
+  - short
+  - medium
 controller:
-  tau: 0.38
+  tau: 0.32
 qd:
   enabled: true
   cost_bins: 4
@@ -247,8 +265,9 @@ environment:
   budget_energy_floor: 0.45
   budget_energy_ceiling: 2.5
   budget_trait_bonus: 1.2
-  budget_policy_floor: 0.4
+  budget_policy_floor: 0.3
   budget_policy_ceiling: 1.8
+  budget_policy_requires_parse: false
   global_episode_cap: 120
   human_bandit_batch_size: 4
   max_episode_steps: 96
@@ -264,9 +283,9 @@ human_bandit:
   frequency: 0.4
 evaluation:
   enabled: true
-  cadence: 20
+  cadence: 15
   tasks_path: config/evaluation/holdout_simple.jsonl
-  sample_size: 4
+  sample_size: 1
   reward_weight: 0.75
 diversity:
   enabled: true

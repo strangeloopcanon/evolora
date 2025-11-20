@@ -78,6 +78,8 @@ class HebbianPEFTOrganelle(Organelle):
         self.model.to(self.device)
         self.model.eval()
         self.traces = TraceStore()
+        self._fisher_importance: float = 0.0
+        self._last_activation_scale: float = 0.0
 
     def route_probability(self, observation: MessageEnvelope) -> float:
         novelty = float(len(observation.observation.state.get("novel_tokens", [])))
@@ -103,14 +105,40 @@ class HebbianPEFTOrganelle(Organelle):
         # Store trace as average over sequence
         self.traces.pre = pre.mean(dim=(0, 1)).detach().to(self.device)
         self.traces.post = hidden_last[:, -1, :].mean(dim=0).detach().to(self.device)
-
-        # Generate answer; max_new_tokens is configurable via host config
         try:
-            max_new = int(getattr(self.backbone.host_config, "gen_max_new_tokens", 48))
+            activation_scale = float(pre.pow(2).mean().item() + hidden_last.pow(2).mean().item())
+        except Exception:
+            activation_scale = 0.0
+        if math.isfinite(activation_scale):
+            self._last_activation_scale = activation_scale
+
+        # Generate answer; max_new_tokens and sampling knobs come from host config
+        host_cfg = self.backbone.host_config
+        try:
+            max_new = int(getattr(host_cfg, "gen_max_new_tokens", 48))
         except Exception:
             max_new = 48
         max_new = max(1, min(512, max_new))
-        gen_ids = self.model.generate(**enc, max_new_tokens=max_new, do_sample=False)
+        temperature = float(getattr(host_cfg, "temperature", 0.0) or 0.0)
+        top_p = float(getattr(host_cfg, "top_p", 1.0) or 1.0)
+        intent_goal = ""
+        if getattr(envelope, "intent", None) is not None:
+            intent_goal = str(getattr(envelope.intent, "goal", "") or "").lower()
+        if "team probe" in intent_goal or "team holdout" in intent_goal:
+            probe_temp = float(getattr(host_cfg, "team_probe_temperature", 0.0) or 0.0)
+            probe_top_p = float(getattr(host_cfg, "team_probe_top_p", 1.0) or 1.0)
+            if probe_temp > 0.0:
+                temperature = probe_temp
+            if probe_top_p < 1.0:
+                top_p = probe_top_p
+        do_sample = bool(temperature > 0.0 or top_p < 1.0)
+        gen_kwargs = {"max_new_tokens": max_new, "do_sample": do_sample}
+        if do_sample:
+            if temperature > 0.0:
+                gen_kwargs["temperature"] = temperature
+            if 0.0 < top_p < 1.0:
+                gen_kwargs["top_p"] = top_p
+        gen_ids = self.model.generate(**enc, **gen_kwargs)
         answer = self.tokenizer.decode(gen_ids[0][enc["input_ids"].shape[1] :], skip_special_tokens=True)
         envelope.observation.state["answer"] = answer.strip()
 
@@ -125,7 +153,8 @@ class HebbianPEFTOrganelle(Organelle):
     def update(self, envelope: MessageEnvelope, reward: RewardBreakdown) -> None:
         if self.traces.pre is None or self.traces.post is None:
             return
-        centered = reward.total - 0.0
+        baseline = float(getattr(self.context, "reward_baseline", 0.0))
+        centered = reward.total - baseline
         if centered == 0.0:
             return
         # Small, reward-modulated update across all lora layers
@@ -133,6 +162,21 @@ class HebbianPEFTOrganelle(Organelle):
             if hasattr(module, "lora_A") and hasattr(module, "lora_B"):
                 self._update_lora_pair(module, centered)
         self.step()
+        activation_scale = self._last_activation_scale
+        if activation_scale <= 0.0:
+            try:
+                activation_scale = float(
+                    (self.traces.pre.pow(2).mean() + self.traces.post.pow(2).mean()).item()
+                )
+            except Exception:
+                activation_scale = 0.0
+        if activation_scale <= 0.0:
+            return
+        fisher_delta = max(abs(centered), 1e-6) * activation_scale
+        decay = 0.9
+        if not math.isfinite(fisher_delta):
+            return
+        self._fisher_importance = decay * self._fisher_importance + (1.0 - decay) * fisher_delta
 
     def _update_lora_pair(self, module: nn.Module, scale: float) -> None:
         # module.lora_A / lora_B are dict-like keyed by adapter name; choose first
@@ -197,6 +241,31 @@ class HebbianPEFTOrganelle(Organelle):
             state[f"{name}.lora_A"] = weight_a
             state[f"{name}.lora_B"] = weight_b
         return state
+
+    def fisher_importance(self) -> float:
+        if self._fisher_importance > 0.0 and math.isfinite(self._fisher_importance):
+            return float(self._fisher_importance)
+        total = 0.0
+        for _name, module in self.model.named_modules():
+            if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
+                continue
+            try:
+                adapter_names = list(getattr(module, "lora_A").keys())
+            except Exception:
+                continue
+            if not adapter_names:
+                continue
+            adapter = adapter_names[0]
+            try:
+                weight_a = getattr(module, "lora_A")[adapter].weight
+                weight_b = getattr(module, "lora_B")[adapter].weight
+            except Exception:
+                continue
+            try:
+                total += float(weight_a.pow(2).sum().item() + weight_b.pow(2).sum().item())
+            except Exception:
+                continue
+        return max(total, 0.0)
 
     def import_adapter_state(self, state: dict[str, torch.Tensor], alpha: float = 1.0) -> None:
         if not state or alpha <= 0.0:

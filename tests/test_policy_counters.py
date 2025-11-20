@@ -10,7 +10,7 @@ from symbiont_ecology.evolution.population import Genome, PopulationManager
 def test_policy_attempts_and_parsed_counters_increment() -> None:
     cfg = EcologyConfig()
     cfg.policy.enabled = True
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     oid = "org_test"
     pop.register(Genome(organelle_id=oid, drive_weights={}, gate_bias=0.0, rank=2))
 

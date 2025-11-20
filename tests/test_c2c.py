@@ -92,3 +92,14 @@ def test_consume_c2c_latents_and_post():
     assert meta["pot"] == 0.7
     assert meta["c2c_posts_left"] == 0
     assert meta["c2c_bandwidth_left"] == 0.2
+
+
+def test_log_colony_event_helper():
+    meta: dict[str, object] = {}
+    dummy = SimpleNamespace(_colony_events_archive=[])
+    EcologyLoop._log_colony_event(dummy, meta, 7, "create", members=["org_a"])
+    assert dummy._colony_events_archive[0]["type"] == "create"
+    events = meta.get("events")
+    assert isinstance(events, list)
+    assert events[0]["gen"] == 7
+    assert events[0]["type"] == "create"

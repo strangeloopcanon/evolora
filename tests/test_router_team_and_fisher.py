@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from symbiont_ecology import EcologyConfig
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.assimilation import AssimilationTester
+from symbiont_ecology.evolution.population import Genome
 
 
 class DummyMetrics:
@@ -81,14 +83,67 @@ def test_fisher_weighting_adjusts_weights() -> None:
     class FakeOrg:
         def __init__(self, scale: float):
             self.adapter = FakeAdapter(scale)
+            self._fisher = float(scale)
 
+        def fisher_importance(self) -> float:
+            return self._fisher
+
+    loop.population = SimpleNamespace(
+        population={
+            "big": Genome("big", {}, gate_bias=0.0, rank=2),
+            "small": Genome("small", {}, gate_bias=0.0, rank=2),
+        }
+    )
     loop.host = SimpleNamespace(
         get_organelle=lambda oid: FakeOrg(10.0) if oid == "big" else FakeOrg(1.0),
-        build_lora_soup_state=lambda soup, rank: ({}, {}),
-        merge_lora_soup=lambda soup, rank: None,
+        build_lora_soup_state=lambda soup, rank, **kwargs: ({}, {}),
+        merge_lora_soup=lambda soup, rank, **kwargs: None,
     )
     cell = ("math", "short")
     stats_map = {"big": {"roi": 1.0, "ema": 0.5}, "small": {"roi": 1.0, "ema": 0.5}}
     summary = loop._apply_lora_soup_merge(cell, "big", ["big", "small"], stats_map, [])
     weights = {ent["organelle_id"]: ent["weight"] for ent in summary}
     assert weights["big"] > weights["small"], "Fisher weighting should favor higher-norm adapter"
+
+
+def test_fisher_fallback_uses_export_state() -> None:
+    cfg = EcologyConfig()
+    cfg.assimilation_tuning.merge_method = "fisher_svd"
+    loop = EcologyLoop(
+        config=cfg,
+        host=SimpleNamespace(),
+        environment=SimpleNamespace(),
+        population=SimpleNamespace(),
+        assimilation=AssimilationTester(0.0, 0.5, 0),
+    )
+
+    class FallbackOrg:
+        def __init__(self, scale: float):
+            self.scale = scale
+
+        def fisher_importance(self) -> float:
+            return 0.0
+
+        def export_adapter_state(self) -> dict[str, torch.Tensor]:
+            tensor = torch.ones(2, 2) * self.scale
+            return {"w": tensor}
+
+    loop.population = SimpleNamespace(
+        population={
+            "big": Genome("big", {}, gate_bias=0.0, rank=2),
+            "small": Genome("small", {}, gate_bias=0.0, rank=2),
+        }
+    )
+    loop.host = SimpleNamespace(
+        get_organelle=lambda oid: FallbackOrg(5.0) if oid == "big" else FallbackOrg(1.0),
+        build_lora_soup_state=lambda soup, rank, **kwargs: ({}, {}),
+        merge_lora_soup=lambda soup, rank, **kwargs: None,
+    )
+    cell = ("math", "short")
+    stats_map = {"big": {"roi": 1.0, "ema": 0.5}, "small": {"roi": 1.0, "ema": 0.5}}
+    summary = loop._apply_lora_soup_merge(cell, "big", ["big", "small"], stats_map, [])
+    weights = {ent["organelle_id"]: ent["weight"] for ent in summary}
+    importances = {ent["organelle_id"]: ent.get("importance", 0.0) for ent in summary}
+    assert weights["big"] > weights["small"]
+    assert importances["big"] > importances["small"]
+    assert importances["big"] == pytest.approx(1.0)

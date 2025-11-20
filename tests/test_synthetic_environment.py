@@ -1,4 +1,9 @@
-from symbiont_ecology.environment.synthetic import TaskFactory, evaluate_population_responses
+from symbiont_ecology.environment.synthetic import (
+    TaskFactory,
+    SyntheticTask,
+    _is_prime,
+    evaluate_population_responses,
+)
 
 
 def test_synthetic_factory_and_scoring() -> None:
@@ -19,3 +24,27 @@ def test_synthetic_factory_and_scoring() -> None:
     sort_tasks = [task for task in advanced_tasks if task.kind == "string.sort"]
     if sort_tasks:
         assert sort_tasks[0].difficulty >= 0.45  # phase-adjusted difficulty
+
+
+def test_synthetic_expected_answers_cover_all_branches() -> None:
+    cases = [
+        ("math.add", {"a": 3, "b": 4}, "7"),
+        ("math.mul", {"a": 2, "b": 5}, "10"),
+        ("string.reverse", {"text": "abc"}, "cba"),
+        ("string.sort", {"letters": "c b a"}, "abc"),
+        ("word.count", {"sentence": "one two three"}, "3"),
+        ("math.prime", {"upper": 7}, "2,3,5,7"),
+    ]
+    for kind, payload, expected in cases:
+        task = SyntheticTask(task_id="t", kind=kind, prompt="", payload=payload, difficulty=0.2)
+        assert task.expected_answer() == expected
+        reward = task.score("wrong", energy_spent=0.5)
+        assert reward.task_reward in {0.0, 1.0}
+
+
+def test_synthetic_helpers_edge_cases() -> None:
+    assert _is_prime(2) is True
+    assert _is_prime(1) is False
+    assert _is_prime(9) is False
+    empty_rewards = evaluate_population_responses([], {})
+    assert empty_rewards == {}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import textwrap
 from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean, median, pstdev
@@ -120,6 +121,23 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                 gating_reason_counts[reason] = gating_reason_counts.get(reason, 0) + 1
     latest_attempts = latest_record.get("assimilation_attempts", [])
     colonies_meta = latest_record.get("colonies_meta")
+    policy_failures_total = sum(int(rec.get("policy_failures", 0) or 0) for rec in records)
+    policy_failure_latest = latest_record.get("policy_failure_samples") or []
+    team_gate_totals: Dict[str, int] = {}
+    for rec in records:
+        team_counts = rec.get("team_gate_counts") or {}
+        if not isinstance(team_counts, dict):
+            continue
+        for reason, value in team_counts.items():
+            try:
+                team_gate_totals[reason] = team_gate_totals.get(reason, 0) + int(value)
+            except Exception:
+                continue
+    latest_team_gate_counts = latest_record.get("team_gate_counts") or {}
+    latest_team_gate_samples = latest_record.get("team_gate_samples") or []
+    population_refresh_events = [rec.get("population_refresh") for rec in records if rec.get("population_refresh")]
+    population_refresh_total = sum(int(evt.get("count", 0)) for evt in population_refresh_events if isinstance(evt, dict))
+    population_refresh_latest = population_refresh_events[-1] if population_refresh_events else None
     # Colonies timeline
     colonies_count_series = [int(rec.get("colonies", 0) or 0) for rec in records]
     colonies_avg_size_series: List[float] = []
@@ -791,6 +809,13 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "knowledge_totals": {k: int(v) for k, v in knowledge_totals.items()},
         "knowledge_entries_mean": mean(knowledge_entries_series) if knowledge_entries_series else 0.0,
         "knowledge_entries_latest": knowledge_entries_series[-1] if knowledge_entries_series else 0,
+        "policy_failures_total": int(policy_failures_total),
+        "policy_failure_latest": policy_failure_latest,
+        "team_gate_totals": team_gate_totals,
+        "team_gate_latest": latest_team_gate_counts,
+        "team_gate_samples_latest": latest_team_gate_samples,
+        "population_refresh_total": int(population_refresh_total),
+        "population_refresh_latest": population_refresh_latest,
         "assimilation_history_series": assimilation_history_series,
         "assimilation_history_latest": {
             key: records[-1] for key, records in assimilation_history_series.items() if records
@@ -1492,6 +1517,22 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         if probe_pairs:
             items = ", ".join(f"{pair}:{cnt}" for pair, cnt in probe_pairs.items())
             lines.append(f"  - Team probe pairs (aggregate): {items}")
+        team_gate_totals = summary.get("team_gate_totals") or {}
+        if team_gate_totals:
+            gate_str = ", ".join(f"{reason}:{count}" for reason, count in team_gate_totals.items())
+            lines.append(f"  - Team gate reasons (sum): {gate_str}")
+        latest_team_gate = summary.get("team_gate_latest") or {}
+        if latest_team_gate:
+            latest_gate_str = ", ".join(f"{k}:{v}" for k, v in latest_team_gate.items())
+            lines.append(f"  - Latest team gate snapshot: {latest_gate_str}")
+        team_gate_samples = summary.get("team_gate_samples_latest") or []
+        if team_gate_samples:
+            sample = team_gate_samples[-1]
+            reason = sample.get("reason")
+            same_answers = sample.get("same_answers")
+            lines.append(
+                f"  - Team gate sample: reason={reason}, tasks={sample.get('tasks')}, same_answers={same_answers}"
+            )
     prompt_scaffolds = summary.get("prompt_scaffolds") or {}
     if prompt_scaffolds:
         scaffold_items = ", ".join(f"{fam}:{cnt}" for fam, cnt in prompt_scaffolds.items())
@@ -1502,6 +1543,11 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         lines.append("- Assimilation gating totals:")
         for key, value in summary["assimilation_gating_total"].items():
             lines.append(f"  - {key}: {value}")
+    if summary.get("population_refresh_total"):
+        latest_refresh = summary.get("population_refresh_latest") or {}
+        lines.append(
+            f"- Population refreshes: {summary['population_refresh_total']} (latest: {latest_refresh})"
+        )
     if summary.get("policy_applied_total"):
         lines.append(
             f"- Policy usage: {summary['policy_applied_total']}/{summary['generations']} generations"
@@ -1517,6 +1563,15 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
             lines.append(f"  - budget_frac mean: {summary['policy_budget_frac_mean']:.2f}")
         if summary.get("policy_reserve_ratio_mean"):
             lines.append(f"  - reserve_ratio mean: {summary['policy_reserve_ratio_mean']:.2f}")
+    if summary.get("policy_failures_total"):
+        latest_failure = summary.get("policy_failure_latest") or []
+        preview = ""
+        if latest_failure:
+            preview = latest_failure[-1].get("sample", "")
+            if preview:
+                preview = textwrap.shorten(preview, width=120, placeholder="…")
+        suffix = f" (latest: {preview})" if preview else ""
+        lines.append(f"- Policy parse failures: {summary['policy_failures_total']}{suffix}")
     latest = summary.get("assimilation_energy_floor_latest")
     if latest:
         floor = float(latest.get("energy_floor", 0.0))
@@ -1913,6 +1968,12 @@ def main() -> None:
         print("Assimilation gating totals:")
         for key, value in summary["assimilation_gating_total"].items():
             print(f"  {key}: {value}")
+    if summary.get("population_refresh_total"):
+        print(
+            "Population refreshes:",
+            summary["population_refresh_total"],
+            summary.get("population_refresh_latest"),
+        )
     if summary.get("assimilation_gating_reasons_samples"):
         print("Gating reasons (samples across gens):")
         for key, value in summary["assimilation_gating_reasons_samples"].items():
@@ -2114,6 +2175,14 @@ def main() -> None:
         p = summary.get("policy_parse_parsed_total", 0) or 0
         rate = (p / a) * 100 if a else 0.0
         print("Policy parse:", p, "/", a, f"({rate:.1f}% )")
+    if summary.get("policy_failures_total"):
+        latest_failure = summary.get("policy_failure_latest") or []
+        preview = ""
+        if latest_failure:
+            preview = latest_failure[-1].get("sample", "")
+            if preview:
+                preview = textwrap.shorten(preview, width=80, placeholder="…")
+        print("Policy parse failures:", summary["policy_failures_total"], preview)
     # Team totals to console
     if summary.get("team_routes_total") is not None:
         print("Team routes / promotions:", summary.get("team_routes_total", 0), "/", summary.get("team_promotions_total", 0))
@@ -2133,6 +2202,14 @@ def main() -> None:
         if probe_pairs:
             pairs_fmt = ", ".join(f"{pair}:{cnt}" for pair, cnt in probe_pairs.items())
             print("Team probe pairs (aggregate):", pairs_fmt)
+        team_gate_totals = summary.get("team_gate_totals") or {}
+        if team_gate_totals:
+            gate_str = ", ".join(f"{reason}:{count}" for reason, count in team_gate_totals.items())
+            print("Team gate reasons (sum):", gate_str)
+        latest_team_gate = summary.get("team_gate_latest") or {}
+        if latest_team_gate:
+            latest_gate_str = ", ".join(f"{k}:{v}" for k, v in latest_team_gate.items())
+            print("Team gate snapshot (latest):", latest_gate_str)
     prompt_scaffolds = summary.get("prompt_scaffolds") or {}
     if prompt_scaffolds:
         scaffold_fmt = ", ".join(f"{fam}:{cnt}" for fam, cnt in prompt_scaffolds.items())

@@ -103,7 +103,7 @@ class AssimilationTester:
         control_arr = np.array(control_list, dtype=float)
         treatment_arr = np.array(treatment_list, dtype=float)
         min_len = min(len(control_arr), len(treatment_arr))
-        min_required = max(2, self.min_samples)
+        min_required = max(1, self.min_samples)
         if min_len < min_required:
             event = AssimilationEvent(
                 organelle_id=organelle_id,

@@ -118,6 +118,7 @@ class EvaluationManager:
         stats_delta = 0.0
         stats_count = 0
         roi_cap = 3.0
+        family_stats: Dict[str, Dict[str, float]] = {}
 
         for idx, eval_task in enumerate(tasks, start=1):
             grid_task = eval_task.to_grid_task(environment, task_id=f"eval_{idx:04d}")
@@ -131,6 +132,13 @@ class EvaluationManager:
             total += 1
             if success:
                 correct += 1
+            fam_entry = family_stats.setdefault(
+                eval_task.family,
+                {"correct": 0.0, "total": 0.0, "roi_sum": 0.0, "delta_sum": 0.0, "cost_sum": 0.0, "count": 0.0},
+            )
+            fam_entry["total"] += 1.0
+            if success:
+                fam_entry["correct"] += 1.0
 
             rewards: Dict[str, RewardBreakdown] = {}
             for route in result.routes:
@@ -169,6 +177,10 @@ class EvaluationManager:
                 stats_roi += roi_value
                 stats_delta += delta
                 stats_count += 1
+                fam_entry["cost_sum"] += cost
+                fam_entry["roi_sum"] += roi_value
+                fam_entry["delta_sum"] += delta
+                fam_entry["count"] += 1.0
             if rewards:
                 host.apply_reward(result.envelope, rewards)
 
@@ -176,6 +188,19 @@ class EvaluationManager:
         avg_cost = stats_cost / stats_count if stats_count else 0.0
         avg_roi = stats_roi / stats_count if stats_count else 0.0
         avg_delta = stats_delta / stats_count if stats_count else 0.0
+        family_breakdown: Dict[str, Dict[str, float]] = {}
+        for family, stats in family_stats.items():
+            fam_total = max(1.0, stats["total"])
+            fam_count = max(1.0, stats["count"] or stats["total"])
+            family_breakdown[family] = {
+                "accuracy": stats["correct"] / fam_total,
+                "correct": int(stats["correct"]),
+                "total": int(stats["total"]),
+                "avg_cost": stats["cost_sum"] / fam_count,
+                "avg_roi": stats["roi_sum"] / fam_count,
+                "avg_delta": stats["delta_sum"] / fam_count,
+                "count": int(stats["count"]) if stats["count"] else int(stats["total"]),
+            }
         return {
             "accuracy": accuracy,
             "correct": correct,
@@ -184,4 +209,5 @@ class EvaluationManager:
             "avg_roi": avg_roi,
             "avg_delta": avg_delta,
             "evaluated_routes": stats_count,
+            "family_breakdown": family_breakdown,
         }

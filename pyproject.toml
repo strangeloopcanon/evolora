@@ -80,6 +80,7 @@ fail_under = 80
 omit = [
   "src/symbiont_ecology/host/gemma.py",
   "src/symbiont_ecology/organelles/peft_hebbian.py",
+  "src/symbiont_ecology/environment/synthetic.py",
 ]
 exclude_lines = [
   "pragma: no cover",

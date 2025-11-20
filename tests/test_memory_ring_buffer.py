@@ -15,7 +15,7 @@ def test_in_memory_episode_ring_buffer(tmp_path):
                           lp_alpha=getattr(cfg.curriculum, "lp_alpha", 0.5))
     from symbiont_ecology.evolution.population import PopulationManager, Genome
     from symbiont_ecology.evolution.assimilation import AssimilationTester
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     oid = host.spawn_organelle(rank=cfg.host.max_lora_rank)
     pop.register(Genome(organelle_id=oid, drive_weights={"novelty": 0.0}, gate_bias=0.0, rank=cfg.host.max_lora_rank))
     assim = AssimilationTester(cfg.evolution.assimilation_threshold, cfg.evolution.assimilation_p_value, 0)

@@ -72,3 +72,35 @@ def test_math_parses_scientific_notation():
     )
     ok, _ = task.evaluate("The result is 1.25e1")
     assert ok is True
+
+
+def test_math_multi_step_evaluator():
+    task = GridTask(
+        task_id="m1",
+        cell=("math.multi_step", "medium"),
+        prompt="Compute (4 + 5) * 3 - 6.",
+        price=1.0,
+        target=21.0,
+        family="math.multi_step",
+        depth="medium",
+        difficulty=0.4,
+    )
+    ok, _ = task.evaluate("21")
+    assert ok is True
+
+
+def test_code_format_equivalence():
+    task = GridTask(
+        task_id="c1",
+        cell=("code.format", "medium"),
+        prompt="Convert name",
+        price=1.0,
+        target="adaptive_signal_flow",
+        family="code.format",
+        depth="medium",
+        difficulty=0.4,
+    )
+    ok, _ = task.evaluate("adaptive_signal_flow")
+    assert ok is True
+    ok_code_block, _ = task.evaluate("```adaptive_signal_flow```")
+    assert ok_code_block is True

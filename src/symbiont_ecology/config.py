@@ -45,6 +45,18 @@ class HostConfig(BaseModel):
         description="Template appended to the base prompt when recurrence history exists. "
         "{history} expands to formatted prior answers.",
     )
+    team_probe_temperature: float = Field(
+        0.0,
+        ge=0.0,
+        le=2.0,
+        description="Optional sampling temperature applied when intent contains 'team probe' or 'team holdout'.",
+    )
+    team_probe_top_p: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description="Optional top-p used for stochastic decoding during team probes (1.0 keeps greedy).",
+    )
 
 
 class OrganismConfig(BaseModel):
@@ -141,6 +153,19 @@ class CurriculumConfig(BaseModel):
     lp_mix_min: float = Field(0.05, ge=0.0, le=1.0)
     lp_mix_max: float = Field(0.6, ge=0.0, le=1.0)
     lp_window: int = Field(5, ge=1)
+    warmup_generations: int = Field(
+        0,
+        ge=0,
+        description="Restrict sampling to warmup_families/depths for the first N generations (0 disables)",
+    )
+    warmup_families: list[str] = Field(
+        default_factory=list,
+        description="Allowed families during the warmup window (empty keeps all).",
+    )
+    warmup_depths: list[str] = Field(
+        default_factory=list,
+        description="Allowed depths during the warmup window (empty keeps all).",
+    )
 
 
 class EnergyConfig(BaseModel):
@@ -162,6 +187,16 @@ class PopulationStrategyConfig(BaseModel):
     mu: int = Field(4, ge=1)
     lambda_: int = Field(12, ge=1, alias="lambda")
     max_population: int = Field(16, ge=1)
+    refresh_interval: int = Field(
+        0,
+        ge=0,
+        description="Trigger a low-ROI population refresh after this many merge-less generations (0 disables).",
+    )
+    refresh_count: int = Field(
+        1,
+        ge=1,
+        description="How many of the lowest-ROI organelles to retire when a refresh triggers.",
+    )
 
 
 class AssimilationTuningConfig(BaseModel):
@@ -750,6 +785,10 @@ class EnvironmentConfig(BaseModel):
     budget_trait_bonus: float = Field(1.0, ge=0.0, description="Strength of trait influence (explore_rate) on per-org budgets")
     budget_policy_floor: float = Field(0.3, ge=0.0, description="Minimum policy budget_frac multiplier")
     budget_policy_ceiling: float = Field(2.0, ge=0.0, description="Maximum policy budget_frac multiplier")
+    budget_policy_requires_parse: bool = Field(
+        False,
+        description="If true, organelles without a parsed policy fall back to the policy floor when budgeting.",
+    )
     global_episode_cap: int = Field(
         0,
         ge=0,

@@ -14,6 +14,7 @@ def test_update_qd_archive_populates_bins() -> None:
         population={"o1": object(), "o2": object()},
         average_energy=lambda oid: 0.5 if oid == "o1" else 1.0,
         average_roi=lambda oid, limit=5: 1.2 if oid == "o1" else 0.8,
+        cell_novelty=lambda oid, cell, scale=0.3, floor=0.05: 0.4 if oid == "o1" else 0.2,
     )
     # environment returns best cell score key and ema
     loop.environment = SimpleNamespace(

@@ -12,7 +12,7 @@ def test_energy_bankruptcy_skips_organelle(tmp_path) -> None:
     host = HostKernel(config=config, router=router, ledger=ledger)
     host.freeze_host()
 
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     active = host.spawn_organelle(rank=2)
     bankrupt = host.spawn_organelle(rank=2)
     population.register(Genome(organelle_id=active, drive_weights={}, gate_bias=0.0, rank=2))
@@ -58,7 +58,7 @@ def test_bankruptcy_culling_removes_organelle(tmp_path) -> None:
     host = HostKernel(config=config, router=router, ledger=ledger)
     host.freeze_host()
 
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     bankrupt = host.spawn_organelle(rank=2)
     population.register(Genome(organelle_id=bankrupt, drive_weights={}, gate_bias=0.0, rank=2))
     host.ledger.set_energy(bankrupt, 0.0)

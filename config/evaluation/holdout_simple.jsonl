@@ -6,7 +6,5 @@
 {"prompt": "Multiply 7 by 6. Respond with the number only.", "target": 42, "family": "math", "depth": "short"}
 {"prompt": "Subtract 19 from 43. Respond with the number only.", "target": 24, "family": "math", "depth": "short"}
 {"prompt": "Compute 18 / 3. Respond with the number only.", "target": 6, "family": "math", "depth": "short"}
-{"prompt": "Compute (9 + 11) * 2 - 8. Respond with the number only.", "target": 32, "family": "math.multi_step", "depth": "medium"}
-{"prompt": "Compute (15 - 4) * 3 + 6. Respond with the number only.", "target": 39, "family": "math.multi_step", "depth": "medium"}
-{"prompt": "Convert the variable name `EnergyTicketRatio` to snake_case. Respond with the new name only.", "target": "energy_ticket_ratio", "family": "code.format", "depth": "medium"}
-{"prompt": "Convert `TeamRouterBudget` to snake_case. Respond with the new name only.", "target": "team_router_budget", "family": "code.format", "depth": "medium"}
+{"prompt": "Reformat this Python snippet with four spaces per indent and convert the string literal to use double quotes. Respond with the formatted code only.\n```\ndef greet():\n print('hi')\n```\n", "target": "def greet():\n    print(\"hi\")", "family": "code.format", "depth": "short"}
+{"prompt": "Format this function so each statement uses four spaces per indent and spacing around operators is normalized. Respond with the code only.\n```\ndef add(a,b):\n  total=a+b\n  return total\n```\n", "target": "def add(a, b):\n    total = a + b\n    return total", "family": "code.format", "depth": "medium"}

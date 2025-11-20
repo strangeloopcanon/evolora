@@ -127,7 +127,7 @@ def main() -> None:
     host = HostKernel(config=config, router=router, ledger=ledger)
     host.freeze_host()
 
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     for _ in range(4):
         oid = host.spawn_organelle(rank=config.host.max_lora_rank)
         population.register(Genome(organelle_id=oid, drive_weights={"novelty": 0.4}, gate_bias=0.0, rank=config.host.max_lora_rank))

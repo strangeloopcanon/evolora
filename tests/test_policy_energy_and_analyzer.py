@@ -22,7 +22,7 @@ def _build_loop_with_fake_host() -> tuple[EcologyLoop, str, ATPLedger]:
     cfg.policy.energy_cost = 0.1
     cfg.policy.charge_tokens = False
     # Minimal population with one genome
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     organelle_id = "org_test"
     pop.register(
         Genome(organelle_id=organelle_id, drive_weights={}, gate_bias=0.0, rank=2)
@@ -87,7 +87,7 @@ def test_sample_task_with_policy_bias() -> None:
     cfg = EcologyConfig()
     cfg.policy.enabled = True
     cfg.policy.bias_strength = 1.0  # always honor policy
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     oid = "org_test2"
     pop.register(Genome(organelle_id=oid, drive_weights={}, gate_bias=0.0, rank=2))
     env = SimpleNamespace(
@@ -124,7 +124,7 @@ def test_resolve_lp_mix_auto_tune_bounds() -> None:
         config=cfg,
         host=SimpleNamespace(),  # unused
         environment=SimpleNamespace(controller=SimpleNamespace(lp_progress={"a": 0.1, "b": 0.4})),  # type: ignore[arg-type]
-        population=PopulationManager(cfg.evolution),
+        population=PopulationManager(cfg.evolution, cfg.foraging),
         assimilation=AssimilationTester(
             uplift_threshold=cfg.evolution.assimilation_threshold,
             p_value_threshold=cfg.evolution.assimilation_p_value,
@@ -146,7 +146,7 @@ def test_compute_batch_size_branches() -> None:
         config=cfg,
         host=SimpleNamespace(),
         environment=SimpleNamespace(controller=SimpleNamespace(lp_progress={})),  # type: ignore[arg-type]
-        population=PopulationManager(cfg.evolution),
+        population=PopulationManager(cfg.evolution, cfg.foraging),
         assimilation=AssimilationTester(
             uplift_threshold=cfg.evolution.assimilation_threshold,
             p_value_threshold=cfg.evolution.assimilation_p_value,
@@ -173,7 +173,7 @@ def test_auto_nudge_evidence_adjusts_knobs() -> None:
         config=cfg,
         host=SimpleNamespace(),
         environment=SimpleNamespace(controller=SimpleNamespace(lp_progress={})),  # type: ignore[arg-type]
-        population=PopulationManager(cfg.evolution),
+        population=PopulationManager(cfg.evolution, cfg.foraging),
         assimilation=AssimilationTester(
             uplift_threshold=cfg.evolution.assimilation_threshold,
             p_value_threshold=cfg.evolution.assimilation_p_value,
@@ -206,7 +206,7 @@ def test_decay_assimilation_thresholds_on_fail_streak() -> None:
         config=cfg,
         host=SimpleNamespace(),
         environment=SimpleNamespace(controller=SimpleNamespace(lp_progress={})),  # type: ignore[arg-type]
-        population=PopulationManager(cfg.evolution),
+        population=PopulationManager(cfg.evolution, cfg.foraging),
         assimilation=dummy,  # type: ignore[arg-type]
         human_bandit=None,
         sink=None,

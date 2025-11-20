@@ -16,7 +16,7 @@ def test_window_autotune_reduces_min_window(tmp_path):
                           reward_bonus=cfg.environment.success_reward_bonus,
                           failure_cost_multiplier=cfg.environment.failure_cost_multiplier,
                           lp_alpha=getattr(cfg.curriculum, "lp_alpha", 0.5))
-    pop = PopulationManager(cfg.evolution)
+    pop = PopulationManager(cfg.evolution, cfg.foraging)
     assim = AssimilationTester(cfg.evolution.assimilation_threshold, cfg.evolution.assimilation_p_value, 0)
     loop = EcologyLoop(config=cfg, host=host, environment=env, population=pop, assimilation=assim)
     before = cfg.assimilation_tuning.min_window

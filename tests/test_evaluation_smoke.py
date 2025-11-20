@@ -55,6 +55,8 @@ def test_evaluation_manager_evaluate_smoke():
     out = mgr.evaluate(host, env)
     assert isinstance(out, dict) and "accuracy" in out and out["total"] == 1
     assert out["accuracy"] >= 0.0 and out["evaluated_routes"] >= 1
+    assert "family_breakdown" in out and "word.count" in out["family_breakdown"]
+    assert out["family_breakdown"]["word.count"]["total"] == 1
 
 
 class _ZeroCostHost(_FakeHost):
@@ -81,3 +83,4 @@ def test_evaluation_manager_zero_cost_branch():
     host = _ZeroCostHost()
     out = mgr.evaluate(host, env)
     assert out["total"] == 1 and out["evaluated_routes"] >= 1
+    assert out["family_breakdown"]["word.count"]["total"] == 1

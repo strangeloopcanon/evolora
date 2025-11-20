@@ -35,7 +35,7 @@ def main() -> None:
     cfg = load_ecology_config(args.config)
     ledger = ATPLedger(); router = BanditRouter(); host = HostKernel(config=cfg, router=router, ledger=ledger)
     host.freeze_host()
-    population = PopulationManager(cfg.evolution)
+    population = PopulationManager(cfg.evolution, cfg.foraging)
     # Spawn a minimal pop when auto
     if args.members.strip().lower() == "auto":
         for _ in range(2):
@@ -56,4 +56,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

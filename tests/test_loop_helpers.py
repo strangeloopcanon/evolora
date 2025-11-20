@@ -18,7 +18,7 @@ def test_loop_feedback_and_spawn(tmp_path) -> None:
     config = EcologyConfig()
     host = HostKernel(config=config, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     organelle_id = host.spawn_organelle(rank=2)
     genome = Genome(
         organelle_id=organelle_id,

@@ -29,15 +29,15 @@ class Organelle:
 
     def route_probability(self, observation: MessageEnvelope) -> float:
         """Return probability of being routed for current observation."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     def forward(self, envelope: MessageEnvelope) -> MessageEnvelope:
         """Produce actions/plan updates."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     def update(self, envelope: MessageEnvelope, reward: RewardBreakdown) -> None:
         """Apply plastic update based on reward."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     # ------------------------------------------------------------------
     def export_adapter_state(self) -> dict[str, torch.Tensor]:
@@ -58,7 +58,18 @@ class Organelle:
             alpha: Mixing factor applied to the incoming snapshot.
         """
 
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
+
+    def fisher_importance(self) -> float:
+        """Return an approximate Fisher importance score for the organelle.
+
+        Sub-classes with access to activation statistics should override this
+        to expose a positive value used when weighting LoRA soups. The base
+        implementation returns ``0.0`` to signal that no estimate is
+        available.
+        """
+
+        return 0.0
 
     @property
     def steps(self) -> int:

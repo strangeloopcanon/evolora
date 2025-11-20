@@ -26,7 +26,7 @@ def main() -> None:
     router = BanditRouter()
     host = HostKernel(config=config, router=router, ledger=ledger)
     host.freeze_host()
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     for _ in range(3):
         organelle_id = host.spawn_organelle(rank=4)
         population.register(

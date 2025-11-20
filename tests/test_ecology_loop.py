@@ -17,7 +17,7 @@ def test_ecology_loop_runs_generation(tmp_path) -> None:
     config = EcologyConfig()
     host = HostKernel(config=config, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     organelle_id = host.spawn_organelle(rank=2)
     population.register(
         Genome(
@@ -68,7 +68,7 @@ def test_human_bandit_frequency_gating() -> None:
     config.human_bandit.frequency = 0.5
     host = HostKernel(config=config, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     organelle_id = host.spawn_organelle(rank=2)
     population.register(
         Genome(

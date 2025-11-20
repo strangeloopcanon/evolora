@@ -23,7 +23,7 @@ def make_loop() -> EcologyLoop:
     # tiny environment
     host = HostKernel(config=config, router=BanditRouter(), ledger=ATPLedger())
     host.freeze_host()
-    population = PopulationManager(config.evolution)
+    population = PopulationManager(config.evolution, config.foraging)
     oid = host.spawn_organelle(rank=2)
     population.register(Genome(organelle_id=oid, drive_weights={"novelty": 0.3}, gate_bias=0.0, rank=2))
     loop = EcologyLoop(
