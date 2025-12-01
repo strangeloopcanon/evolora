@@ -68,10 +68,11 @@ class HostKernel:
         rank: int,
         hebbian_config: HebbianConfig | None = None,
         activation_bias: float = 0.0,
+        organelle_id: str | None = None,
     ) -> str:
         if len(self.organelles) >= self.config.organism.max_organelles:
             raise RuntimeError("Organism capacity reached")
-        organelle_id: str = short_uid("org")
+        organelle_id = organelle_id or short_uid("org")
         context = OrganelleContext(
             organelle_id=organelle_id,
             hebbian=hebbian_config or self.config.hebbian,

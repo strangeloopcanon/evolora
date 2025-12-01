@@ -7,6 +7,8 @@ import json
 import argparse
 import csv
 from pathlib import Path
+import pickle
+import random
 from statistics import mean
 import warnings
 
@@ -99,11 +101,90 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable human bandit feedback for deterministic runs.",
     )
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        default=None,
+        help="Optional run directory containing a checkpoint.pt to resume from.",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=0,
+        help="If >0, write checkpoint.pt every N generations (1-indexed).",
+    )
     return parser.parse_args()
+
+
+def _load_checkpoint(path: Path) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+    return pickle.loads(path.read_bytes())
+
+
+def _save_checkpoint(
+    path: Path,
+    generation: int,
+    host: HostKernel,
+    population: PopulationManager,
+    environment: GridEnvironment,
+    ledger: ATPLedger,
+    loop: EcologyLoop,
+    random_state: tuple,
+) -> None:
+    adapter_states: dict[str, object] = {}
+    for oid, org in host.organelles.items():
+        try:
+            adapter_states[oid] = org.export_adapter_state()  # type: ignore[attr-defined]
+        except Exception:
+            adapter_states[oid] = {}
+    state = {
+        "generation": generation,
+        "population": population,
+        "environment_state": {
+            "controller": environment.controller,
+            "organism_stats": environment.organism_stats,
+            "organism_canary_fail": environment.organism_canary_fail,
+            "rng_state": environment.rng.getstate(),
+            "task_counter": environment.task_counter,
+        },
+        "ledger": ledger,
+        "adapter_states": adapter_states,
+        "random_state": random_state,
+        "assimilation_cooldown": loop.assimilation_cooldown,
+        "tau_relief": getattr(loop, "_tau_relief", {}),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pickle.dumps(state))
+
+
+def _make_assimilation_tester(config) -> AssimilationTester:
+    assim = AssimilationTester(
+        uplift_threshold=config.evolution.assimilation_threshold,
+        p_value_threshold=config.evolution.assimilation_p_value,
+        safety_budget=0,
+    )
+    try:
+        tuning = config.assimilation_tuning
+        assim.bootstrap_enabled = bool(getattr(tuning, "bootstrap_uplift_enabled", False))
+        assim.bootstrap_n = int(getattr(tuning, "bootstrap_samples", 0))
+        assim.permutation_n = int(getattr(tuning, "permutation_samples", 0))
+        assim.min_samples = int(getattr(tuning, "min_uplift_samples", 2))
+        assim.dr_enabled = bool(getattr(tuning, "dr_enabled", False))
+        assim.dr_strata = list(getattr(tuning, "dr_strata", assim.dr_strata))
+        assim.dr_min_stratum = int(getattr(tuning, "dr_min_stratum_size", assim.dr_min_stratum))
+        assim.dr_min_power = float(getattr(tuning, "dr_min_power", assim.dr_min_power))
+    except Exception:
+        pass
+    return assim
 
 
 def main() -> None:
     args = parse_args()
+
+    resume_root = args.resume_from
+    if resume_root is not None:
+        args.output = resume_root
 
     config = load_ecology_config(args.config)
     config.metrics.root = args.output
@@ -128,9 +209,134 @@ def main() -> None:
     host.freeze_host()
 
     population = PopulationManager(config.evolution, config.foraging)
-    for _ in range(4):
-        oid = host.spawn_organelle(rank=config.host.max_lora_rank)
-        population.register(Genome(organelle_id=oid, drive_weights={"novelty": 0.4}, gate_bias=0.0, rank=config.host.max_lora_rank))
+
+    start_generation = 0
+    prev_n = 0
+    gen_summaries: list[dict[str, object]] = []
+
+    checkpoint_path = config.metrics.root / "checkpoint.pt"
+    if resume_root is not None and checkpoint_path.exists():
+        state = _load_checkpoint(checkpoint_path)
+        start_generation = int(state.get("generation", 0))
+        # restore population
+        population = state.get("population", population)
+        # respawn organelles with saved IDs and adapter states
+        adapter_states = state.get("adapter_states", {}) or {}
+        population.population = dict(population.population)
+        for genome in population.population.values():
+            oid = genome.organelle_id
+            host.spawn_organelle(rank=genome.rank, organelle_id=oid)
+            if oid in adapter_states:
+                state_obj = adapter_states[oid]
+                try:
+                    if isinstance(state_obj, (str, Path)):
+                        host.import_organelle_adapter(oid, state_obj)
+                    else:
+                        org = host.organelles.get(oid)
+                        if org is not None:
+                            org.import_adapter_state(state_obj, alpha=1.0)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            ledger.ensure(oid, 0.0)
+            ledger.ensure_energy(oid, 0.0)
+        # restore ledger balances
+        saved_ledger: ATPLedger = state.get("ledger", ledger)
+        ledger.accounts = saved_ledger.accounts
+        ledger.energy_accounts = saved_ledger.energy_accounts
+        ledger.energy_cap = saved_ledger.energy_cap
+        # environment state
+        env_state = state.get("environment_state", {})
+        environment = GridEnvironment(
+            grid_cfg=config.grid,
+            controller_cfg=config.controller,
+            pricing_cfg=config.pricing,
+            canary_cfg=config.canary,
+            seed=args.seed,
+            reward_bonus=config.environment.success_reward_bonus,
+            failure_cost_multiplier=config.environment.failure_cost_multiplier,
+            lp_alpha=getattr(config.curriculum, "lp_alpha", 0.5),
+        )
+        try:
+            environment.controller = env_state.get("controller", environment.controller)
+            environment.organism_stats = env_state.get("organism_stats", environment.organism_stats)
+            environment.organism_canary_fail = env_state.get("organism_canary_fail", environment.organism_canary_fail)
+            environment.task_counter = env_state.get("task_counter", environment.task_counter)
+            rng_state = env_state.get("rng_state")
+            if rng_state is not None:
+                environment.rng.setstate(rng_state)
+        except Exception:
+            pass
+        assim = _make_assimilation_tester(config)
+        loop = EcologyLoop(
+            config=config,
+            host=host,
+            environment=environment,
+            population=population,
+            assimilation=assim,
+            human_bandit=None,
+            sink=TelemetrySink(root=config.metrics.root, episodes_file=config.metrics.episodes_file, assimilation_file=config.metrics.assimilation_file),
+        )
+        try:
+            loop.assimilation_cooldown = state.get("assimilation_cooldown", {})
+            if hasattr(loop, "_tau_relief"):
+                loop._tau_relief = state.get("tau_relief", {})
+        except Exception:
+            pass
+        try:
+            random_state = state.get("random_state")
+            if random_state is not None:
+                random.setstate(random_state)
+        except Exception:
+            pass
+        # bootstrap existing gen summaries
+        gs_path = config.metrics.root / "gen_summaries.jsonl"
+        if gs_path.exists():
+            with gs_path.open() as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    gen_summaries.append(json.loads(line))
+        episodes_path = config.metrics.root / config.metrics.episodes_file
+        if episodes_path.exists():
+            with episodes_path.open() as f:
+                prev_n = sum(1 for _ in f)
+    else:
+        for _ in range(4):
+            oid = host.spawn_organelle(rank=config.host.max_lora_rank)
+            population.register(Genome(organelle_id=oid, drive_weights={"novelty": 0.4}, gate_bias=0.0, rank=config.host.max_lora_rank))
+
+        # bootstrap uplift configuration
+        assim = _make_assimilation_tester(config)
+        sink = TelemetrySink(root=config.metrics.root, episodes_file=config.metrics.episodes_file, assimilation_file=config.metrics.assimilation_file)
+        environment = GridEnvironment(
+            grid_cfg=config.grid,
+            controller_cfg=config.controller,
+            pricing_cfg=config.pricing,
+            canary_cfg=config.canary,
+            seed=args.seed,
+            reward_bonus=config.environment.success_reward_bonus,
+            failure_cost_multiplier=config.environment.failure_cost_multiplier,
+            lp_alpha=getattr(config.curriculum, "lp_alpha", 0.5),
+        )
+        if args.disable_human or not config.human_bandit.enabled:
+            human_bandit = None
+        else:
+            human_bandit = HumanBandit(
+                preference_weight=config.human_bandit.preference_weight,
+                helper_weight=config.human_bandit.helper_weight,
+                frequency=config.human_bandit.frequency,
+            )
+
+        loop = EcologyLoop(
+            config=config,
+            host=host,
+            environment=environment,
+            population=population,
+            assimilation=assim,
+            human_bandit=human_bandit,
+            sink=sink,
+        )
 
     assim = AssimilationTester(
         uplift_threshold=config.evolution.assimilation_threshold,
@@ -151,40 +357,12 @@ def main() -> None:
     except Exception:
         pass
 
-    sink = TelemetrySink(root=config.metrics.root, episodes_file=config.metrics.episodes_file, assimilation_file=config.metrics.assimilation_file)
-    environment = GridEnvironment(
-        grid_cfg=config.grid,
-        controller_cfg=config.controller,
-        pricing_cfg=config.pricing,
-        canary_cfg=config.canary,
-        seed=args.seed,
-        reward_bonus=config.environment.success_reward_bonus,
-        failure_cost_multiplier=config.environment.failure_cost_multiplier,
-        lp_alpha=getattr(config.curriculum, "lp_alpha", 0.5),
-    )
-    if args.disable_human or not config.human_bandit.enabled:
-        human_bandit = None
-    else:
-        human_bandit = HumanBandit(
-            preference_weight=config.human_bandit.preference_weight,
-            helper_weight=config.human_bandit.helper_weight,
-            frequency=config.human_bandit.frequency,
-        )
-
-    loop = EcologyLoop(
-        config=config,
-        host=host,
-        environment=environment,
-        population=population,
-        assimilation=assim,
-        human_bandit=human_bandit,
-        sink=sink,
-    )
-
     episodes_path = config.metrics.root / config.metrics.episodes_file
-    gen_summaries = []
-    prev_n = 0
-    for gen in range(args.generations):
+    if start_generation > 0 and episodes_path.exists():
+        with episodes_path.open() as f:
+            prev_n = sum(1 for _ in f)
+    total_generations = start_generation + args.generations
+    for gen in range(start_generation, total_generations):
         summary = loop.run_generation(batch_size=config.environment.synthetic_batch_size)
         # summarize this generation's episodes
         curr_n = 0
@@ -227,6 +405,18 @@ def main() -> None:
             message += f" | eval {eval_info['accuracy']:.3f} ({eval_info['correct']}/{eval_info['total']})"
         print(message, flush=True)
 
+        if args.checkpoint_every and (gen + 1) % args.checkpoint_every == 0:
+            _save_checkpoint(
+                checkpoint_path,
+                gen + 1,
+                host,
+                population,
+                environment,
+                ledger,
+                loop,
+                random.getstate(),
+            )
+
     config.metrics.root.mkdir(parents=True, exist_ok=True)
     json_path = config.metrics.root / "gen_summaries.jsonl"
     json_path.write_text("\n".join(json.dumps(s) for s in gen_summaries))
@@ -244,6 +434,9 @@ def main() -> None:
                 row[key] = value
             writer.writerow(row)
     print("Telemetry root:", config.metrics.root)
+
+    # Save final checkpoint
+    _save_checkpoint(checkpoint_path, total_generations, host, population, environment, ledger, loop, random.getstate())
 
 
 if __name__ == "__main__":
