@@ -15,12 +15,34 @@ We want to see whether a colony of tiny LoRA adapters can learn useful behaviour
 If the colony keeps earning more than it spends, the population should drift toward better answers all on its own.
 
 ## Current Status
-- Latest 40‑gen run (Nov 13 2025, `artifacts_qwen3_endogenous_colonies_memory_20251113_142217`): avg ROI **0.88 ± 0.25**, 2 357 episodes, **11 merges / 42 trials / 11 promotions**, eval accuracy **25 % (2/8 math only)**, no bankruptcies but ROI never clears 1.0.
-- Assimilation gating now dominated by `uplift_below_threshold` (306) and `insufficient_scores` (155) vs `low_energy` 4; evidence tokens (1 557 minted / 155 used) still failed to bridge min windows, so we dropped `controller.tau` to **0.32**, lowered `power_target` to **0.25**, trimmed the curriculum to **math / word.count / code.format** only, and set `min_uplift_samples=1` with `evidence_token_mint=2` so each minted token can actually shorten windows down to the configured floor. Assimilation now skips fresh organelles until they’ve logged scores, and evidence tokens only mint after an organelle records real assimilation power, so the minted/used counts track actual learning pressure.
-- Team probes fire (462 routes) but CI always returns `ci_low` because solver/critic answers are identical; we now shuffle solver order, reuse the configurable handoff template for both live teams and probes, crank probe sampling to temperature **0.95**, require the checker prompt to emit a *different* `FINAL_ANSWER`, and treat any pair with ≥50 % identical answers as a failed gate.
-- Policy channel remains dead (**0/604** parses) and budgets default to the policy floor, so most organelles get throttled episodes. We now source policy text directly from route metrics (instead of the shared envelope) before parsing; if parsing still fails we fall back to a neutral `budget_frac/reserve_ratio=0.5` and budgets no longer require a successful parse to exceed the floor.
-- Analyzer/report gained policy failure + team gate telemetry plus population-refresh breadcrumbs; evaluation now samples **one** lightweight holdout (math/word.count/code-format) every **15** generations so ROI doesn’t crater mid-run. Keep runs local (macOS still hits `malloc … out of space` once RSS climbs past ~28 GB) and continue using `MPLCONFIGDIR=$(mktemp -d)` + synthetic batches ≤4.
-- Hebbian LR is now **0.01** (up from 0.003) and the promotion controller targets **5 %** instead of 20 %, so adapters receive a stronger learning signal and the colony stops waiting dozens of generations before attempting a promotion.
+- Latest resumable run (`artifacts_qwen3_endogenous_colonies_memory_a_20251124_150138`, gens 71–100): ROI **~1.26** avg (up to 1.81), **33 merges**, **459 assimilation tests / 67 passes**, power mean **0.85**, uplift CIs exclude zero ~99.7 %, eval **1/1**. Policies parse 100 %, budgets ~45, evidence tokens minted/used **1191 / 410**.
+- Gates now dominated by `low_power` and occasional `insufficient_scores`; no `no_activity`/`no_best_cell` starvation. Population refresh happened once across the block.
+- Team routing promotes selectively (20 accepted / 336 routes) with stricter handoff and diversity guards; colonies stay small (size 2) but stable.
+- Long runs are now resumable via checkpoints: you can split runs into small chunks and resume the same `run_id` without restarting the population (see commands below). Keep using `MPLCONFIGDIR=$(mktemp -d)` to dodge font-cache crashes on macOS.
+
+### Running long evaluations safely (resumable)
+```bash
+run_id=artifacts_qwen3_endogenous_colonies_memory_a_$(date +%Y%m%d_%H%M%S)
+
+# First chunk (e.g., 20–50 gens)
+MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py \
+  --config config/experiments/qwen3_endogenous.yaml \
+  --generations 50 \
+  --output "$run_id" \
+  --checkpoint-every 5
+
+# Analyzer (only after a successful eval)
+MPLCONFIGDIR=$(mktemp -d) .venv311/bin/python scripts/analyze_ecology_run.py "$run_id" --plots --report
+
+# Continue the same population/state
+MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py \
+  --config config/experiments/qwen3_endogenous.yaml \
+  --generations 20 \
+  --output "$run_id" \
+  --resume-from "$run_id" \
+  --checkpoint-every 5
+```
+If a chunk is killed by macOS, rerun the same `--resume-from` command; it will pick up from the last checkpoint in `run_id/checkpoint.pt`.
 
 ## What’s New (Oct 2025)
 - Policy hook (per‑org JSON policy) with energy micro‑cost. Policies can bias routing (cell_pref), adjust per‑org budget_frac, enable comms, and set a small gate_bias delta. Analyzer shows policy usage and ROI when policy is on vs off.
