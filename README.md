@@ -1,6 +1,6 @@
 # Evolora — Symbiotic LLM Ecology
 
-TL;DR: Many tiny LoRA adapters live on a frozen Gemma‑270M host and compete for energy by solving small tasks. We measure reward‑on‑cost (ROI), gate merges by uplift and holdout checks, and adapt the energy floor automatically. The goal is to see if useful behaviours emerge via evolutionary pressure rather than full fine‑tuning.
+TL;DR: Many tiny LoRA adapters live on a frozen small host model (Gemma‑270M or Qwen3‑0.6B, depending on the experiment) and compete for energy by solving small tasks. We measure reward‑on‑cost (ROI), gate merges by uplift and holdout checks, and adapt the energy floor automatically. The goal is to see if useful behaviours emerge via evolutionary pressure rather than full fine‑tuning.
 
 ## Why We’re Doing This (Human-Sized Version)
 We want to see whether a colony of tiny LoRA adapters can learn useful behaviour *without* back-propagating through the whole model. Think of the base Gemma-270M host as an ecosystem and each adapter as an organism. They earn “energy” by solving small tasks, spend it on inference, and occasionally merge if they consistently outperform their peers. Our goal is to nudge this colony from random noise to adaptive cooperation, the way life crept out of the Hadean soup into the Cambrian explosion.
@@ -78,7 +78,7 @@ If a chunk is killed by macOS, rerun the same `--resume-from` command; it will p
 
 ## How Learning Emerges (Core Hypothesis)
 
-We freeze the base model (Gemma‑270M) and let many tiny LoRA adapters (“organelles”) evolve on top of it. They earn energy by solving tasks and spend energy to run. Selection pressure (energy, pricing, curriculum) and telemetry (ROI, holdouts, probes) create a closed loop where useful behaviours persist and poor ones go extinct—without back‑prop through the base.
+We freeze a small base model (Gemma‑270M or Qwen3‑0.6B) and let many tiny LoRA adapters (“organelles”) evolve on top of it. They earn energy by solving tasks and spend energy to run. Selection pressure (energy, pricing, curriculum) and telemetry (ROI, holdouts, probes) create a closed loop where useful behaviours persist and poor ones go extinct—without back‑prop through the base.
 
 What actually changes the model’s behaviour
 - Reward‑modulated LoRA updates: after each episode, the adapter nudges toward activations that produced higher reward‑on‑cost and away from costly failures.
