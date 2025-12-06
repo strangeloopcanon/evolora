@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Small helper to reproduce the three main Qwen3‑0.6B baselines used in the ecology writeup.
+# It assumes you've already created and populated .venv311 and are running this from repo root.
+
+VENV_BIN=".venv311/bin"
+PY="$VENV_BIN/python"
+
+if [ ! -x "$PY" ]; then
+  echo "Expected $PY – please create/refresh .venv311 and install deps first." >&2
+  exit 1
+fi
+
+timestamp() {
+  date +%Y%m%d_%H%M%S
+}
+
+run_frozen() {
+  local run_id="artifacts_paper_qwen3_frozen_$(timestamp)"
+  echo "[frozen] run_id=$run_id"
+  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
+    --config config/experiments/paper_qwen3_frozen.yaml \
+    --generations 50 \
+    --output "$run_id" \
+    --checkpoint-every 5
+  MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
+}
+
+run_single() {
+  local run_id="artifacts_paper_qwen3_single_$(timestamp)"
+  echo "[single] run_id=$run_id"
+  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
+    --config config/experiments/paper_qwen3_single.yaml \
+    --generations 50 \
+    --output "$run_id" \
+    --checkpoint-every 5
+  MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
+}
+
+run_ecology() {
+  local run_id="artifacts_paper_qwen3_ecology_$(timestamp)"
+  echo "[ecology] run_id=$run_id"
+  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
+    --config config/experiments/paper_qwen3_ecology.yaml \
+    --generations 50 \
+    --output "$run_id" \
+    --checkpoint-every 5
+  MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
+}
+
+case "${1:-all}" in
+  frozen)  run_frozen ;;
+  single)  run_single ;;
+  ecology) run_ecology ;;
+  all)
+    run_frozen
+    run_single
+    run_ecology
+    ;;
+  *)
+    echo "Usage: $0 [frozen|single|ecology|all]" >&2
+    exit 1
+    ;;
+esac
+
