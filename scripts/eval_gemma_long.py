@@ -302,7 +302,8 @@ def main() -> None:
             with episodes_path.open() as f:
                 prev_n = sum(1 for _ in f)
     else:
-        for _ in range(4):
+        initial_orgs = getattr(config.population_strategy, "initial_orgs", 4)
+        for _ in range(initial_orgs):
             oid = host.spawn_organelle(rank=config.host.max_lora_rank)
             population.register(Genome(organelle_id=oid, drive_weights={"novelty": 0.4}, gate_bias=0.0, rank=config.host.max_lora_rank))
 
@@ -364,6 +365,8 @@ def main() -> None:
     total_generations = start_generation + args.generations
     for gen in range(start_generation, total_generations):
         summary = loop.run_generation(batch_size=config.environment.synthetic_batch_size)
+        if summary is None:
+            summary = {}
         # summarize this generation's episodes
         curr_n = 0
         if episodes_path.exists():

@@ -15,10 +15,19 @@ We want to see whether a colony of tiny LoRA adapters can learn useful behaviour
 If the colony keeps earning more than it spends, the population should drift toward better answers all on its own.
 
 ## Current Status
-- Latest resumable run (`artifacts_qwen3_endogenous_colonies_memory_a_20251124_150138`, gens 71–100): ROI **~1.26** avg (up to 1.81), **33 merges**, **459 assimilation tests / 67 passes**, power mean **0.85**, uplift CIs exclude zero ~99.7 %, eval **1/1**. Policies parse 100 %, budgets ~45, evidence tokens minted/used **1191 / 410**.
-- Gates now dominated by `low_power` and occasional `insufficient_scores`; no `no_activity`/`no_best_cell` starvation. Population refresh happened once across the block.
-- Team routing promotes selectively (20 accepted / 336 routes) with stricter handoff and diversity guards; colonies stay small (size 2) but stable.
-- Long runs are now resumable via checkpoints: you can split runs into small chunks and resume the same `run_id` without restarting the population (see commands below). Keep using `MPLCONFIGDIR=$(mktemp -d)` to dodge font-cache crashes on macOS.
+- Latest ecology run on Qwen3‑0.6B (`artifacts_paper_qwen3_ecology_20251202_120102`, 50 gens): ROI **~0.78** avg (up to ~1.50), **28 merges**, **82 assimilation events / 13 passes**, power mean **~0.84**, uplift CIs basically never include zero, eval **2/3**. Evidence tokens minted/used **1533 / 160**, knowledge cache writes/reads/hits **42 / 4 / 4**, colonies size **2** and stable, QD archive coverage **~21 %**.
+- Frozen‑base baseline (`artifacts_paper_qwen3_frozen_20251201_205728`): same host/tasks, no merges or colonies, ROI **~0.82** with solid but static performance; no structural change, no QD coverage, no knowledge usage.
+- Single‑adapter baseline (`artifacts_paper_qwen3_single_20251203_120617`): one organelle with extra energy but no ecology. It stays alive, logs a trickle of episodes (22 across 50 gens), and hovers near zero ROI with no merges, no QD coverage, and almost no cache use. Good sanity check that “just one LoRA” doesn’t spontaneously turn into an economy.
+- Earlier long run (`artifacts_qwen3_endogenous_colonies_memory_a_20251124_150138`, gens 71–100) shows the same story at 100‑gen scale: ROI **~1.26**, **33 merges**, **459 assimilation tests / 67 passes**, power **0.85**, eval **1/1**, policies parse 100 %, budgets ~45, evidence tokens **1191 / 410**.
+- Gates are now dominated by `low_power` and `insufficient_scores` rather than `no_activity`/`no_best_cell` starvation. Population refreshes only fire when merges stall for a while, which is what we want.
+- Team routing promotes selectively (tens of promotions over hundreds of team routes) with stricter handoff and diversity guards; colonies remain small (size 2) but actually do something useful.
+- Long runs are resumable via checkpoints: you can split runs into small chunks and resume the same `run_id` without restarting the population (see commands below). Keep using `MPLCONFIGDIR=$(mktemp -d)` to dodge font-cache crashes on macOS.
+
+### What this is teaching me so far
+- A frozen base model plus a single LoRA (even with a bit of energy and a memory cache) mostly just jitters around: you get a few episodes, near‑zero ROI, and no real structural change.
+- A frozen base plus a *population* of LoRAs with energy, merges, holdouts, and a small memory+policy+team loop does something qualitatively different: the system keeps running, keeps earning, and keeps rewriting its own “org chart” via merges and colonies.
+- The economy matters as much as the learning rule. Ticket prices, energy floors, bankruptcy rules, and evidence tokens decide who even gets to be sampled; the Hebbian/LORA updates then climb whatever hill that economy exposes.
+- You can get long‑horizon adaptation on a tiny host without ever touching its base weights, as long as you give the adapters somewhere to live (an ecology), a way to compete (energy), and a cautious, statistics‑aware path to merge.
 
 ### Running long evaluations safely (resumable)
 ```bash
@@ -75,28 +84,6 @@ If a chunk is killed by macOS, rerun the same `--resume-from` command; it will p
 2. **Policy parser reality check** — capture raw policy outputs + parser failures, then A/B a KV-only fallback prompt for `budget_frac` / `reserve_ratio`. Hypothesis: Qwen‑0.6B needs structured hints, not strict JSON.
 3. **Evaluation alignment** — replicate the short/medium-only change from holdouts into `config/evaluation/*.jsonl` and remeasure. If accuracy jumps above 19%, keep the easier eval; otherwise lighten training tasks instead.
 4. **Memory pressure audit** — log RSS + `metrics.in_memory_log_limit` deltas each gen to pinpoint the `malloc` spikes; trim `evaluation.sample_size` or `max_episode_steps` if holdouts/evals drive the peaks.
-
-## How Learning Emerges (Core Hypothesis)
-
-We freeze a small base model (Gemma‑270M or Qwen3‑0.6B) and let many tiny LoRA adapters (“organelles”) evolve on top of it. They earn energy by solving tasks and spend energy to run. Selection pressure (energy, pricing, curriculum) and telemetry (ROI, holdouts, probes) create a closed loop where useful behaviours persist and poor ones go extinct—without back‑prop through the base.
-
-What actually changes the model’s behaviour
-- Reward‑modulated LoRA updates: after each episode, the adapter nudges toward activations that produced higher reward‑on‑cost and away from costly failures.
-- Survival economics: energy tickets force a positive ROI; bankrupt organelles are culled and replaced.
-- Curriculum pressure: a bandit + learning‑progress (ALP) mix routes tasks to where progress is steepest, steadily increasing difficulty and diversity.
-- Assimilation: when an organelle’s uplift is statistically real on holdouts (doubly‑robust test), we merge its LoRA (optionally Fisher‑aware soup) or promote a trial offspring; successful children become first‑class organisms.
-
-Beyond a single LoRA
-- Communication: a paid message board lets organelles post/read hints (comms costs are energy‑governed). As comms traits evolve, a shared “language” can emerge if it increases team ROI.
-- Colonies: when pairs consistently beat their solo baselines and reduce variance, they can pool energy under cautious reserve policies and reproduce as a team.
-- Traits and mutation: inheritable traits (explore/read/post rates, budgets) and lightweight mutation operators (rank tweaks, low‑rank rotations) maintain diversity and exploration alongside Hebbian learning.
-
-Does the environment change?
-- Yes by design. Prices adapt to success rates, the curriculum shifts to high‑progress cells, and the economy throttles or boosts experimentation via energy floors/top‑ups. This makes the world a moving target, so “learning” means adapting fast enough to remain profitable and pass holdouts.
-
-Population and diversity
-- Population size is bounded (default 4–16) and managed by culling/replication; initial organelles differ via random seeds/ranks and rapidly diverge due to reward‑modulated updates and mutation. Diversity guardrails (energy Gini cap, species share caps, QD archive) prevent monoculture, preserving niches where specialists can evolve.
-
 
 ## Evolution Glossary
 | Term | In-code meaning | Evolution analogy |
@@ -240,6 +227,21 @@ Happy evolving — let’s see if this Cambrian-era colony learns something genu
 - Inspect merge audits:
   - `.venv311/bin/python scripts/merge_audit.py <run_dir> --top 10`
 
+### Paper‑style ecology suite (three baselines)
+
+To reproduce the three Qwen3‑0.6B runs used in the baselines comparison:
+
+```bash
+scripts/run_paper_ecology_suite.sh all
+```
+
+This will sequentially run:
+- frozen base: `paper_qwen3_frozen.yaml`
+- single adapter: `paper_qwen3_single.yaml`
+- full ecology: `paper_qwen3_ecology.yaml`
+
+and write separate `artifacts_paper_qwen3_*_<timestamp>` directories for each, with plots and a `report.md` under each root.
+
 What to watch in the ticker each generation
 - `ROI`: keep mean in a healthy band (>1.3 desirable on Qwen3 smoke).
 - `merges`: accepted assimilations (can be 0–3 in 40‑gen smoke).
@@ -263,25 +265,59 @@ Analyzer insights (after the run)
 - Assimilation: events summary, mean sample size, CI-excludes-zero share, mean power; gating totals and sample reasons (look for `low_power_dr`).
 - LP heatmap and cell difficulty/price heatmaps: confirms curriculum pressure and pricing dynamics.
 
-## Latest Results Snapshot — Qwen3 Endogenous (40 gens)
-- Run: `artifacts_qwen3_endogenous_colonies_40_c2c_retry`
-- ROI: mean 2.63 (median 2.69; min/max 0.044/3.84); avg energy cost 0.75
-- Energy balances: mean 2.83 (min/max 2.38/3.07); ticket still 0.5
-- Teaming: 438 team routes, 0 promotions; top co-routing pairs repeat across gens (e.g., `org_7f9af5a9:org_a59406d2`)
-- Team probes: sustained synergy candidates now reported (none met 3-window threshold in this run)
-- Few-shot scaffolds: enabled for word.count, logic.bool, math, and math.sequence task families
-- Assimilation: 13 attempts (1 pass, 12 fails); gating led by `insufficient_scores` (406) and `uplift_below_threshold` (129); top-ups credited 115 times (508 already_sufficient)
-- Trials/promotions: 12 trials created; 1 promotion via assimilation
-- Colonies: none held this run (bandwidth remains available for next trials)
-- Policy parse: 0/578 (0.0%) — strict JSON + KV fallbacks still miss on Qwen‑0.6B
-- Power: uplift proxy mean 0.30 (target 0.8); evidence tokens mint/usage now tracked in summaries
-- Evaluation: 22.22% (8/36) on the 10-gen cadence
+## Baselines vs Ecology (Qwen3‑0.6B, 50 gens)
+To understand whether the ecology is actually doing anything and not just adding complexity, it helps to look at three matched setups on the same host and task mix.
 
-Interpretation
-- ROI now comfortably >2× cost, so we can afford more aggressive gating or curriculum pressure.
-- Assimilation remains evidence-limited; lowering `min_window` or increasing minted evidence may accelerate merges.
-- Policy path is still silent; next step is stricter prompting or pruning allowed fields to improve parse rate.
-- Colonies did not activate this run — team routing is working, so we can raise colony bandwidth or relax expansion gates once evidence arrives.
+### 1. Frozen base (no adaptation)
+- Config: `config/experiments/paper_qwen3_frozen.yaml`
+- Run: `artifacts_paper_qwen3_frozen_20251201_205728` (50 generations)
+- Behaviour:
+  - Episodes: ~1.3k total.
+  - ROI: mean ≈ **0.82**, fairly stable.
+  - Structure: **0 merges**, no colonies, empty QD archive, knowledge cache off.
+  - Evaluation: small holdout sample sits around **2/3** accuracy.
+- Takeaway: the frozen host plus this curriculum already gives decent reward, but nothing structural happens. It’s a solid control: no emergent structure, no exploration of the archive, no memory or team behaviour.
+
+### 2. Single adapter (one organelle with a bit of learning)
+- Config: `config/experiments/paper_qwen3_single.yaml`
+- Run: `artifacts_paper_qwen3_single_20251203_120617` (50 generations)
+- Behaviour:
+  - Episodes: **22** total across 50 gens.
+  - ROI: mean ≈ **0.06**, with a couple of early positive spikes and then a long tail near zero.
+  - Structure: **0 merges** (disabled), no colonies, empty QD archive.
+  - Memory: a handful of cache writes/reads; hits exactly a few times; nothing sustained.
+  - Evaluation: also around **2/3** on the tiny holdout.
+- Takeaway: one LoRA on a frozen host, even with extra energy and a memory cache, mostly jitters. It learns a bit, then idles. You don’t get anything that looks like long‑horizon, population‑level improvement.
+
+### 3. Full ecology (many organelles + economy)
+- Config: `config/experiments/paper_qwen3_ecology.yaml`
+- Run: `artifacts_paper_qwen3_ecology_20251202_120102` (50 generations)
+- Behaviour:
+  - Episodes: ~1.7k total (more than either baseline).
+  - ROI: mean ≈ **0.78**, with a band of healthy high‑ROI generations.
+  - Structure:
+    - **28 merges** plus 66 trials, with **82** assimilation events and **13** accepted.
+    - Colonies: one colony of size 2 throughout, with real holdout passes and pot updates.
+    - QD archive: average size ≈ 4, coverage ≈ **21 %**, with distinct bins for math and word.count.
+  - Memory and policy:
+    - Knowledge cache: **42** writes, **4** reads, **4** hits; it actually gets used.
+    - Policy channel: active every generation; 100 % parse rate; budgets and routing respond to policy outputs.
+  - Evidence tokens and power:
+    - Evidence tokens: **1533 / 160** minted/used; uplift tests almost never include zero once tokens accrue.
+    - Gating reasons: `low_power`, `insufficient_scores`, and `uplift_below_threshold` dominate, not `no_activity`/`no_best_cell`.
+  - Evaluation: again about **2/3** on the small holdout, but now with a much richer internal life.
+- Takeaway: with the ecology turned on, the system keeps rewriting itself. Organelles earn and spend energy, merge, and spawn offspring; a small colony maintains shared pot/bandwidth; the archive fills in; the knowledge cache and policy channel are exercised. It’s still a small model on simple tasks, but it’s clearly doing more than “answer questions and stop.”
+
+### What this comparison suggests
+- The frozen and single‑adapter baselines are useful sanity checks: they confirm that the base model is competent, and that a lone adapter doesn’t spontaneously generate an ecosystem.
+- The ecology run shows that you can get ongoing, inspectable adaptation on top of a frozen host:
+  - **Who** gets to act (energy, budgets, and policy decisions),
+  - **Which** organelles survive and merge (uplift + holdouts),
+  - **Where** the population explores (QD coverage, colonies, co‑routing),
+  all change over time even though the backbone weights never move.
+- In other words, the “learning rule” is small and shared (a tiny Hebbian update), but the selection pressure and energy flow are not. Most of the interesting behaviour comes from the ecology and economy wrapped around the host, not from making the host bigger.
+
+See also: `docs/ecology_overview.md` for a compact numeric table and conceptual framing of these three runs.
 
 Suggested next nudges (short runs)
 - If insufficient_scores remains high: temporarily reduce `assimilation_tuning.min_window` by 2 (e.g., 8→6) to accelerate attempts, then revert after merges increase.

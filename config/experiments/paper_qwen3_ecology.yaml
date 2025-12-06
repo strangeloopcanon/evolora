@@ -1,0 +1,310 @@
+host:
+  backbone_type: gemma
+  backbone_model: Qwen/Qwen3-0.6B
+  tokenizer: Qwen/Qwen3-0.6B
+  device: mps
+  max_lora_rank: 8
+  max_sequence_length: 192
+  gen_max_new_tokens: 32
+  recurrence_enabled: true
+  recurrence_train_passes: 2
+  recurrence_eval_passes: 2
+  team_probe_temperature: 0.95
+  team_probe_top_p: 0.85
+grid:
+  families:
+  - word.count
+  - math
+  - code.format
+  depths:
+  - short
+  - medium
+energy:
+  Emax: 6.0
+  m: 0.5
+  alpha: 5.0e-15
+  beta: 0.015
+  gamma: 0.0005
+  lambda_p: 6.0e-08
+  bankruptcy_grace: 2
+  cost_scale: 0.6
+pricing:
+  base: 1.2
+  k: 1.6
+  min: 0.3
+  max: 2.2
+population_strategy:
+  mu: 4
+  lambda: 12
+  max_population: 16
+  refresh_interval: 12
+  refresh_count: 1
+knowledge:
+  enabled: true
+  write_cost: 0.3
+  read_cost: 0.05
+  ttl: 40
+  max_items: 12
+hebbian:
+  learning_rate: 0.01
+assimilation_tuning:
+  per_cell_interval: 1
+  max_merges_per_cell: 3
+  seed_scale: 0.8
+  soup_size: 4
+  probe_max_other_cells: 1
+  probe_required_passes: 1
+  energy_floor: 0.0
+  energy_floor_roi: 0.0
+  energy_floor_base: 0.6
+  energy_floor_roi_base: 0.9
+  energy_topup_roi_bonus: 1.3
+  gating_snapshot_limit: 64
+  holdout_tasks_path: config/evaluation/holdout_simple.jsonl
+  holdout_sample_size: 2
+  holdout_margin: 0.0
+  min_window: 2
+  window_step: 2
+  adaptive_decay: 0.82
+  adaptive_floor: 0.0003
+  holdout_max_retries: 3
+  holdout_margin_step: 0.02
+  bootstrap_uplift_enabled: true
+  bootstrap_samples: 200
+  permutation_samples: 200
+  min_uplift_samples: 1
+  dr_enabled: true
+  dr_strata:
+  - family
+  - depth
+  dr_min_stratum_size: 3
+  dr_min_power: 0.2
+  merge_audit_enabled: true
+  merge_method: fisher_svd
+  merge_mode: hybrid
+  trial_offspring_enabled: true
+  trial_per_gen_cap: 5
+  trial_stipend: 1.0
+  trial_probation_gens: 4
+  trial_promote_margin: 0.0
+  trial_min_power: 0.05
+  price_premium_alpha: 0.3
+  price_premium_cap: 1.25
+  power_target: 0.25
+  evidence_token_threshold: 0.25
+  evidence_token_mint: 2
+  evidence_token_cap: 4
+  evidence_token_window: 12
+  info_topup_gap: 2
+  info_topup_roi_slack: 0.2
+  assimilation_history_limit: 180
+  assimilation_history_summary: 8
+  colonies_enabled: true
+  colony_synergy_delta: 0.08
+  colony_variance_improve: 0.2
+  colony_windows: 4
+  colony_expand_delta: 0.12
+  colony_expand_windows: 3
+  colony_shrink_delta: -0.02
+  colony_review_interval: 6
+  colony_required_passes: 2
+  colony_tax_rate: 0.12
+  colony_subsidy_threshold: 1.0
+  colony_subsidy_fraction: 0.3
+  colony_trait_mutation_scale: 0.04
+  colony_selection_enabled: true
+  colony_selection_interval: 15
+  colony_selection_alpha: 1.0
+  colony_selection_beta: 0.25
+  colony_selection_gamma: 0.05
+  colony_selection_margin: 0.08
+  colony_selection_reward_frac: 0.3
+  colony_selection_min_pool: 1.5
+  colony_tier_count: 3
+  colony_tier_promote_passes: 2
+  colony_tier_promote_delta: 0.1
+  colony_tier_demote_failures: 3
+  colony_tier_demote_delta: -0.04
+  colony_tier_hazard_floor: -1.5
+  colony_tier_cooldown: 3
+  colony_tier_bandwidth_boost: 0.2
+  colony_max_failures: 2
+  colony_min_size: 2
+  colony_max_size: 3
+  colony_bandwidth_base: 1.5
+  colony_bandwidth_frac: 0.02
+  colony_hazard_bandwidth_scale: 0.25
+  colony_post_cap: 1
+  colony_read_cap: 2
+  colony_post_cap_hazard: 0
+  colony_read_cap_hazard: 1
+  colony_reserve_ticket_multiplier: 3.0
+  colony_reserve_ratio: 0.25
+  colony_reserve_cost_window: 6
+  colony_reserve_bandwidth_scale: 0.25
+  colony_reserve_post_cap: 1
+  colony_reserve_read_cap: 1
+  colony_winter_window: 6
+  colony_winter_z_kappa: 0.8
+  colony_winter_bandwidth_scale: 0.1
+  colony_winter_post_cap: 0
+  colony_winter_read_cap: 1
+  colony_variance_leash: 1.4
+  colony_bankrupt_tolerance: 2
+  colony_guard_interval: 10
+  window_autotune: true
+  min_window_min: 2
+  min_window_max: 24
+  team_probe_per_gen: 4
+  team_min_tasks: 1
+  team_router_enabled: true
+  team_max_routes_per_gen: 12
+  team_min_power: 0.0
+  team_holdout_sample_size: 3
+  team_routing_probe_per_gen: 3
+  team_probe_synergy_delta: 0.12
+  team_probe_variance_nu: 0.25
+  team_probe_sustain: 3
+  evidence_boost_cap: 8
+  evidence_boost_factor: 1
+  team_holdout_margin: -0.05
+  team_handoff_enabled: true
+  team_handoff_prompt: |-
+    Partner answer:
+    {answer}
+    Critique the reasoning and produce a FINAL_ANSWER that differs from the partner (different number or wording). State issues before giving FINAL_ANSWER.
+  promotion_target_rate: 0.05
+  promotion_adjust_step: 0.005
+  team_margin_min: 0.0
+  team_margin_max: 0.02
+  team_power_min: 0.0
+  team_power_max: 0.2
+evolution:
+  mutation_rate: 0.3
+  assimilation_threshold: 0.0
+  assimilation_p_value: 0.45
+  max_merges_per_gen: 6
+  min_population: 4
+  max_population: 16
+  mutation_rank_noise_prob: 0.25
+  mutation_rank_noise_scale: 0.8
+  mutation_dropout_prob: 0.2
+  mutation_dropout_decay: 0.05
+  mutation_duplication_prob: 0.22
+  mutation_duplication_scale: 0.6
+  mutation_layer_tags:
+  - attn
+  - mlp
+  - proj
+limits:
+  lora_budget_frac: 0.04
+  max_active_adapters_per_layer: 2
+meta:
+  enabled: true
+  interval: 5
+  mutation_scale: 0.18
+  catastrophe_interval: 0
+  catastrophe_scale: 0.6
+curriculum:
+  lp_mix: 0.45
+  lp_alpha: 0.5
+  alp_auto_mix: true
+  lp_mix_min: 0.25
+  lp_mix_max: 0.7
+  lp_window: 4
+  warmup_generations: 8
+  warmup_families:
+  - word.count
+  - math
+  - code.format
+  warmup_depths:
+  - short
+  - medium
+controller:
+  tau: 0.32
+qd:
+  enabled: true
+  cost_bins: 4
+  archive_cap: 256
+  novelty_weight: 0.4
+  novelty_min: 0.05
+policy:
+  enabled: true
+  bias_strength: 0.5
+  energy_cost: 0.05
+  charge_tokens: false
+  allowed_fields:
+  - budget_frac
+  - reserve_ratio
+  failure_penalty: 0.05
+  success_bonus: 0.02
+prompting:
+  few_shot_enabled: true
+foraging:
+  enabled: true
+  beta_default: 1.8
+  q_decay_default: 0.35
+  ucb_bonus_default: 0.4
+  policy_bias_cap: 0.35
+  telemetry_top_k: 5
+  telemetry_max_orgs: 8
+winter:
+  enabled: true
+  winter_interval: 30
+  winter_duration: 4
+  price_multiplier: 1.2
+  ticket_multiplier: 0.7
+  post_winter_bonus: 0.25
+environment:
+  synthetic_batch_size: 3
+  auto_batch: true
+  batch_min: 1
+  batch_max: 4
+  budget_enabled: true
+  budget_energy_floor: 0.45
+  budget_energy_ceiling: 2.5
+  budget_trait_bonus: 1.2
+  budget_policy_floor: 0.3
+  budget_policy_ceiling: 1.8
+  budget_policy_requires_parse: false
+  global_episode_cap: 120
+  human_bandit_batch_size: 4
+  max_episode_steps: 96
+  energy_budget: 50.0
+  success_reward_bonus: 1.0
+  failure_cost_multiplier: 0.5
+metrics:
+  in_memory_log_limit: 0
+human_bandit:
+  enabled: true
+  preference_weight: 0.1
+  helper_weight: 0.05
+  frequency: 0.4
+evaluation:
+  enabled: true
+  cadence: 15
+  tasks_path: config/evaluation/holdout_simple.jsonl
+  sample_size: 1
+  reward_weight: 0.75
+diversity:
+  enabled: true
+  energy_gini_cap: 0.85
+  max_species_energy_share: 0.55
+comms:
+  enabled: true
+  post_cost: 0.2
+  read_cost: 0.1
+  credit_frac: 0.2
+  ttl: 10
+  post_gen_cap: 3
+  read_gen_cap: 8
+  credit_power_window: 6
+  credit_power_min_delta: 0.05
+  c2c_enabled: true
+  c2c_post_cost: 0.05
+  c2c_read_cost: 0.03
+  c2c_ttl: 5
+  c2c_mix: 0.5
+survival:
+  enabled: false
+

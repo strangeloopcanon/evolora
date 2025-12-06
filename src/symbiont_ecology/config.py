@@ -187,6 +187,8 @@ class PopulationStrategyConfig(BaseModel):
     mu: int = Field(4, ge=1)
     lambda_: int = Field(12, ge=1, alias="lambda")
     max_population: int = Field(16, ge=1)
+    # Initial organelles to spawn at the start of a run.
+    initial_orgs: int = Field(4, ge=1)
     refresh_interval: int = Field(
         0,
         ge=0,
