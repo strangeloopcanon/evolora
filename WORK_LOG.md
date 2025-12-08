@@ -36,7 +36,7 @@
 
 ## 2025-10-03 — Grid niches plan + doc alignment
 - Context: Replace global phase rotation with local niche grid; harden ATP via energy tickets and compute-aware pricing; make assimilation niche-aware. Keep existing loop and evolve in place.
-- Docs: Added README.md clarifying objective and doc roles; updated PLAN.md with concrete delta steps; SITREP (docs/SITREP.md) remains the latest measurement report.
+- Docs: Added README.md clarifying objective and doc roles; previous planning/status docs (PLAN.md, PROGRESS.md, docs/SITREP.md) kept as historical context at the time, later consolidated into README + docs/ecology_overview.md.
 - Next: Implement GridTaskFactory + Teacher, energy settlement (Emax/m/alpha/beta/gamma/lambda_p), μ+λ selection with ROI tracking, niche-aware assimilation with EMA uplift, extended telemetry fields, and focused tests. Reduce human bandit weight until stable.
 - **Context**: Add evolving task niches and prepare Gemma-only evaluation run.
 - **Changes**: TaskFactory phases with new domains (sorting, word counts), environment loop now advances phase each generation, seeded replacements keep population alive, added Gemma evaluation script (`scripts/eval_gemma.py`).
@@ -49,7 +49,7 @@
   - Added `GridEnvironment` controller wiring into `EcologyLoop`; introduced energy tickets, compute-aware settlement, ROI logging, μ+λ selection, per-cell assimilation cooldown.
   - Exposed `load_ecology_config`, updated CLI scripts to read `config/ecology.yaml`, ensured host step emits compute metrics.
   - Extended telemetry (ROI, energy before/after, cell metadata), optional `omegaconf` import, new pytest smoke tests (`tests/test_task_factory.py`, `tests/test_ecology_loop.py`) and test `conftest` path helper.
-  - Updated `AGENTS.md`, `README.md`, `PLAN.md`, `PROGRESS.md`, `docs/SITREP.md` to reflect grid world + ROI economy.
+  - Updated `AGENTS.md`, `README.md`, and supporting docs to reflect grid world + ROI economy.
 - **Tests**: `pytest tests/test_task_factory.py tests/test_ecology_loop.py` (passes but overall coverage 68% < 80% gate — broader suite still required).
 - **Notes**: Morphogenesis mutations and LoRA soup assimilation still pending; coverage guard remains red until additional tests land.
 
@@ -92,7 +92,7 @@
   - Added bankruptcy culling (configurable grace), generation-level KPIs (ROI/energy per org, culls, assimilation snapshots), and refreshed analysis tooling/visuals.
   - Introduced config-driven human-bandit weights/frequency; loops/scripts respect deterministic gating.
 - **Tests**: `pytest` focus (morphogenesis, assimilation, environment controller, energy economy, bandit gating, telemetry persistence). Full suite pending env setup.
-- **Notes**: README/PLAN/PROGRESS/SITREP updated; next actions centre on Gemma validation runs and dashboard wiring.
+- **Notes**: README and supporting docs updated; next actions centre on Gemma validation runs and dashboard wiring.
 # Run 2025-10-18 – survival tweaks
 - Config: config/experiments/gemma_relaxed.yaml (energy.m=0.6, success_reward_bonus=0.75, cost_scale=0.7)
 - Command: AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed.yaml --generations 100 --batch-size 2 --output artifacts_gemma_relaxed_autotune_v5
