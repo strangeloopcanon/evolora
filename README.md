@@ -1,4 +1,5 @@
 # Evolora — Symbiotic LLM Ecology
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/strangeloopcanon/evolora)
 
 TL;DR: Many tiny LoRA adapters live on a frozen small host model (Gemma‑270M or Qwen3‑0.6B, depending on the experiment) and compete for energy by solving small tasks. We measure reward‑on‑cost (ROI), gate merges by uplift and holdout checks, and adapt the energy floor automatically. The goal is to see if useful behaviours emerge via evolutionary pressure rather than full fine‑tuning.
 
