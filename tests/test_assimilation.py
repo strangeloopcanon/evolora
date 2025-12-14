@@ -1,6 +1,6 @@
 from symbiont_ecology import (
-    ATPLedger,
     AssimilationTester,
+    ATPLedger,
     BanditRouter,
     EcologyConfig,
     HostKernel,

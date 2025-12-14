@@ -45,7 +45,11 @@ def _make_loop() -> EcologyLoop:
 
 def test_few_shot_scaffold_applies_examples():
     loop = _make_loop()
-    task = SimpleNamespace(family="word.count", prompt="Count the number of words in 'Agents evolve together.'", depth="short")
+    task = SimpleNamespace(
+        family="word.count",
+        prompt="Count the number of words in 'Agents evolve together.'",
+        depth="short",
+    )
 
     scaffolded, applied = loop._apply_prompt_scaffold(task, task.prompt)
     assert applied is True

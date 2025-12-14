@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import cast
 
 import torch
 import torch.nn as nn
 
 from symbiont_ecology.config import HebbianConfig
-from symbiont_ecology.environment.bridge import ToolRegistry
+from symbiont_ecology.environment.bridge import CalculatorTool, EchoTool, ToolRegistry
 from symbiont_ecology.interfaces.messages import MessageEnvelope, Plan
 from symbiont_ecology.metrics.telemetry import RewardBreakdown
 from symbiont_ecology.organelles.base import Organelle, OrganelleContext
@@ -50,7 +49,7 @@ class HebbianLoRAAdapter(nn.Module):
         )
 
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        delta = cast(torch.Tensor, hidden @ self.lora_A @ self.lora_B)
+        delta = hidden @ self.lora_A @ self.lora_B
         return hidden + delta
 
     def update_traces(self, pre: torch.Tensor, post: torch.Tensor) -> None:
@@ -91,9 +90,7 @@ class HebbianLoRAOrganelle(Organelle):
         self.device = device
         self.dtype = dtype
         self.tools = ToolRegistry({})
-        from symbiont_ecology.environment.bridge import CalculatorTool
-
-        self.tools.tools.setdefault("echo", lambda **kw: str(kw.get("text", "")))
+        self.tools.tools.setdefault("echo", EchoTool())
         self.tools.tools.setdefault("calc", CalculatorTool())
 
     def route_probability(self, observation: MessageEnvelope) -> float:

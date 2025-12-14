@@ -25,7 +25,9 @@ def make_loop() -> EcologyLoop:
     host.freeze_host()
     population = PopulationManager(config.evolution, config.foraging)
     oid = host.spawn_organelle(rank=2)
-    population.register(Genome(organelle_id=oid, drive_weights={"novelty": 0.3}, gate_bias=0.0, rank=2))
+    population.register(
+        Genome(organelle_id=oid, drive_weights={"novelty": 0.3}, gate_bias=0.0, rank=2)
+    )
     loop = EcologyLoop(
         config=config,
         host=host,

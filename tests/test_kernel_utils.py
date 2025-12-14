@@ -17,4 +17,3 @@ def test_host_count_tokens_fallback_and_energy_cost():
     organelle = SimpleNamespace(adapter=SimpleNamespace(rank=2))
     cost = host._compute_energy_cost("a b", organelle)
     assert cost > 0.0
-

@@ -165,6 +165,7 @@ def test_colony_dissolves_on_holdout_failure() -> None:
     meta["holdout_failures"] = 0
     meta["review_interval"] = 1
     meta["last_review"] = loop.generation_index - 2
+
     def failing_stats(member_ids, _tasks):
         if len(member_ids) > 1:
             return {"mean": 0.05, "variance": 0.3, "series": [0.05]}

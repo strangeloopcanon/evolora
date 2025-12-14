@@ -1,4 +1,4 @@
-from symbiont_ecology.config import GridConfig, ControllerConfig, PricingConfig, CanaryConfig
+from symbiont_ecology.config import CanaryConfig, ControllerConfig, GridConfig, PricingConfig
 from symbiont_ecology.environment.grid import EnvironmentController, GridEnvironment
 
 

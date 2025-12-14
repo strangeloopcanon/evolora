@@ -38,7 +38,7 @@ class GemmaBackbone:
             device_map=None,
             revision=host_config.revision,
         )
-        self.model.to(self.device)
+        cast(torch.nn.Module, self.model).to(self.device)
         self.model.eval()
         for param in self.model.parameters():
             param.requires_grad = False
@@ -61,7 +61,7 @@ class GemmaBackbone:
             outputs = self.model(**encoded, output_hidden_states=True)
             hidden = outputs.hidden_states[-1]
             latent = hidden[:, -1, :]
-        latent = cast(torch.Tensor, ensure_dtype(latent, self.model.dtype)).to(target_device)
+        latent = ensure_dtype(latent, self.model.dtype).to(target_device)
         return latent
 
     @staticmethod

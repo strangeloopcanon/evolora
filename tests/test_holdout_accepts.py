@@ -8,14 +8,29 @@ def test_holdout_accepts_with_margin_and_retries():
     cfg = EcologyConfig()
     cfg.assimilation_tuning.holdout_margin = 0.05
     cfg.assimilation_tuning.holdout_margin_step = 0.01
+
     # Host where candidate has slightly better ROI than baseline
     def step(prompt: str, intent: str, max_routes: int, allowed_organelle_ids):  # noqa: ARG002
         oid = allowed_organelle_ids[0]
         # candidate has lower cost -> higher ROI
         flops = 100.0 if oid == "CAND" else 120.0
-        metrics = SimpleNamespace(answer="2", tokens=1, latency_ms=1.0, prompt_tokens=1, trainable_params=1, flops_estimate=flops, memory_gb=0.001, active_adapters={})
+        metrics = SimpleNamespace(
+            answer="2",
+            tokens=1,
+            latency_ms=1.0,
+            prompt_tokens=1,
+            trainable_params=1,
+            flops_estimate=flops,
+            memory_gb=0.001,
+            active_adapters={},
+        )
         env = SimpleNamespace(observation=SimpleNamespace(state={"answer": "2"}))
-        return SimpleNamespace(envelope=env, routes=[SimpleNamespace(organelle_id=oid)], responses={oid: metrics}, latency_ms=0.0)
+        return SimpleNamespace(
+            envelope=env,
+            routes=[SimpleNamespace(organelle_id=oid)],
+            responses={oid: metrics},
+            latency_ms=0.0,
+        )
 
     loop = EcologyLoop(
         config=cfg,

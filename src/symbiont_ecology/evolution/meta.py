@@ -33,7 +33,11 @@ class MetaEvolver:
             return {}
 
         info: dict = {}
-        if meta_cfg.catastrophe_interval and generation % meta_cfg.catastrophe_interval == 0 and generation > 0:
+        if (
+            meta_cfg.catastrophe_interval
+            and generation % meta_cfg.catastrophe_interval == 0
+            and generation > 0
+        ):
             self.environment.catastrophic_shift(scale=meta_cfg.catastrophe_scale, rng=self.rng)
             info["catastrophe"] = True
 

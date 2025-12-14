@@ -162,7 +162,9 @@ def test_foraging_prefers_high_q_cells() -> None:
     loop = _make_loop()
     # Seed distinct Q-values
     loop.population.update_cell_value("org", ("math", "short"), roi=2.0, decay=0.5, q_init=0.0)
-    loop.population.update_cell_value("org", ("word.count", "short"), roi=0.1, decay=0.5, q_init=0.0)
+    loop.population.update_cell_value(
+        "org", ("word.count", "short"), roi=0.1, decay=0.5, q_init=0.0
+    )
     loop.environment.rng.seed(7)
     picks = Counter(loop._foraging_select_cell("org") for _ in range(20))
     assert picks[("math", "short")] > picks[("word.count", "short")]

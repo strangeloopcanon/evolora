@@ -32,7 +32,9 @@ class DummyLedger:
 class DummyHost:
     def __init__(self, balances: dict[str, float], ranks: dict[str, int] | None = None) -> None:
         self.ledger = DummyLedger(balances)
-        self._ranks = {oid: ranks.get(oid, 2) for oid in balances} if ranks else {oid: 2 for oid in balances}
+        self._ranks = (
+            {oid: ranks.get(oid, 2) for oid in balances} if ranks else {oid: 2 for oid in balances}
+        )
 
     def list_organelle_ids(self) -> list[str]:
         return list(self._ranks.keys())
@@ -164,7 +166,9 @@ def test_sample_task_for_org_prefers_cheap_cell():
             difficulty=0.1,
         )
 
-    loop.environment.sample_task_from_cell = lambda cell, canary=False: _sample_cell(cell, canary=canary)
+    loop.environment.sample_task_from_cell = lambda cell, canary=False: _sample_cell(
+        cell, canary=canary
+    )
     loop.environment.sample_task = lambda: _sample_cell(pricey_cell, canary=False)
 
     loop._reserve_state["org_cell"] = {"active": True, "threshold": 0.6, "balance": 0.3}
@@ -182,7 +186,9 @@ def test_snapshot_filters_current_generation_events():
     ]
     snapshot = loop._snapshot_survival_state()
     assert snapshot is not None
-    assert snapshot["events"] == [{"gen": loop.generation_index, "type": "reserve_exit", "org": "org_snap"}]
+    assert snapshot["events"] == [
+        {"gen": loop.generation_index, "type": "reserve_exit", "org": "org_snap"}
+    ]
     assert snapshot["price_bias_active_count"] == 1
 
 
@@ -257,4 +263,7 @@ def test_cautious_skip_during_recovery_requires_roi():
     merges = loop._attempt_assimilation()
     assert merges == 0
     assert loop.assim_gating_counts.get("cautious_skip", 0) >= 1
-    assert any(ev.get("type") == "cautious_skip" and ev.get("mode") == "recovery" for ev in loop._survival_events)
+    assert any(
+        ev.get("type") == "cautious_skip" and ev.get("mode") == "recovery"
+        for ev in loop._survival_events
+    )

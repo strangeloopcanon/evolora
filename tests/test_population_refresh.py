@@ -11,7 +11,9 @@ def test_population_refresh_retires_lowest_roi():
     cfg.population_strategy.refresh_count = 1
     host_calls = {"retired": [], "spawned": []}
 
-    def _spawn_organelle(rank: int, hebbian_config=None, activation_bias: float = 0.0):  # noqa: ARG001
+    def _spawn_organelle(
+        rank: int, hebbian_config=None, activation_bias: float = 0.0
+    ):  # noqa: ARG001
         new_id = f"child_{len(host_calls['spawned'])}"
         host_calls["spawned"].append(new_id)
         return new_id
@@ -24,8 +26,12 @@ def test_population_refresh_retires_lowest_roi():
     )
     environment = SimpleNamespace(controller=SimpleNamespace(cells={}), rng=SimpleNamespace())
     pop = PopulationManager(cfg.evolution, cfg.foraging)
-    pop.register(Genome(organelle_id="low", drive_weights={}, gate_bias=0.0, rank=2, explore_rate=0.5))
-    pop.register(Genome(organelle_id="high", drive_weights={}, gate_bias=0.0, rank=2, explore_rate=0.5))
+    pop.register(
+        Genome(organelle_id="low", drive_weights={}, gate_bias=0.0, rank=2, explore_rate=0.5)
+    )
+    pop.register(
+        Genome(organelle_id="high", drive_weights={}, gate_bias=0.0, rank=2, explore_rate=0.5)
+    )
     loop = EcologyLoop(cfg, host, environment, pop, assimilation=SimpleNamespace())
     loop.population.record_roi("low", 0.1)
     loop.population.record_roi("high", 2.0)

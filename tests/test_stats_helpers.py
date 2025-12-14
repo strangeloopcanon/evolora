@@ -13,4 +13,3 @@ def test_compute_mean_ci_and_power_proxy_basic():
     lo2, hi2, mu2, se2 = EcologyLoop._compute_mean_ci([])
     assert (lo2, hi2, mu2) == (0.0, 0.0, 0.0)
     assert se2 > 1e6 or se2 == float("inf")
-

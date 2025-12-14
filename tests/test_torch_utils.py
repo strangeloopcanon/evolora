@@ -1,6 +1,5 @@
 import torch
-
-from symbiont_ecology.utils.torch_utils import clamp_norm, ensure_dtype, resolve_device, no_grad
+from symbiont_ecology.utils.torch_utils import clamp_norm, ensure_dtype, no_grad, resolve_device
 
 
 def test_clamp_norm_scales_tensor_down():

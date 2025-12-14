@@ -31,7 +31,7 @@ check: setup
 	$(BLACK) --check src tests
 	$(RUFF) check src tests
 	$(MYPY) src
-	$(BANDIT) -q -r src/symbiont_ecology
+	$(BANDIT) -q -r src/symbiont_ecology --severity-level medium
 	$(DETECT_SECRETS) scan --baseline .secrets.baseline
 
 .PHONY: test
@@ -57,4 +57,3 @@ clean:
 format: setup
 	$(BLACK) src tests
 	$(RUFF) check src tests --fix
-

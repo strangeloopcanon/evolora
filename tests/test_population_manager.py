@@ -92,9 +92,14 @@ def test_mutation_injects_rank_noise_dropout_and_duplication():
         0.5,  # duplication delta
         0.0,  # gate_bias jitter
     ]
-    with patch("symbiont_ecology.evolution.population.random.random", side_effect=random_random), patch(
-        "symbiont_ecology.evolution.population.random.choice", side_effect=[0, "attn", "attn", "attn"]
-    ), patch("symbiont_ecology.evolution.population.random.gauss", side_effect=gauss_values):
+    with (
+        patch("symbiont_ecology.evolution.population.random.random", side_effect=random_random),
+        patch(
+            "symbiont_ecology.evolution.population.random.choice",
+            side_effect=[0, "attn", "attn", "attn"],
+        ),
+        patch("symbiont_ecology.evolution.population.random.gauss", side_effect=gauss_values),
+    ):
         mutant = pm.mutate(genome)
     assert mutant.rank_noise.get("attn") is not None
     assert "attn" in mutant.adapter_dropout

@@ -14,4 +14,3 @@ def test_logic_bool_markdown_wrapped() -> None:
     )
     success, _ = task.evaluate("**Answer:** FALSE\n**Explanation:** ...")
     assert success is True
-

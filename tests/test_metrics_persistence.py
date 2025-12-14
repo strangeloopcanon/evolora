@@ -3,7 +3,9 @@ from symbiont_ecology.metrics.telemetry import AssimilationEvent, EpisodeLog, Re
 
 
 def test_telemetry_sink_writes(tmp_path) -> None:
-    sink = TelemetrySink(root=tmp_path, episodes_file="episodes.jsonl", assimilation_file="assim.jsonl")
+    sink = TelemetrySink(
+        root=tmp_path, episodes_file="episodes.jsonl", assimilation_file="assim.jsonl"
+    )
     episode = EpisodeLog(
         episode_id="epi_1",
         task_id="task_1",

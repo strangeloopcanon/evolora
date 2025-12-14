@@ -1,8 +1,7 @@
 import torch
-
 from symbiont_ecology import EcologyConfig
-from symbiont_ecology.host.kernel import HostKernel
 from symbiont_ecology.evolution.ledger import ATPLedger
+from symbiont_ecology.host.kernel import HostKernel
 from symbiont_ecology.routing.router import BanditRouter
 
 
@@ -54,7 +53,9 @@ def test_build_lora_soup_state_block_diagonal():
     host.ledger.ensure_energy("a", 1.0)
     host.ledger.ensure_energy("b", 1.0)
     roles = {"a": 0, "b": 1}
-    soup_state, _ = host.build_lora_soup_state({"a": 1.0, "b": 1.0}, target_rank=4, roles=roles, mode="block")
+    soup_state, _ = host.build_lora_soup_state(
+        {"a": 1.0, "b": 1.0}, target_rank=4, roles=roles, mode="block"
+    )
     assert "lora_A" in soup_state and "lora_B" in soup_state
     lora_a = soup_state["lora_A"]
     lora_b = soup_state["lora_B"]
@@ -83,7 +84,9 @@ def test_build_lora_soup_state_respects_mutation_meta():
     soup_state, alpha_sum = host.build_lora_soup_state(
         {"mut": 1.0},
         target_rank=2,
-        mutation_meta={"mut": {"dropout": ["attn"], "duplication": {"mlp": 1.0}, "rank_noise": {"mlp": 1.0}}},
+        mutation_meta={
+            "mut": {"dropout": ["attn"], "duplication": {"mlp": 1.0}, "rank_noise": {"mlp": 1.0}}
+        },
     )
     assert "layer.attn.q" not in soup_state
     assert "layer.mlp.up" in soup_state

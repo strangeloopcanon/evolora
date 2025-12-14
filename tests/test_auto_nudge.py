@@ -51,7 +51,11 @@ def test_auto_nudge_increases_evidence_on_stall() -> None:
     base_tau = loop.config.controller.tau
     loop.assim_fail_streak = 12
     summary = {
-        "assimilation_gating": {"low_power": 3, "uplift_below_threshold": 2, "topup_roi_blocked": 7},
+        "assimilation_gating": {
+            "low_power": 3,
+            "uplift_below_threshold": 2,
+            "topup_roi_blocked": 7,
+        },
         "promotions": 0,
         "merges": 0,
     }
@@ -69,7 +73,9 @@ def test_auto_nudge_relaxes_after_success() -> None:
     loop = make_loop()
     # first, force a nudge to set baselines
     loop.assim_fail_streak = 12
-    loop._auto_nudge_evidence({"assimilation_gating": {"low_power": 3}, "promotions": 0, "merges": 0})
+    loop._auto_nudge_evidence(
+        {"assimilation_gating": {"low_power": 3}, "promotions": 0, "merges": 0}
+    )
     # now simulate a success and ensure values move back toward baseline
     before = (
         loop.config.assimilation_tuning.min_window,

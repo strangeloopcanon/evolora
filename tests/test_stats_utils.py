@@ -10,4 +10,3 @@ def test_compute_mean_ci_basic():
     series2 = series + [mu, mu, mu, mu]
     lo2, hi2, mu2, se2 = EcologyLoop._compute_mean_ci(series2)
     assert se2 <= se and abs(mu2 - mu) < 1e-6
-

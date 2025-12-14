@@ -15,4 +15,3 @@ def test_load_ecology_config_roundtrip(tmp_path: Path):
     assert cfg.host.backbone_model.endswith("gemma-3-270m-it")
     assert "word.count" in cfg.grid.families
     assert cfg.energy.Emax == 5.0
-

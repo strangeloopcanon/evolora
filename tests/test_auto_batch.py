@@ -34,7 +34,11 @@ def test_resolve_lp_mix_auto_tunes() -> None:
     loop = EcologyLoop(
         config=cfg,
         host=SimpleNamespace(),
-        environment=SimpleNamespace(controller=SimpleNamespace(lp_progress={("math", "short"): 0.1, ("logic", "short"): 0.2})),
+        environment=SimpleNamespace(
+            controller=SimpleNamespace(
+                lp_progress={("math", "short"): 0.1, ("logic", "short"): 0.2}
+            )
+        ),
         population=SimpleNamespace(),
         assimilation=AssimilationTester(0.0, 0.5, 0),
     )

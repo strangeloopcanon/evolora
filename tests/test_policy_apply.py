@@ -21,7 +21,11 @@ def test_request_and_apply_policy_parses_and_charges_energy() -> None:
     # Stub host step to return a simple JSON answer and minimal metrics
     def step(prompt: str, intent: str, max_routes: int, allowed_organelle_ids):  # noqa: ARG002
         oid = allowed_organelle_ids[0]
-        env = SimpleNamespace(observation=SimpleNamespace(state={"answer": '{"budget_frac": 1.2, "gate_bias_delta": 0.5}'}))
+        env = SimpleNamespace(
+            observation=SimpleNamespace(
+                state={"answer": '{"budget_frac": 1.2, "gate_bias_delta": 0.5}'}
+            )
+        )
         metrics = SimpleNamespace(tokens=32)
         return SimpleNamespace(envelope=env, responses={oid: metrics})
 
@@ -46,4 +50,3 @@ def test_request_and_apply_policy_parses_and_charges_energy() -> None:
     assert charged["total"] > 0.0
     # Gate bias delta applied to genome
     assert loop.population.population["orgX"].gate_bias != 0.0
-

@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 import random
+from types import SimpleNamespace
 
 from symbiont_ecology.config import EcologyConfig
 from symbiont_ecology.environment.loops import EcologyLoop

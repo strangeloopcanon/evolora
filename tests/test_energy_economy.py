@@ -1,4 +1,11 @@
-from symbiont_ecology import ATPLedger, AssimilationTester, BanditRouter, EcologyConfig, HostKernel, PopulationManager
+from symbiont_ecology import (
+    AssimilationTester,
+    ATPLedger,
+    BanditRouter,
+    EcologyConfig,
+    HostKernel,
+    PopulationManager,
+)
 from symbiont_ecology.environment.grid import GridEnvironment
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.population import Genome
