@@ -12,6 +12,7 @@ from typing import Dict, Optional, Tuple
 import torch
 
 from symbiont_ecology.config import EcologyConfig
+from symbiont_ecology.economics.api import compute_route_cost
 from symbiont_ecology.environment.grid import GridEnvironment, GridKey, GridTask
 from symbiont_ecology.environment.human import HumanBandit, HumanFeedbackResult
 from symbiont_ecology.evaluation import EvaluationManager
@@ -1300,14 +1301,7 @@ class EcologyLoop:
             price_multiplier = min(max(1.0, premium_cap), price_multiplier)
         config = self.config.energy
         revenue = price * reward.total
-        cost = (
-            config.alpha * metrics.flops_estimate
-            + config.beta * metrics.memory_gb
-            + config.gamma * metrics.latency_ms
-            + config.lambda_p * metrics.trainable_params
-        )
-        cost *= price_multiplier
-        cost *= max(0.0, min(self.config.energy.cost_scale, 1.0))
+        cost = compute_route_cost(config, metrics, price_multiplier=price_multiplier).total_cost
         roi = revenue / max(cost, 1e-6) if cost > 0 else (float("inf") if revenue > 0 else 0.0)
         if not math.isfinite(roi):
             roi = 0.0
