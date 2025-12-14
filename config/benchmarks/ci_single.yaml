@@ -1,0 +1,29 @@
+mode: baseline
+host:
+  backbone_model: stub
+  tokenizer: stub
+  dtype: float32
+  device: cpu
+  max_lora_rank: 4
+  max_sequence_length: 96
+grid:
+  families: ["math", "word.count", "json_repair", "logic.bool", "code.format", "string.sort"]
+  depths: ["short"]
+environment:
+  synthetic_batch_size: 4
+  global_episode_cap: 12
+human_bandit:
+  enabled: false
+population_strategy:
+  mu: 1
+  lambda: 1
+  max_population: 1
+  initial_orgs: 1
+hebbian:
+  learning_rate: 0.01
+assimilation_tuning:
+  max_merges_per_cell: 0
+evolution:
+  max_merges_per_gen: 0
+  min_population: 1
+  max_population: 1
