@@ -15,4 +15,3 @@ def test_atp_and_energy_flows():
     assert after == 5.0
     snap = ledger.snapshot()
     assert isinstance(snap.accounts, dict) and isinstance(snap.energy, dict)
-

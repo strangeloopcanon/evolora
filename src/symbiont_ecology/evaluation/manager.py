@@ -6,13 +6,12 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, List, Sequence
 
 from symbiont_ecology.config import EnergyConfig
-
 from symbiont_ecology.environment.grid import GridEnvironment, GridTask
-from symbiont_ecology.metrics.telemetry import RewardBreakdown
 from symbiont_ecology.host.kernel import HostKernel
+from symbiont_ecology.metrics.telemetry import RewardBreakdown
 
 
 @dataclass
@@ -134,7 +133,14 @@ class EvaluationManager:
                 correct += 1
             fam_entry = family_stats.setdefault(
                 eval_task.family,
-                {"correct": 0.0, "total": 0.0, "roi_sum": 0.0, "delta_sum": 0.0, "cost_sum": 0.0, "count": 0.0},
+                {
+                    "correct": 0.0,
+                    "total": 0.0,
+                    "roi_sum": 0.0,
+                    "delta_sum": 0.0,
+                    "cost_sum": 0.0,
+                    "count": 0.0,
+                },
             )
             fam_entry["total"] += 1.0
             if success:

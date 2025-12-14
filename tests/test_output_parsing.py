@@ -31,4 +31,3 @@ def test_json_repair_bracket_extraction() -> None:
     # Answer wraps the JSON; evaluator should extract bracketed array and parse
     success, _ = task.evaluate("Here you go: [1, 2, 3]")
     assert success is True
-

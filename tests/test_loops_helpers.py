@@ -13,4 +13,3 @@ def test_sanitize_telemetry_handles_nested():
     assert out["a"] == 1 and out["b"] is True
     assert isinstance(out["c"], dict) and isinstance(out["c"]["y"], list)
     assert isinstance(out["d"], str)
-

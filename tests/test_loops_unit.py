@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
 from symbiont_ecology.config import EcologyConfig
-from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.environment.grid import GridTask
+from symbiont_ecology.environment.loops import EcologyLoop
 
 
 def _mk_loop(roi_value: float = 1.0, lp_vals: dict | None = None) -> EcologyLoop:
@@ -13,12 +13,20 @@ def _mk_loop(roi_value: float = 1.0, lp_vals: dict | None = None) -> EcologyLoop
     cfg.environment.batch_max = 4
     host = SimpleNamespace()
     # environment with controller.lp_progress
-    controller = SimpleNamespace(lp_progress=lp_vals or {("word.count", "short"): 0.1, ("math", "short"): 0.5})
+    controller = SimpleNamespace(
+        lp_progress=lp_vals or {("word.count", "short"): 0.1, ("math", "short"): 0.5}
+    )
     environment = SimpleNamespace(controller=controller)
     # population stub with aggregate_roi
     population = SimpleNamespace(aggregate_roi=lambda limit=5: roi_value)
     assimilation = SimpleNamespace()
-    loop = EcologyLoop(config=cfg, host=host, environment=environment, population=population, assimilation=assimilation)
+    loop = EcologyLoop(
+        config=cfg,
+        host=host,
+        environment=environment,
+        population=population,
+        assimilation=assimilation,
+    )
     return loop
 
 
@@ -49,6 +57,7 @@ def test_team_probe_can_promote_colony():
     cfg.assimilation_tuning.team_min_tasks = 6
     cfg.assimilation_tuning.holdout_margin = 0.001
     cfg.assimilation_tuning.team_min_power = 0.0
+
     # Simple population with two orgs
     class Pop:
         def __init__(self):
@@ -62,25 +71,47 @@ def test_team_probe_can_promote_colony():
         def __init__(self):
             self.calls = []
 
-        def step(self, prompt: str, intent: str, max_routes: int, allowed_organelle_ids):  # noqa: ARG002
+        def step(
+            self, prompt: str, intent: str, max_routes: int, allowed_organelle_ids
+        ):  # noqa: ARG002
             oid = allowed_organelle_ids[0]
             try:
                 idx = int(prompt.split(":")[1])
             except Exception:
                 idx = 0
             # Lower cost alternates by org and idx parity to create complementarity
-            base = SimpleNamespace(answer="2", tokens=5, latency_ms=1.0, prompt_tokens=5, trainable_params=10, flops_estimate=1000.0, memory_gb=0.001, active_adapters={})
+            base = SimpleNamespace(
+                answer="2",
+                tokens=5,
+                latency_ms=1.0,
+                prompt_tokens=5,
+                trainable_params=10,
+                flops_estimate=1000.0,
+                memory_gb=0.001,
+                active_adapters={},
+            )
             # Make cost smaller (higher ROI) when parity matches
             if (oid.endswith("a") and idx % 2 == 0) or (oid.endswith("b") and idx % 2 == 1):
                 base.flops_estimate = 100.0
             resp = {oid: base}
             env = SimpleNamespace(observation=SimpleNamespace(state={"answer": "2"}))
-            return SimpleNamespace(envelope=env, routes=[SimpleNamespace(organelle_id=oid)], responses=resp, latency_ms=1.0)
+            return SimpleNamespace(
+                envelope=env,
+                routes=[SimpleNamespace(organelle_id=oid)],
+                responses=resp,
+                latency_ms=1.0,
+            )
 
     # Environment providing RNG and a simple controller (unused here)
     environment = SimpleNamespace(rng=__import__("random").Random(0), controller=SimpleNamespace())
 
-    loop = EcologyLoop(config=cfg, host=Host(), environment=environment, population=Pop(), assimilation=SimpleNamespace())
+    loop = EcologyLoop(
+        config=cfg,
+        host=Host(),
+        environment=environment,
+        population=Pop(),
+        assimilation=SimpleNamespace(),
+    )
 
     # Provide a custom holdout sampler returning tasks with explicit indices in prompt
     class FakeTask:

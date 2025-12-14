@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from symbiont_ecology.metrics.telemetry import AssimilationEvent
+from symbiont_ecology.metrics.telemetry import AssimilationEvent, EnergyTopUpEvent
 
 
 @dataclass
@@ -33,7 +33,9 @@ class AssimilationTester:
         self.dr_min_stratum = 2
         self.dr_min_power = 0.2
 
-    def update_thresholds(self, *, uplift_threshold: float | None = None, p_value_threshold: float | None = None) -> None:
+    def update_thresholds(
+        self, *, uplift_threshold: float | None = None, p_value_threshold: float | None = None
+    ) -> None:
         if uplift_threshold is not None:
             self.uplift_threshold = uplift_threshold
         if p_value_threshold is not None:
@@ -97,8 +99,14 @@ class AssimilationTester:
     ) -> AssimilationTestResult:
         control_list = list(control_scores)
         treatment_list = list(treatment_scores)
-        control_meta_list = [dict(item) for item in control_meta] if control_meta is not None else []
-        treatment_meta_list = [dict(item) for item in treatment_meta] if treatment_meta is not None else []
+        control_meta_list = list(control_meta) if control_meta is not None else []
+        treatment_meta_list = list(treatment_meta) if treatment_meta is not None else []
+        energy_top_up_event: EnergyTopUpEvent | None = None
+        if energy_top_up is not None:
+            try:
+                energy_top_up_event = EnergyTopUpEvent.model_validate(dict(energy_top_up))
+            except Exception:
+                energy_top_up_event = None
 
         control_arr = np.array(control_list, dtype=float)
         treatment_arr = np.array(treatment_list, dtype=float)
@@ -120,7 +128,7 @@ class AssimilationTester:
                 uplift_threshold=self.uplift_threshold,
                 p_value_threshold=self.p_value_threshold,
                 energy_balance=energy_balance,
-                energy_top_up=energy_top_up,
+                energy_top_up=energy_top_up_event,
                 method="z_test",
             )
             return AssimilationTestResult(event=event, decision=False)
@@ -144,7 +152,9 @@ class AssimilationTester:
                 control_meta_list,
                 treatment_meta_list,
             )
-            if len(aligned_control) >= min_required and len(aligned_control) == len(aligned_treatment):
+            if len(aligned_control) >= min_required and len(aligned_control) == len(
+                aligned_treatment
+            ):
                 control_arr = np.array(aligned_control, dtype=float)
                 treatment_arr = np.array(aligned_treatment, dtype=float)
                 dr_used = True
@@ -169,7 +179,7 @@ class AssimilationTester:
                 uplift_threshold=self.uplift_threshold,
                 p_value_threshold=self.p_value_threshold,
                 energy_balance=energy_balance,
-                energy_top_up=energy_top_up,
+                energy_top_up=energy_top_up_event,
                 method=method,
                 dr_used=dr_used,
                 dr_strata=self.dr_strata if dr_used else [],
@@ -211,7 +221,7 @@ class AssimilationTester:
                 alpha = max(min(self.p_value_threshold, 0.499), 1e-6)
                 from math import sqrt
 
-                def Phi(x: float) -> float:
+                def phi(x: float) -> float:
                     from math import erf
 
                     return 0.5 * (1.0 + erf(x / sqrt(2.0)))
@@ -227,7 +237,7 @@ class AssimilationTester:
                 else:
                     z_alpha = 3.09
                 z_effect = float(delta / se)
-                power = max(0.0, min(1.0, 1.0 - float(Phi(z_alpha - z_effect))))
+                power = max(0.0, min(1.0, 1.0 - float(phi(z_alpha - z_effect))))
             except Exception:
                 power = None
             method = f"{method}+bootstrap"
@@ -254,10 +264,16 @@ class AssimilationTester:
                 delta = uplift - self.uplift_threshold
                 from math import erf, sqrt
 
-                def Phi(x: float) -> float:
+                def phi(x: float) -> float:
                     return 0.5 * (1.0 + erf(x / sqrt(2.0)))
 
-                power = max(0.0, min(1.0, 1.0 - float(Phi(z_alpha - (delta / max(se, 1e-12))))))
+                power = max(
+                    0.0,
+                    min(
+                        1.0,
+                        1.0 - float(phi(z_alpha - (delta / max(se, 1e-12)))),
+                    ),
+                )
             except Exception:
                 power = None
 
@@ -284,7 +300,7 @@ class AssimilationTester:
             uplift_threshold=self.uplift_threshold,
             p_value_threshold=self.p_value_threshold,
             energy_balance=energy_balance,
-            energy_top_up=energy_top_up,
+            energy_top_up=energy_top_up_event,
             method=method,
             dr_used=dr_used,
             dr_strata=self.dr_strata if dr_used else [],

@@ -1,8 +1,8 @@
 import torch
 
-from symbiont_ecology.utils.torch_utils import resolve_device, clamp_norm, ensure_dtype, no_grad
-from symbiont_ecology.evolution.population import PopulationManager, Genome
 from symbiont_ecology.config import EvolutionConfig
+from symbiont_ecology.evolution.population import Genome, PopulationManager
+from symbiont_ecology.utils.torch_utils import clamp_norm, ensure_dtype, no_grad, resolve_device
 
 
 def test_torch_utils_basic_paths():

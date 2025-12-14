@@ -1,12 +1,12 @@
+import importlib.util
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from symbiont_ecology import ATPLedger, EcologyConfig
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.assimilation import AssimilationTester
 from symbiont_ecology.evolution.population import Genome, PopulationManager
-import importlib.util
-from pathlib import Path
 
 _ANALYZER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "analyze_ecology_run.py"
 spec = importlib.util.spec_from_file_location("_analyzer", _ANALYZER_PATH)
@@ -24,9 +24,7 @@ def _build_loop_with_fake_host() -> tuple[EcologyLoop, str, ATPLedger]:
     # Minimal population with one genome
     pop = PopulationManager(cfg.evolution, cfg.foraging)
     organelle_id = "org_test"
-    pop.register(
-        Genome(organelle_id=organelle_id, drive_weights={}, gate_bias=0.0, rank=2)
-    )
+    pop.register(Genome(organelle_id=organelle_id, drive_weights={}, gate_bias=0.0, rank=2))
     # Fake host that returns a one-line JSON answer and minimal metrics
     ledger = ATPLedger()
     ledger.ensure_energy(organelle_id, 1.0)
@@ -92,7 +90,9 @@ def test_sample_task_with_policy_bias() -> None:
     pop.register(Genome(organelle_id=oid, drive_weights={}, gate_bias=0.0, rank=2))
     env = SimpleNamespace(
         rng=SimpleNamespace(random=lambda: 0.0),
-        sample_task_from_cell=lambda cell, canary=False: SimpleNamespace(prompt="p", family=cell[0], depth=cell[1], cell=cell),
+        sample_task_from_cell=lambda cell, canary=False: SimpleNamespace(
+            prompt="p", family=cell[0], depth=cell[1], cell=cell
+        ),
         controller=SimpleNamespace(),
     )
     loop = EcologyLoop(
@@ -185,7 +185,16 @@ def test_auto_nudge_evidence_adjusts_knobs() -> None:
     # Force a stall and many gate hits
     loop.assim_fail_streak = 12
     before = cfg.assimilation_tuning.min_window
-    summary = {"assimilation_gating": {"low_power": 3, "uplift_below_threshold": 1, "insufficient_scores": 60, "topup_roi_blocked": 6}, "promotions": 0, "merges": 0}
+    summary = {
+        "assimilation_gating": {
+            "low_power": 3,
+            "uplift_below_threshold": 1,
+            "insufficient_scores": 60,
+            "topup_roi_blocked": 6,
+        },
+        "promotions": 0,
+        "merges": 0,
+    }
     loop._auto_nudge_evidence(summary)
     after = cfg.assimilation_tuning.min_window
     assert after >= before
@@ -195,12 +204,17 @@ def test_decay_assimilation_thresholds_on_fail_streak() -> None:
     cfg = EcologyConfig()
     # Ensure deterministic starting threshold
     cfg.evolution.assimilation_threshold = 0.02
+
     class DummyAssim:
         def __init__(self):
             self.p_value_threshold = cfg.evolution.assimilation_p_value
             self.calls = []
-        def update_thresholds(self, uplift_threshold: float, p_value_threshold: float | None = None) -> None:
+
+        def update_thresholds(
+            self, uplift_threshold: float, p_value_threshold: float | None = None
+        ) -> None:
             self.calls.append((uplift_threshold, p_value_threshold))
+
     dummy = DummyAssim()
     loop = EcologyLoop(
         config=cfg,
@@ -233,9 +247,11 @@ def test_sanitize_telemetry_handles_various_types() -> None:
         human_bandit=None,
         sink=None,
     )
+
     class Weird:
         def __str__(self) -> str:
             return "weird"
+
     data = {
         "a": float("inf"),
         "b": [1, 2.0, False, (3, 4.5)],
@@ -252,8 +268,22 @@ def test_sanitize_telemetry_handles_various_types() -> None:
 
 def test_analyzer_policy_conditioning_and_fields_aggregate() -> None:
     records = [
-        {"generation": 1, "avg_roi": 1.0, "policy_applied": 1, "policy_fields_used": {"budget_frac": 1}, "policy_budget_frac_avg": 1.2, "policy_attempts": 2, "policy_parsed": 1},
-        {"generation": 2, "avg_roi": 0.5, "policy_applied": 0, "policy_attempts": 1, "policy_parsed": 0},
+        {
+            "generation": 1,
+            "avg_roi": 1.0,
+            "policy_applied": 1,
+            "policy_fields_used": {"budget_frac": 1},
+            "policy_budget_frac_avg": 1.2,
+            "policy_attempts": 2,
+            "policy_parsed": 1,
+        },
+        {
+            "generation": 2,
+            "avg_roi": 0.5,
+            "policy_applied": 0,
+            "policy_attempts": 1,
+            "policy_parsed": 0,
+        },
     ]
     summary = summarise_generations(records)
     assert summary["policy_applied_total"] == 1
@@ -267,6 +297,7 @@ def test_analyzer_policy_conditioning_and_fields_aggregate() -> None:
 def test_config_loader_fallback_parser(tmp_path) -> None:
     # Force fallback by simulating missing OmegaConf
     import sys
+
     from symbiont_ecology.config import load_ecology_config
 
     original = sys.modules.get("omegaconf")
@@ -294,6 +325,7 @@ def test_config_loader_omegaconf_parse_failure_fallback(tmp_path) -> None:
     # Simulate OmegaConf import succeeds but .load raises, exercising inner except branch
     import sys
     from types import SimpleNamespace
+
     from symbiont_ecology.config import load_ecology_config
 
     class _DummyOC:

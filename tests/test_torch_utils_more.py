@@ -1,4 +1,5 @@
 import types
+
 import torch
 
 from symbiont_ecology.utils.torch_utils import resolve_device
@@ -14,4 +15,3 @@ def test_resolve_device_prefers_cuda_then_mps(monkeypatch) -> None:
     monkeypatch.setattr(torch.backends, "mps", types.SimpleNamespace(is_available=lambda: True))
     dev2 = resolve_device("auto")
     assert isinstance(dev2, torch.device) and dev2.type == "mps"
-

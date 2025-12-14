@@ -6,8 +6,12 @@ def test_assimilation_tuning_new_team_fields_present():
     at = cfg.assimilation_tuning
     assert hasattr(at, "team_probe_per_gen") and isinstance(at.team_probe_per_gen, int)
     assert hasattr(at, "team_min_tasks") and isinstance(at.team_min_tasks, int)
-    assert hasattr(at, "team_routing_probe_per_gen") and isinstance(at.team_routing_probe_per_gen, int)
-    assert hasattr(at, "team_block_diagonal_merges") and isinstance(at.team_block_diagonal_merges, bool)
+    assert hasattr(at, "team_routing_probe_per_gen") and isinstance(
+        at.team_routing_probe_per_gen, int
+    )
+    assert hasattr(at, "team_block_diagonal_merges") and isinstance(
+        at.team_block_diagonal_merges, bool
+    )
     assert hasattr(at, "team_block_rank_cap") and isinstance(at.team_block_rank_cap, int)
     assert hasattr(at, "assimilation_history_limit")
     assert hasattr(at, "assimilation_history_summary")

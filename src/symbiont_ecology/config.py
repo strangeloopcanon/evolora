@@ -26,9 +26,12 @@ class HostConfig(BaseModel):
     max_sequence_length: int = Field(256, ge=8)
     temperature: float = Field(0.0, ge=0.0, le=1.0)
     top_p: float = Field(1.0, ge=0.0, le=1.0)
-    gen_max_new_tokens: int = Field(48, ge=1, le=512, description="Max new tokens to generate per answer")
+    gen_max_new_tokens: int = Field(
+        48, ge=1, le=512, description="Max new tokens to generate per answer"
+    )
     recurrence_enabled: bool = Field(
-        False, description="Allow a single organelle to run multiple internal reasoning passes per call."
+        False,
+        description="Allow a single organelle to run multiple internal reasoning passes per call.",
     )
     recurrence_train_passes: int = Field(
         1,
@@ -144,12 +147,17 @@ class PricingConfig(BaseModel):
 
 class CurriculumConfig(BaseModel):
     lp_mix: float = Field(
-        0.0, ge=0.0, le=1.0, description="Probability to route by learning progress instead of ROI bandit"
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="Probability to route by learning progress instead of ROI bandit",
     )
     lp_alpha: float = Field(
         0.5, ge=0.0, le=1.0, description="Smoothing for learning progress EMA per cell"
     )
-    alp_auto_mix: bool = Field(False, description="Automatically tune lp_mix based on learning progress dispersion")
+    alp_auto_mix: bool = Field(
+        False, description="Automatically tune lp_mix based on learning progress dispersion"
+    )
     lp_mix_min: float = Field(0.05, ge=0.0, le=1.0)
     lp_mix_max: float = Field(0.6, ge=0.0, le=1.0)
     lp_window: int = Field(5, ge=1)
@@ -289,14 +297,22 @@ class AssimilationTuningConfig(BaseModel):
     permutation_samples: int = Field(200, ge=10)
     min_uplift_samples: int = Field(2, ge=1)
     dr_enabled: bool = Field(
-        False, description="Use stratified doubly-robust uplift estimator when metadata is available."
+        False,
+        description="Use stratified doubly-robust uplift estimator when metadata is available.",
     )
     dr_strata: list[str] = Field(
         default_factory=lambda: ["family", "depth"],
         description="Task metadata fields used for stratification during DR uplift estimation.",
     )
-    dr_min_stratum_size: int = Field(2, ge=1, description="Minimum paired samples per stratum to contribute to uplift")
-    dr_min_power: float = Field(0.2, ge=0.0, le=1.0, description="Minimum statistical power required when DR estimator is used")
+    dr_min_stratum_size: int = Field(
+        2, ge=1, description="Minimum paired samples per stratum to contribute to uplift"
+    )
+    dr_min_power: float = Field(
+        0.2,
+        ge=0.0,
+        le=1.0,
+        description="Minimum statistical power required when DR estimator is used",
+    )
     merge_audit_enabled: bool = Field(False)
     energy_topup_roi_bonus: float = Field(
         0.0,
@@ -304,15 +320,36 @@ class AssimilationTuningConfig(BaseModel):
         description="Amount subtracted from the ROI threshold when deciding on energy top-ups.",
     )
     # Power economics & evidence tokens
-    price_premium_alpha: float = Field(0.25, ge=0.0, description="Scale factor applied to task price when power_need > 0")
-    price_premium_cap: float = Field(1.3, ge=1.0, description="Maximum multiplier applied to task price for low-power organs")
-    power_target: float = Field(0.75, ge=0.0, le=1.0, description="Target statistical power; below this we mint evidence tokens")
-    evidence_token_threshold: float = Field(0.5, ge=0.0, le=1.0, description="Minimum power_need before minting evidence tokens")
-    evidence_token_mint: int = Field(1, ge=0, description="Number of evidence tokens minted when under-powered")
+    price_premium_alpha: float = Field(
+        0.25, ge=0.0, description="Scale factor applied to task price when power_need > 0"
+    )
+    price_premium_cap: float = Field(
+        1.3, ge=1.0, description="Maximum multiplier applied to task price for low-power organs"
+    )
+    power_target: float = Field(
+        0.75,
+        ge=0.0,
+        le=1.0,
+        description="Target statistical power; below this we mint evidence tokens",
+    )
+    evidence_token_threshold: float = Field(
+        0.5, ge=0.0, le=1.0, description="Minimum power_need before minting evidence tokens"
+    )
+    evidence_token_mint: int = Field(
+        1, ge=0, description="Number of evidence tokens minted when under-powered"
+    )
     evidence_token_cap: int = Field(3, ge=0, description="Maximum tokens retained per organelle")
-    evidence_token_window: int = Field(2, ge=0, description="How many samples short of min_window tokens can bridge")
-    info_topup_gap: int = Field(2, ge=0, description="If score count is within this many of min_window, allow info-aware top-up")
-    info_topup_roi_slack: float = Field(0.15, ge=0.0, description="ROI slack allowed when granting info-aware top-ups")
+    evidence_token_window: int = Field(
+        2, ge=0, description="How many samples short of min_window tokens can bridge"
+    )
+    info_topup_gap: int = Field(
+        2,
+        ge=0,
+        description="If score count is within this many of min_window, allow info-aware top-up",
+    )
+    info_topup_roi_slack: float = Field(
+        0.15, ge=0.0, description="ROI slack allowed when granting info-aware top-ups"
+    )
     gating_snapshot_limit: int = Field(
         48,
         ge=1,
@@ -348,22 +385,46 @@ class AssimilationTuningConfig(BaseModel):
     colony_synergy_delta: float = Field(0.1, ge=0.0)
     colony_variance_improve: float = Field(0.2, ge=0.0)
     colony_windows: int = Field(3, ge=1)
-    colony_expand_delta: float = Field(0.12, ge=0.0, description="Minimum ΔROI required when expanding colony membership")
-    colony_expand_windows: int = Field(3, ge=1, description="Consecutive reviews that must meet expand thresholds before adding a member")
-    colony_shrink_delta: float = Field(-0.02, description="If holdout ΔROI drops below this threshold the colony may shrink")
+    colony_expand_delta: float = Field(
+        0.12, ge=0.0, description="Minimum ΔROI required when expanding colony membership"
+    )
+    colony_expand_windows: int = Field(
+        3,
+        ge=1,
+        description="Consecutive reviews that must meet expand thresholds before adding a member",
+    )
+    colony_shrink_delta: float = Field(
+        -0.02, description="If holdout ΔROI drops below this threshold the colony may shrink"
+    )
     colony_review_interval: int = Field(6, ge=1)
     colony_required_passes: int = Field(2, ge=1)
     colony_max_failures: int = Field(2, ge=1)
     # Colony adaptation (size & bandwidth)
     colony_min_size: int = Field(2, ge=1)
     colony_max_size: int = Field(3, ge=1)
-    colony_bandwidth_base: float = Field(2.0, ge=0.0, description="Base colony bandwidth allowance per generation (energy units)")
-    colony_bandwidth_frac: float = Field(0.02, ge=0.0, le=1.0, description="Scale factor applied to colony pot when computing comms bandwidth")
-    colony_hazard_bandwidth_scale: float = Field(0.3, ge=0.0, le=1.0, description="Multiplier applied to colony bandwidth when any member is in hazard")
+    colony_bandwidth_base: float = Field(
+        2.0, ge=0.0, description="Base colony bandwidth allowance per generation (energy units)"
+    )
+    colony_bandwidth_frac: float = Field(
+        0.02,
+        ge=0.0,
+        le=1.0,
+        description="Scale factor applied to colony pot when computing comms bandwidth",
+    )
+    colony_hazard_bandwidth_scale: float = Field(
+        0.3,
+        ge=0.0,
+        le=1.0,
+        description="Multiplier applied to colony bandwidth when any member is in hazard",
+    )
     colony_post_cap: int = Field(2, ge=0)
     colony_read_cap: int = Field(3, ge=0)
-    colony_post_cap_hazard: int = Field(1, ge=0, description="Post cap to use while colony hazard is active")
-    colony_read_cap_hazard: int = Field(1, ge=0, description="Read cap to use while colony hazard is active")
+    colony_post_cap_hazard: int = Field(
+        1, ge=0, description="Post cap to use while colony hazard is active"
+    )
+    colony_read_cap_hazard: int = Field(
+        1, ge=0, description="Read cap to use while colony hazard is active"
+    )
     colony_reserve_ticket_multiplier: float = Field(
         3.0,
         ge=0.0,
@@ -395,10 +456,20 @@ class AssimilationTuningConfig(BaseModel):
         ge=0,
         description="Read cap while reserve mode is active.",
     )
-    colony_tax_rate: float = Field(0.1, ge=0.0, le=0.5, description="Per-episode tax rate routed into the colony pot")
-    colony_subsidy_threshold: float = Field(1.0, ge=0.0, description="Energy threshold (multiples of ticket) below which members receive subsidies")
-    colony_subsidy_fraction: float = Field(0.25, ge=0.0, le=1.0, description="Fraction of colony pot eligible for subsidy per member")
-    colony_trait_mutation_scale: float = Field(0.05, ge=0.0, description="Std-dev multiplier for colony trait mutation")
+    colony_tax_rate: float = Field(
+        0.1, ge=0.0, le=0.5, description="Per-episode tax rate routed into the colony pot"
+    )
+    colony_subsidy_threshold: float = Field(
+        1.0,
+        ge=0.0,
+        description="Energy threshold (multiples of ticket) below which members receive subsidies",
+    )
+    colony_subsidy_fraction: float = Field(
+        0.25, ge=0.0, le=1.0, description="Fraction of colony pot eligible for subsidy per member"
+    )
+    colony_trait_mutation_scale: float = Field(
+        0.05, ge=0.0, description="Std-dev multiplier for colony trait mutation"
+    )
     colony_selection_enabled: bool = Field(False)
     colony_selection_interval: int = Field(20, ge=1)
     colony_selection_alpha: float = Field(1.0)
@@ -407,13 +478,25 @@ class AssimilationTuningConfig(BaseModel):
     colony_selection_margin: float = Field(0.05, ge=0.0)
     colony_selection_reward_frac: float = Field(0.25, ge=0.0, le=1.0)
     colony_selection_min_pool: float = Field(0.0, ge=0.0)
-    colony_tier_count: int = Field(1, ge=1, description="Number of colony tiers (>=1 disables migration)")
-    colony_tier_promote_passes: int = Field(3, ge=1, description="Holdout passes required to promote a colony tier")
-    colony_tier_promote_delta: float = Field(0.1, description="Minimum ΔROI holdout mean to promote a tier")
-    colony_tier_demote_failures: int = Field(3, ge=0, description="Holdout failures triggering demotion")
+    colony_tier_count: int = Field(
+        1, ge=1, description="Number of colony tiers (>=1 disables migration)"
+    )
+    colony_tier_promote_passes: int = Field(
+        3, ge=1, description="Holdout passes required to promote a colony tier"
+    )
+    colony_tier_promote_delta: float = Field(
+        0.1, description="Minimum ΔROI holdout mean to promote a tier"
+    )
+    colony_tier_demote_failures: int = Field(
+        3, ge=0, description="Holdout failures triggering demotion"
+    )
     colony_tier_demote_delta: float = Field(-0.05, description="ΔROI floor triggering demotion")
-    colony_tier_hazard_floor: float = Field(-2.0, description="Hazard z-score floor triggering demotion")
-    colony_tier_cooldown: int = Field(3, ge=0, description="Generations before the next tier migration is allowed")
+    colony_tier_hazard_floor: float = Field(
+        -2.0, description="Hazard z-score floor triggering demotion"
+    )
+    colony_tier_cooldown: int = Field(
+        3, ge=0, description="Generations before the next tier migration is allowed"
+    )
     colony_tier_bandwidth_boost: float = Field(
         0.15,
         ge=0.0,
@@ -452,50 +535,95 @@ class AssimilationTuningConfig(BaseModel):
     roi_relief_step: float = Field(0.05, ge=0.0)
     roi_relief_max: float = Field(0.5, ge=0.0)
     # Window auto-tune
-    window_autotune: bool = Field(False, description="Auto-adjust assimilation evidence window to reduce insufficient_scores")
+    window_autotune: bool = Field(
+        False, description="Auto-adjust assimilation evidence window to reduce insufficient_scores"
+    )
     min_window_min: int = Field(6, ge=2)
     # Team probe knobs (colony focus)
-    team_probe_per_gen: int = Field(2, ge=0, description="How many team probe pairs to evaluate per generation")
-    team_min_tasks: int = Field(8, ge=1, description="Minimum tasks required for team promotion CI gate")
-    team_routing_probe_per_gen: int = Field(2, ge=0, description="How many router co-routing probes to run per generation")
-    team_probe_synergy_delta: float = Field(0.12, ge=0.0, description="Required fractional lift (vs solo sum) for sustained team probes")
-    team_probe_variance_nu: float = Field(0.25, ge=0.0, description="Required fractional variance reduction for sustained team probes")
-    team_probe_sustain: int = Field(3, ge=1, description="Consecutive probe windows required before flagging sustained synergy")
+    team_probe_per_gen: int = Field(
+        2, ge=0, description="How many team probe pairs to evaluate per generation"
+    )
+    team_min_tasks: int = Field(
+        8, ge=1, description="Minimum tasks required for team promotion CI gate"
+    )
+    team_routing_probe_per_gen: int = Field(
+        2, ge=0, description="How many router co-routing probes to run per generation"
+    )
+    team_probe_synergy_delta: float = Field(
+        0.12, ge=0.0, description="Required fractional lift (vs solo sum) for sustained team probes"
+    )
+    team_probe_variance_nu: float = Field(
+        0.25, ge=0.0, description="Required fractional variance reduction for sustained team probes"
+    )
+    team_probe_sustain: int = Field(
+        3, ge=1, description="Consecutive probe windows required before flagging sustained synergy"
+    )
     # Team router/composition knobs
-    team_router_enabled: bool = Field(False, description="If true, a fraction of tasks may be routed to 2-member teams")
-    team_vote_enabled: bool = Field(True, description="If true, select best-of-two answer (majority vote for 2)")
-    team_handoff_enabled: bool = Field(False, description="If true, allow solver→checker single revise step (not yet implemented)")
-    team_handoff_cap_per_gen: int = Field(4, ge=0, description="Max handoff revisions allowed per generation")
-    team_handoff_cost: float = Field(0.05, ge=0.0, description="Energy cost charged to the checker for a handoff revision")
+    team_router_enabled: bool = Field(
+        False, description="If true, a fraction of tasks may be routed to 2-member teams"
+    )
+    team_vote_enabled: bool = Field(
+        True, description="If true, select best-of-two answer (majority vote for 2)"
+    )
+    team_handoff_enabled: bool = Field(
+        False, description="If true, allow solver→checker single revise step (not yet implemented)"
+    )
+    team_handoff_cap_per_gen: int = Field(
+        4, ge=0, description="Max handoff revisions allowed per generation"
+    )
+    team_handoff_cost: float = Field(
+        0.05, ge=0.0, description="Energy cost charged to the checker for a handoff revision"
+    )
     team_handoff_prompt: str = Field(
         "Partner answer:\n{answer}\nProvide a critique and improved final answer.",
         description="Prompt appended when handing off between team members",
     )
-    team_max_routes_per_gen: int = Field(8, ge=0, description="Max team episodes per generation across all pairs")
-    team_min_power: float = Field(0.2, ge=0.0, le=1.0, description="Minimum power proxy required for team promotions")
-    team_holdout_margin: float | None = Field(None, description="Team-specific holdout margin; falls back to holdout_margin if None")
-    team_holdout_sample_size: int = Field(2, ge=1, description="How many holdout tasks to sample during team probes")
+    team_max_routes_per_gen: int = Field(
+        8, ge=0, description="Max team episodes per generation across all pairs"
+    )
+    team_min_power: float = Field(
+        0.2, ge=0.0, le=1.0, description="Minimum power proxy required for team promotions"
+    )
+    team_holdout_margin: float | None = Field(
+        None, description="Team-specific holdout margin; falls back to holdout_margin if None"
+    )
+    team_holdout_sample_size: int = Field(
+        2, ge=1, description="How many holdout tasks to sample during team probes"
+    )
     team_block_diagonal_merges: bool = Field(
-        True, description="Compose assimilation soups with block-diagonal structure when team/colony roles are known"
+        True,
+        description="Compose assimilation soups with block-diagonal structure when team/colony roles are known",
     )
     team_block_rank_cap: int = Field(
         64,
         ge=1,
         description="Maximum combined rank when building block-diagonal soups (clamped by host max rank)",
     )
-    promotion_target_rate: float = Field(0.2, ge=0.0, le=1.0, description="Target promotions per generation (normalized)")
-    promotion_adjust_step: float = Field(0.002, ge=0.0, le=0.1, description="Step size to adjust team thresholds toward target")
+    promotion_target_rate: float = Field(
+        0.2, ge=0.0, le=1.0, description="Target promotions per generation (normalized)"
+    )
+    promotion_adjust_step: float = Field(
+        0.002, ge=0.0, le=0.1, description="Step size to adjust team thresholds toward target"
+    )
     # Optional smoothing for controller
-    promotion_ema_alpha: float = Field(0.3, ge=0.0, le=1.0, description="EMA smoothing for observed promotions in controller")
+    promotion_ema_alpha: float = Field(
+        0.3, ge=0.0, le=1.0, description="EMA smoothing for observed promotions in controller"
+    )
     team_margin_min: float = Field(0.0, ge=0.0)
     team_margin_max: float = Field(0.1, ge=0.0)
     team_power_min: float = Field(0.05, ge=0.0, le=1.0)
     team_power_max: float = Field(0.5, ge=0.0, le=1.0)
     # Evidence scheduler
-    evidence_boost_enabled: bool = Field(False, description="Boost task allocation for near-threshold candidates")
+    evidence_boost_enabled: bool = Field(
+        False, description="Boost task allocation for near-threshold candidates"
+    )
     evidence_boost_factor: int = Field(1, ge=0, description="Extra per-org tasks when boosted")
-    evidence_boost_cap: int = Field(8, ge=0, description="Max boosted tasks across the population per generation")
-    evidence_boost_roi: float = Field(1.5, ge=0.0, description="ROI threshold to consider an org a boost candidate")
+    evidence_boost_cap: int = Field(
+        8, ge=0, description="Max boosted tasks across the population per generation"
+    )
+    evidence_boost_roi: float = Field(
+        1.5, ge=0.0, description="ROI threshold to consider an org a boost candidate"
+    )
     colony_variance_leash: float = Field(
         1.5,
         ge=0.0,
@@ -511,7 +639,9 @@ class AssimilationTuningConfig(BaseModel):
         ge=1,
         description="Generations between deception guard checks (0 disables).",
     )
-    colony_stipend: float = Field(0.2, ge=0.0, description="Stipend per pass for colony members from pot")
+    colony_stipend: float = Field(
+        0.2, ge=0.0, description="Stipend per pass for colony members from pot"
+    )
     min_window_max: int = Field(24, ge=2)
 
 
@@ -569,51 +699,113 @@ class CommsConfig(BaseModel):
     credit_frac: float = Field(0.2, ge=0.0, le=1.0)
     ttl: int = Field(10, ge=1)
     post_gen_cap: int = Field(1, ge=0, description="Maximum text posts per generation")
-    read_gen_cap: int = Field(4, ge=0, description="Maximum reads per generation across the population")
-    credit_power_window: int = Field(6, ge=1, description="Generations to wait for reader power improvement before abandoning credit")
-    credit_power_min_delta: float = Field(0.05, ge=0.0, description="Minimum ROI improvement required to award poster credit")
+    read_gen_cap: int = Field(
+        4, ge=0, description="Maximum reads per generation across the population"
+    )
+    credit_power_window: int = Field(
+        6,
+        ge=1,
+        description="Generations to wait for reader power improvement before abandoning credit",
+    )
+    credit_power_min_delta: float = Field(
+        0.05, ge=0.0, description="Minimum ROI improvement required to award poster credit"
+    )
     # Cache-to-Cache (C2C) latent comms
     c2c_enabled: bool = Field(False, description="Enable cache-to-cache latent communications")
     c2c_post_cost: float = Field(0.1, ge=0.0)
     c2c_read_cost: float = Field(0.05, ge=0.0)
     c2c_ttl: int = Field(5, ge=1)
-    c2c_mix: float = Field(0.5, ge=0.0, le=1.0, description="Blend factor for latent_prefix vs current prompt latent")
-    history_cap: int = Field(64, ge=1, description="Maximum number of text messages retained on the shared board")
-    default_priority: float = Field(0.0, description="Baseline priority assigned to system-generated posts")
+    c2c_mix: float = Field(
+        0.5, ge=0.0, le=1.0, description="Blend factor for latent_prefix vs current prompt latent"
+    )
+    history_cap: int = Field(
+        64, ge=1, description="Maximum number of text messages retained on the shared board"
+    )
+    default_priority: float = Field(
+        0.0, description="Baseline priority assigned to system-generated posts"
+    )
 
 
 class KnowledgeConfig(BaseModel):
-    enabled: bool = Field(False, description="Enable per-org memory cache for useful hints/solutions")
-    write_cost: float = Field(0.25, ge=0.0, description="Energy cost charged when writing to the memory cache")
-    read_cost: float = Field(0.05, ge=0.0, description="Energy cost charged when prepending memories to a prompt")
+    enabled: bool = Field(
+        False, description="Enable per-org memory cache for useful hints/solutions"
+    )
+    write_cost: float = Field(
+        0.25, ge=0.0, description="Energy cost charged when writing to the memory cache"
+    )
+    read_cost: float = Field(
+        0.05, ge=0.0, description="Energy cost charged when prepending memories to a prompt"
+    )
     ttl: int = Field(40, ge=1, description="Generations before a memory entry expires")
     max_items: int = Field(8, ge=1, description="Maximum cached entries per organelle")
 
 
 class SurvivalConfig(BaseModel):
     enabled: bool = Field(False, description="Enable reserve/hazard survival dynamics")
-    reserve_ratio: float = Field(0.6, ge=0.0, description="Fraction of ticket energy to keep as reserve")
-    reserve_cost_beta: float = Field(1.2, ge=0.0, description="Multiplier for recent episode costs when computing reserve threshold")
-    reserve_cost_window: int = Field(6, ge=1, description="Episodes considered when estimating reserve cost")
-    reserve_batch_scale: float = Field(0.5, ge=0.0, le=1.0, description="Scale applied to batch size while reserve active")
-    steps_cap_low_energy: int = Field(2, ge=1, description="Cap on per-org episodes when reserve active")
-    cheap_cell_quantile: float = Field(0.3, ge=0.0, le=1.0, description="Quantile of cheapest cells to sample while in reserve/hazard")
-    price_bias_low_energy: bool = Field(True, description="Bias sampling toward low-price cells when reserve/hazard active")
+    reserve_ratio: float = Field(
+        0.6, ge=0.0, description="Fraction of ticket energy to keep as reserve"
+    )
+    reserve_cost_beta: float = Field(
+        1.2,
+        ge=0.0,
+        description="Multiplier for recent episode costs when computing reserve threshold",
+    )
+    reserve_cost_window: int = Field(
+        6, ge=1, description="Episodes considered when estimating reserve cost"
+    )
+    reserve_batch_scale: float = Field(
+        0.5, ge=0.0, le=1.0, description="Scale applied to batch size while reserve active"
+    )
+    steps_cap_low_energy: int = Field(
+        2, ge=1, description="Cap on per-org episodes when reserve active"
+    )
+    cheap_cell_quantile: float = Field(
+        0.3,
+        ge=0.0,
+        le=1.0,
+        description="Quantile of cheapest cells to sample while in reserve/hazard",
+    )
+    price_bias_low_energy: bool = Field(
+        True, description="Bias sampling toward low-price cells when reserve/hazard active"
+    )
     hazard_window: int = Field(6, ge=2, description="Window for ROI z-score to detect hazard state")
-    hazard_threshold: float = Field(-0.8, description="Enter hazard when ROI z-score falls below this value")
-    hazard_exit_threshold: float = Field(-0.1, description="Leave hazard once ROI z-score rises above this value")
-    hazard_cooldown_gens: int = Field(4, ge=0, description="Cooldown before re-entering hazard after exit")
-    hazard_rank_downshift: int = Field(1, ge=0, description="Rank decrement applied when hazard triggers")
+    hazard_threshold: float = Field(
+        -0.8, description="Enter hazard when ROI z-score falls below this value"
+    )
+    hazard_exit_threshold: float = Field(
+        -0.1, description="Leave hazard once ROI z-score rises above this value"
+    )
+    hazard_cooldown_gens: int = Field(
+        4, ge=0, description="Cooldown before re-entering hazard after exit"
+    )
+    hazard_rank_downshift: int = Field(
+        1, ge=0, description="Rank decrement applied when hazard triggers"
+    )
     hazard_probe_disable: bool = Field(True, description="Skip cross-cell probes while in hazard")
-    hazard_roi_relief_boost: float = Field(0.1, ge=0.0, description="Additional ROI relief granted in hazard")
-    hazard_topup_bonus: float = Field(0.3, ge=0.0, description="Reduction applied to ROI threshold for energy top-ups in hazard")
-    hazard_holdout_margin: float = Field(0.01, ge=0.0, description="Additional margin required for merges while in hazard")
-    min_power_recovery: float = Field(0.15, ge=0.0, le=1.0, description="Minimum power proxy to attempt merges after hazard")
+    hazard_roi_relief_boost: float = Field(
+        0.1, ge=0.0, description="Additional ROI relief granted in hazard"
+    )
+    hazard_topup_bonus: float = Field(
+        0.3, ge=0.0, description="Reduction applied to ROI threshold for energy top-ups in hazard"
+    )
+    hazard_holdout_margin: float = Field(
+        0.01, ge=0.0, description="Additional margin required for merges while in hazard"
+    )
+    min_power_recovery: float = Field(
+        0.15, ge=0.0, le=1.0, description="Minimum power proxy to attempt merges after hazard"
+    )
+
 
 class PolicyConfig(BaseModel):
-    enabled: bool = Field(False, description="If true, each organism may propose a JSON policy once per generation")
-    token_cap: int = Field(64, ge=4, le=256, description="Soft cap for policy prompt; still charged to energy")
-    energy_cost: float = Field(0.05, ge=0.0, description="Fixed micro-cost charged when a policy is requested")
+    enabled: bool = Field(
+        False, description="If true, each organism may propose a JSON policy once per generation"
+    )
+    token_cap: int = Field(
+        64, ge=4, le=256, description="Soft cap for policy prompt; still charged to energy"
+    )
+    energy_cost: float = Field(
+        0.05, ge=0.0, description="Fixed micro-cost charged when a policy is requested"
+    )
     charge_tokens: bool = Field(
         False,
         description="If true, scale policy energy cost by used tokens / token_cap (capped at 1.0)",
@@ -631,11 +823,17 @@ class PolicyConfig(BaseModel):
             "gate_bias_delta",
         ]
     )
-    bias_strength: float = Field(0.3, ge=0.0, le=1.0, description="Probability to honor cell_pref over controller routing")
+    bias_strength: float = Field(
+        0.3, ge=0.0, le=1.0, description="Probability to honor cell_pref over controller routing"
+    )
     reserve_min: float = Field(0.0, ge=0.0, le=1.0)
     reserve_max: float = Field(0.75, ge=0.0, le=1.0)
-    failure_penalty: float = Field(0.05, ge=0.0, description="Energy penalty when policy output is malformed")
-    success_bonus: float = Field(0.0, ge=0.0, description="Energy bonus when a policy is parsed successfully")
+    failure_penalty: float = Field(
+        0.05, ge=0.0, description="Energy penalty when policy output is malformed"
+    )
+    success_bonus: float = Field(
+        0.0, ge=0.0, description="Energy bonus when a policy is parsed successfully"
+    )
 
 
 def _default_few_shot_examples() -> dict[str, list[dict[str, str]]]:
@@ -684,7 +882,9 @@ def _default_few_shot_examples() -> dict[str, list[dict[str, str]]]:
 
 
 class PromptingConfig(BaseModel):
-    few_shot_enabled: bool = Field(False, description="Enable few-shot scaffolds for selected task families.")
+    few_shot_enabled: bool = Field(
+        False, description="Enable few-shot scaffolds for selected task families."
+    )
     few_shot_header: str = Field(
         "Examples:",
         description="Header inserted before few-shot examples.",
@@ -705,9 +905,15 @@ class PromptingConfig(BaseModel):
 
 class ForagingConfig(BaseModel):
     enabled: bool = Field(False, description="Enable evolved foraging traits and Q-based routing.")
-    beta_default: float = Field(1.5, ge=0.0, description="Default softmax temperature (higher = greedier).")
-    q_decay_default: float = Field(0.3, ge=0.0, le=1.0, description="Fallback EMA decay for Q updates.")
-    ucb_bonus_default: float = Field(0.2, ge=0.0, description="Fallback exploration bonus for rarely visited cells.")
+    beta_default: float = Field(
+        1.5, ge=0.0, description="Default softmax temperature (higher = greedier)."
+    )
+    q_decay_default: float = Field(
+        0.3, ge=0.0, le=1.0, description="Fallback EMA decay for Q updates."
+    )
+    ucb_bonus_default: float = Field(
+        0.2, ge=0.0, description="Fallback exploration bonus for rarely visited cells."
+    )
     q_init: float = Field(0.0, description="Initial Q value for unseen cells.")
     policy_bias_cap: float = Field(
         0.5,
@@ -734,7 +940,9 @@ class ForagingConfig(BaseModel):
         ge=0.0,
         description="Std-dev multiplier (× mutation_rate) when mutating budget_aggressiveness.",
     )
-    telemetry_top_k: int = Field(3, ge=1, description="Number of top cells to surface per organelle in telemetry.")
+    telemetry_top_k: int = Field(
+        3, ge=1, description="Number of top cells to surface per organelle in telemetry."
+    )
     telemetry_max_orgs: int = Field(
         10,
         ge=1,
@@ -743,7 +951,9 @@ class ForagingConfig(BaseModel):
 
 
 class WinterConfig(BaseModel):
-    enabled: bool = Field(False, description="Enable periodic winter pulses that stress the economy.")
+    enabled: bool = Field(
+        False, description="Enable periodic winter pulses that stress the economy."
+    )
     winter_interval: int = Field(
         40,
         ge=1,
@@ -781,12 +991,24 @@ class EnvironmentConfig(BaseModel):
     auto_batch: bool = Field(False)
     batch_min: int = Field(1, ge=1)
     batch_max: int = Field(4, ge=1)
-    budget_enabled: bool = Field(True, description="Enable per-org budgeting driven by energy, traits, and policy signals")
-    budget_energy_floor: float = Field(0.4, ge=0.0, description="Lower clamp for energy balance ratio when computing budgets")
-    budget_energy_ceiling: float = Field(3.0, ge=0.0, description="Upper clamp for energy balance ratio when computing budgets")
-    budget_trait_bonus: float = Field(1.0, ge=0.0, description="Strength of trait influence (explore_rate) on per-org budgets")
-    budget_policy_floor: float = Field(0.3, ge=0.0, description="Minimum policy budget_frac multiplier")
-    budget_policy_ceiling: float = Field(2.0, ge=0.0, description="Maximum policy budget_frac multiplier")
+    budget_enabled: bool = Field(
+        True, description="Enable per-org budgeting driven by energy, traits, and policy signals"
+    )
+    budget_energy_floor: float = Field(
+        0.4, ge=0.0, description="Lower clamp for energy balance ratio when computing budgets"
+    )
+    budget_energy_ceiling: float = Field(
+        3.0, ge=0.0, description="Upper clamp for energy balance ratio when computing budgets"
+    )
+    budget_trait_bonus: float = Field(
+        1.0, ge=0.0, description="Strength of trait influence (explore_rate) on per-org budgets"
+    )
+    budget_policy_floor: float = Field(
+        0.3, ge=0.0, description="Minimum policy budget_frac multiplier"
+    )
+    budget_policy_ceiling: float = Field(
+        2.0, ge=0.0, description="Maximum policy budget_frac multiplier"
+    )
     budget_policy_requires_parse: bool = Field(
         False,
         description="If true, organelles without a parsed policy fall back to the policy floor when budgeting.",
@@ -809,7 +1031,9 @@ class MetricsConfig(BaseModel):
     root: Path = Field(Path("artifacts"))
     episodes_file: str = "episodes.jsonl"
     assimilation_file: str = "assimilation.jsonl"
-    in_memory_log_limit: int = Field(256, ge=0, description="Max episodes kept in memory per run (0 = disable in‑memory cache)")
+    in_memory_log_limit: int = Field(
+        256, ge=0, description="Max episodes kept in memory per run (0 = disable in‑memory cache)"
+    )
 
 
 class EcologyConfig(BaseModel):
@@ -820,7 +1044,7 @@ class EcologyConfig(BaseModel):
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)  # type: ignore[arg-type]
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)  # type: ignore[arg-type]
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)  # type: ignore[arg-type]
-    grid: GridConfig = Field(default_factory=GridConfig)  # type: ignore[arg-type]
+    grid: GridConfig = Field(default_factory=GridConfig)
     controller: ControllerConfig = Field(default_factory=ControllerConfig)  # type: ignore[arg-type]
     pricing: PricingConfig = Field(default_factory=PricingConfig)  # type: ignore[arg-type]
     curriculum: CurriculumConfig = Field(default_factory=CurriculumConfig)  # type: ignore[arg-type]
@@ -884,7 +1108,8 @@ def load_ecology_config(path: Path | str) -> EcologyConfig:
     """
     # Preferred path: omegaconf (rich YAML with interpolation)
     try:
-        from omegaconf import OmegaConf  # type: ignore
+        from omegaconf import OmegaConf
+
         try:
             conf = OmegaConf.load(Path(path))
             data = OmegaConf.to_container(conf, resolve=True)
@@ -941,66 +1166,3 @@ def load_ecology_config(path: Path | str) -> EcologyConfig:
 
 
 __all__.append("load_ecology_config")
-def _default_few_shot_examples() -> dict[str, list[dict[str, str]]]:
-    return {
-        "word.count": [
-            {
-                "prompt": "Count the number of words in the sentence: 'Agents evolve together.' Respond with an integer.",
-                "answer": "3",
-            },
-            {
-                "prompt": "Count the number of words in the sentence: 'Evolution rewards careful cooperation.' Respond with an integer.",
-                "answer": "4",
-            },
-        ],
-        "logic.bool": [
-            {
-                "prompt": "Evaluate the logical expression and respond with 'True' or 'False': TRUE AND NOT FALSE",
-                "answer": "True",
-            },
-            {
-                "prompt": "Evaluate the logical expression and respond with 'True' or 'False': NOT FALSE OR FALSE",
-                "answer": "True",
-            },
-        ],
-        "math": [
-            {
-                "prompt": "Compute 4 plus 7. Respond with the number only.",
-                "answer": "11",
-            },
-            {
-                "prompt": "Multiply 5 by 6. Respond with the number only.",
-                "answer": "30",
-            },
-        ],
-        "math.sequence": [
-            {
-                "prompt": "Given the sequence 2, 5, 8, what is the next number? Respond with the number only.",
-                "answer": "11",
-            },
-            {
-                "prompt": "Given the sequence 3, 6, 9, what is the next number? Respond with the number only.",
-                "answer": "12",
-            },
-        ],
-    }
-
-
-class PromptingConfig(BaseModel):
-    few_shot_enabled: bool = Field(False, description="Enable few-shot scaffolds for selected task families.")
-    few_shot_header: str = Field(
-        "Examples:",
-        description="Header inserted before few-shot examples.",
-    )
-    few_shot_footer: str = Field(
-        "Now solve the task below.",
-        description="Footer inserted before the actual task prompt.",
-    )
-    few_shot_separator: str = Field(
-        "\n",
-        description="Separator between example prompt/answer pairs.",
-    )
-    few_shot_examples: dict[str, list[dict[str, str]]] = Field(
-        default_factory=_default_few_shot_examples,
-        description="Mapping of task family to list of example prompt/answer pairs.",
-    )

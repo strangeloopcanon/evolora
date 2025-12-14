@@ -14,3 +14,11 @@ def test_compute_mean_ci_and_power_proxy_basic():
     assert (lo2, hi2, mu2) == (0.0, 0.0, 0.0)
     assert se2 > 1e6 or se2 == float("inf")
 
+
+def test_compute_mean_ci_singleton_and_power_proxy_zero_se():
+    lo, hi, mu, se = EcologyLoop._compute_mean_ci([1.0])
+    assert (lo <= mu <= hi) and mu == 1.0
+    assert se > 0.0
+
+    assert EcologyLoop._power_proxy(mu=1.0, baseline=0.0, margin=0.0, se=0.0) == 1.0
+    assert EcologyLoop._power_proxy(mu=0.0, baseline=0.0, margin=0.1, se=0.0) == 0.0

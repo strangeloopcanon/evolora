@@ -65,20 +65,28 @@ class TrialHost(SpawningHost):
         self._orgs: dict[str, SimpleNamespace] = {}
         for oid, balance in balances.items():
             rank = 2 if ranks is None else ranks.get(oid, 2)
-            self._orgs[oid] = SimpleNamespace(rank=rank, import_adapter_state=lambda *args, **kwargs: None)
+            self._orgs[oid] = SimpleNamespace(
+                rank=rank, import_adapter_state=lambda *args, **kwargs: None
+            )
             self.ledger.set_energy(oid, balance)
 
     def get_organelle(self, organelle_id: str):
         if organelle_id not in self._orgs:
-            self._orgs[organelle_id] = SimpleNamespace(rank=2, import_adapter_state=lambda *args, **kwargs: None)
+            self._orgs[organelle_id] = SimpleNamespace(
+                rank=2, import_adapter_state=lambda *args, **kwargs: None
+            )
         return self._orgs[organelle_id]
 
     def build_lora_soup_state(self, soup: dict[str, float], target_rank: int):
         return {"mix": soup, "rank": target_rank}, 1.0
 
     def spawn_organelle(self, rank: int, hebbian_config=None, activation_bias: float = 0.0) -> str:
-        organelle_id = super().spawn_organelle(rank, hebbian_config=hebbian_config, activation_bias=activation_bias)
-        self._orgs[organelle_id] = SimpleNamespace(rank=rank, import_adapter_state=lambda *args, **kwargs: None)
+        organelle_id = super().spawn_organelle(
+            rank, hebbian_config=hebbian_config, activation_bias=activation_bias
+        )
+        self._orgs[organelle_id] = SimpleNamespace(
+            rank=rank, import_adapter_state=lambda *args, **kwargs: None
+        )
         return organelle_id
 
 
@@ -311,7 +319,9 @@ def test_trial_offspring_inherit_average_comms_traits():
         "org_a": {"roi": 0.4, "ema": 0.5},
         "org_b": {"roi": 0.5, "ema": 0.6},
     }
-    child_id = loop._create_trial_offspring(("math", "short"), "org_a", ["org_a", "org_b"], stats_map)
+    child_id = loop._create_trial_offspring(
+        ("math", "short"), "org_a", ["org_a", "org_b"], stats_map
+    )
     assert child_id is not None
     child = pop.population[child_id]
     assert abs(child.post_rate - 0.6) < 1e-6

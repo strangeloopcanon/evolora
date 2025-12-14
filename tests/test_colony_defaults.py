@@ -12,4 +12,3 @@ def test_colony_defaults_present():
     assert hasattr(t, "window_autotune") and isinstance(t.window_autotune, bool)
     assert hasattr(t, "min_window_min") and isinstance(t.min_window_min, int)
     assert hasattr(t, "min_window_max") and isinstance(t.min_window_max, int)
-

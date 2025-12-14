@@ -1,6 +1,6 @@
-from pathlib import Path
 import importlib
 import sys
+from pathlib import Path
 
 
 def test_evoscope_anim_without_imageio(tmp_path: Path) -> None:
@@ -30,4 +30,3 @@ def test_evoscope_anim_without_imageio(tmp_path: Path) -> None:
         mod.main()
     finally:
         sys.argv = argv
-

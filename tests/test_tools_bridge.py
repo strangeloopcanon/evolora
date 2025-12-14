@@ -1,4 +1,4 @@
-from symbiont_ecology.environment.bridge import ToolRegistry, EchoTool, CalculatorTool
+from symbiont_ecology.environment.bridge import CalculatorTool, EchoTool, ToolRegistry
 
 
 def test_tool_registry_and_tools():
@@ -7,7 +7,6 @@ def test_tool_registry_and_tools():
     assert reg.call("calc", expression="1+2*3") == "7"
     try:
         reg.call("missing")
-        assert False, "expected KeyError"
+        raise AssertionError("expected KeyError")
     except KeyError:
         pass
-

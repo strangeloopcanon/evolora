@@ -3,8 +3,8 @@ from __future__ import annotations
 from statistics import mean
 
 from symbiont_ecology import (
-    ATPLedger,
     AssimilationTester,
+    ATPLedger,
     BanditRouter,
     EcologyConfig,
     HostKernel,

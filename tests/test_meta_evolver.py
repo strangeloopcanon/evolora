@@ -1,4 +1,4 @@
-from symbiont_ecology import ATPLedger, BanditRouter, EcologyConfig, HostKernel
+from symbiont_ecology import EcologyConfig
 from symbiont_ecology.environment.grid import GridEnvironment
 from symbiont_ecology.evolution.assimilation import AssimilationTester
 from symbiont_ecology.evolution.meta import MetaEvolver
@@ -55,13 +55,9 @@ def test_meta_evolver_catastrophe() -> None:
         safety_budget=0,
     )
     evolver = MetaEvolver(config=config, environment=environment, assimilation=assimilator)
-    baseline = {
-        key: state.difficulty for key, state in environment.controller.cells.items()
-    }
+    baseline = {key: state.difficulty for key, state in environment.controller.cells.items()}
     info = evolver.step(generation=2, avg_roi=0.1)
     if config.meta.catastrophe_interval:
         assert info.get("catastrophe") is True
-    post = {
-        key: state.difficulty for key, state in environment.controller.cells.items()
-    }
+    post = {key: state.difficulty for key, state in environment.controller.cells.items()}
     assert baseline != post

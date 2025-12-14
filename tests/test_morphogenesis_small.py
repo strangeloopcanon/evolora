@@ -1,5 +1,4 @@
 from symbiont_ecology.evolution.morphogenesis import MorphogenesisController
-from symbiont_ecology.config import EcologyConfig
 
 
 def test_tweak_gate_bias_direction():
@@ -14,4 +13,3 @@ def test_tweak_gate_bias_direction():
     assert dummy.gate_bias > 0
     MorphogenesisController._tweak_gate_bias(dummy, roi=0.5)
     assert dummy.gate_bias < 0.1  # moved down
-

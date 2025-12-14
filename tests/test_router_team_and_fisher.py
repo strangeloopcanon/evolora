@@ -36,6 +36,7 @@ def test_evaluate_team_holdout_roi_selects_best() -> None:
         population=SimpleNamespace(),
         assimilation=AssimilationTester(0.0, 0.5, 0),
     )
+
     # Fake tasks with ROI computed from answer length
     class T:
         price = 1.0
@@ -74,6 +75,7 @@ def test_fisher_weighting_adjusts_weights() -> None:
         population=SimpleNamespace(),
         assimilation=AssimilationTester(0.0, 0.5, 0),
     )
+
     # Create two fake organelles with different adapter norms
     class FakeAdapter:
         def __init__(self, scale: float):

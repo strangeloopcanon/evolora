@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-import time
+from pathlib import Path
 from typing import Optional
 
 import torch
+from safetensors.torch import load_file, save_file
 
 from symbiont_ecology.config import EcologyConfig, HebbianConfig
 from symbiont_ecology.evolution.ledger import ATPLedger
-from symbiont_ecology.host.gemma import GemmaBackbone
+from symbiont_ecology.host.backbone import HFBackbone
 from symbiont_ecology.interfaces.messages import MessageEnvelope, Observation, Plan
 from symbiont_ecology.metrics.telemetry import RewardBreakdown, RouteEvent
-from symbiont_ecology.organelles.base import Organelle, OrganelleContext
 from symbiont_ecology.organelles import peft_hebbian
+from symbiont_ecology.organelles.base import Organelle, OrganelleContext
 from symbiont_ecology.routing.router import BanditRouter
 from symbiont_ecology.utils.ids import short_uid
 from symbiont_ecology.utils.torch_utils import resolve_device
@@ -42,20 +44,28 @@ class HostStepResult:
     latency_ms: float
 
 
+@dataclass(frozen=True)
+class _SoupContribution:
+    alpha: float
+    tensor: torch.Tensor
+    role: int | None
+    noise: float
+
+
 @dataclass
 class HostKernel:
     config: EcologyConfig
     router: BanditRouter
     ledger: ATPLedger
     device: torch.device = field(init=False)
-    backbone: GemmaBackbone = field(init=False)
+    backbone: HFBackbone = field(init=False)
     organelles: dict[str, Organelle] = field(default_factory=dict)
     assimilation_state: dict[str, torch.Tensor] = field(default_factory=dict)
     assimilation_weights: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.device = resolve_device(self.config.host.device)
-        self.backbone = GemmaBackbone(self.config.host)
+        self.backbone = HFBackbone(self.config.host)
 
     def freeze_host(self) -> None:
         for parameter in self._iter_host_parameters():
@@ -79,7 +89,7 @@ class HostKernel:
             reward_baseline=0.0,
             traces=None,
         )
-        organelle_cls = getattr(peft_hebbian, "HebbianPEFTOrganelle")
+        organelle_cls = peft_hebbian.HebbianPEFTOrganelle
         organelle = organelle_cls(
             backbone=self.backbone,
             rank=min(rank, self.config.host.max_lora_rank),
@@ -118,7 +128,9 @@ class HostKernel:
             try:
                 mix = float(latent_mix) if latent_mix is not None else 0.5
                 mix = max(0.0, min(1.0, mix))
-                lp = torch.tensor(latent_prefix, device=self.device, dtype=latent.dtype).view_as(latent)
+                lp = torch.tensor(latent_prefix, device=self.device, dtype=latent.dtype).view_as(
+                    latent
+                )
                 latent = (1.0 - mix) * latent + mix * lp
             except Exception:
                 pass
@@ -222,7 +234,14 @@ class HostKernel:
         if not getattr(host_cfg, "recurrence_enabled", False):
             return 1
         intent_lower = intent.lower()
-        eval_markers = ("evaluation", "assimilation", "holdout", "team probe", "team holdout", "colony infer")
+        eval_markers = (
+            "evaluation",
+            "assimilation",
+            "holdout",
+            "team probe",
+            "team holdout",
+            "colony infer",
+        )
         if any(marker in intent_lower for marker in eval_markers):
             passes = getattr(host_cfg, "recurrence_eval_passes", 1)
         else:
@@ -242,11 +261,15 @@ class HostKernel:
         scratch = "\n".join([f"[Pass {i + 1}] {entry}" for i, entry in enumerate(history)])
         if template:
             try:
-                suffix = template.format(history=scratch, pass_idx=pass_idx, total_passes=total_passes)
+                suffix = template.format(
+                    history=scratch, pass_idx=pass_idx, total_passes=total_passes
+                )
             except Exception:
                 suffix = f"Previous passes:\n{scratch}\nRefine your answer (pass {pass_idx}/{total_passes})."
         else:
-            suffix = f"Previous passes:\n{scratch}\nRefine your answer (pass {pass_idx}/{total_passes})."
+            suffix = (
+                f"Previous passes:\n{scratch}\nRefine your answer (pass {pass_idx}/{total_passes})."
+            )
         return f"{base_prompt}\n\n{suffix}".strip()
 
     def _compute_energy_cost(self, prompt: str, organelle: Organelle) -> float:
@@ -263,14 +286,14 @@ class HostKernel:
         if tokenizer is None:
             return len(prompt.split())
         try:
-            return len(tokenizer(prompt)["input_ids"])  # type: ignore[index]
+            return len(tokenizer(prompt)["input_ids"])
         except Exception:
             return len(prompt.split())
 
     def _trainable_params(self, organelle: Organelle) -> int:
         if hasattr(organelle, "trainable_parameters"):
             try:
-                value = int(organelle.trainable_parameters())  # type: ignore[attr-defined]
+                value = int(organelle.trainable_parameters())
                 return max(value, 0)
             except Exception:
                 pass
@@ -285,7 +308,7 @@ class HostKernel:
     def _active_adapters(self, organelle: Organelle) -> dict[str, int]:
         if hasattr(organelle, "active_adapters"):
             try:
-                data = organelle.active_adapters()  # type: ignore[attr-defined]
+                data = organelle.active_adapters()
                 if isinstance(data, dict):
                     return data
             except Exception:
@@ -298,14 +321,14 @@ class HostKernel:
             return False
         if hasattr(organelle, "resize_rank"):
             try:
-                changed = bool(organelle.resize_rank(new_rank))  # type: ignore[attr-defined]
+                changed = bool(organelle.resize_rank(new_rank))
             except Exception:
                 return False
             if not changed:
                 return False
             if hasattr(organelle, "rank"):
                 try:
-                    organelle.rank = new_rank  # type: ignore[attr-defined]
+                    organelle.rank = new_rank
                 except Exception:
                     pass
             return True
@@ -324,7 +347,7 @@ class HostKernel:
     def estimate_trainable(self, organelle: Organelle, new_rank: int) -> int:
         if hasattr(organelle, "estimate_trainable"):
             try:
-                return int(organelle.estimate_trainable(new_rank))  # type: ignore[attr-defined]
+                return int(organelle.estimate_trainable(new_rank))
             except Exception:
                 pass
         current = max(self._trainable_params(organelle), 1)
@@ -375,7 +398,9 @@ class HostKernel:
                 self.assimilation_state[key] = torch.zeros_like(combined)
                 self.assimilation_weights[key] = 0.0
             self.assimilation_state[key].add_(combined)
-            self.assimilation_weights[key] = self.assimilation_weights.get(key, 0.0) + float(total_alpha_map.get(key, 0.0))
+            self.assimilation_weights[key] = self.assimilation_weights.get(key, 0.0) + float(
+                total_alpha_map.get(key, 0.0)
+            )
 
     def retire_organelle(self, organelle_id: str) -> None:
         self.organelles.pop(organelle_id, None)
@@ -396,31 +421,41 @@ class HostKernel:
 
         Returns a tuple of (state_dict, alpha_sum_per_key).
         """
-        contributions: dict[str, list[dict[str, object]]] = {}
+        contributions: dict[str, list[_SoupContribution]] = {}
+        normalized_roles: dict[str, int] | None = None
         if roles:
             # ensure only include roles for known members
-            roles = {str(k): int(v) for k, v in roles.items() if isinstance(v, int)}
+            normalized_roles = {str(k): int(v) for k, v in roles.items() if isinstance(v, int)}
         alpha_sum: dict[str, float] = {}
         for organelle_id, alpha in soup.items():
             organelle = self.organelles.get(organelle_id)
             if organelle is None:
                 continue
             snapshot = organelle.export_adapter_state()
-            meta = (mutation_meta or {}).get(organelle_id, {}) if mutation_meta else {}
+            meta: dict[str, object] = {}
+            if mutation_meta:
+                meta = mutation_meta.get(organelle_id, {})
+
+            dropout_raw = meta.get("dropout", [])
+            dropout_items = dropout_raw if isinstance(dropout_raw, list) else []
             dropout_patterns = {
-                str(item)
-                for item in meta.get("dropout", [])
-                if isinstance(item, str) and item
+                str(item) for item in dropout_items if isinstance(item, str) and item
             }
+
+            duplication_raw = meta.get("duplication", {})
+            duplication_items = duplication_raw if isinstance(duplication_raw, dict) else {}
             duplication_map = {
                 str(key): float(value)
-                for key, value in (meta.get("duplication", {}) or {}).items()
-                if isinstance(key, str)
+                for key, value in duplication_items.items()
+                if isinstance(key, str) and isinstance(value, (int, float))
             }
+
+            rank_noise_raw = meta.get("rank_noise", {})
+            rank_noise_items = rank_noise_raw if isinstance(rank_noise_raw, dict) else {}
             rank_noise_map = {
                 str(key): float(value)
-                for key, value in (meta.get("rank_noise", {}) or {}).items()
-                if isinstance(key, str)
+                for key, value in rank_noise_items.items()
+                if isinstance(key, str) and isinstance(value, (int, float))
             }
             for key, tensor in snapshot.items():
                 tensor_cpu = tensor.detach().cpu().clone()
@@ -431,20 +466,20 @@ class HostKernel:
                     if pattern in key:
                         scale += max(0.0, factor)
                 role_value = None
-                if roles and organelle_id in roles:
-                    role_value = roles[organelle_id]
+                if normalized_roles and organelle_id in normalized_roles:
+                    role_value = normalized_roles[organelle_id]
                 noise = 0.0
                 for pattern, delta in rank_noise_map.items():
                     if pattern in key:
                         noise += float(delta)
-                contribution = {
-                    "alpha": float(alpha) * scale,
-                    "tensor": tensor_cpu,
-                    "role": role_value,
-                    "noise": noise,
-                }
+                contribution = _SoupContribution(
+                    alpha=float(alpha) * scale,
+                    tensor=tensor_cpu,
+                    role=role_value,
+                    noise=noise,
+                )
                 contributions.setdefault(key, []).append(contribution)
-                alpha_sum[key] = alpha_sum.get(key, 0.0) + float(contribution["alpha"])
+                alpha_sum[key] = alpha_sum.get(key, 0.0) + contribution.alpha
             account = self.ledger.accounts.get(organelle_id)
             if account is not None:
                 self.ledger.charge(organelle_id, account.balance)
@@ -454,10 +489,10 @@ class HostKernel:
                 continue
             use_block = (
                 mode == "block"
-                and roles
-                and all(part.get("role") is not None for part in parts)
+                and normalized_roles is not None
+                and all(part.role is not None for part in parts)
             )
-            noise_total = sum(float(part.get("noise", 0.0)) for part in parts)
+            noise_total = sum(part.noise for part in parts)
             effective_rank = target_rank
             if noise_total:
                 effective_rank = int(round(target_rank + noise_total))
@@ -470,9 +505,11 @@ class HostKernel:
             else:
                 combined = None
                 for part in parts:
-                    alpha_val = float(part.get("alpha", 0.0))
-                    tensor = part["tensor"]
-                    combined = tensor * alpha_val if combined is None else combined + tensor * alpha_val
+                    alpha_val = part.alpha
+                    tensor = part.tensor
+                    combined = (
+                        tensor * alpha_val if combined is None else combined + tensor * alpha_val
+                    )
             if combined is None:
                 continue
             if combined.ndim == 2 and effective_rank > 0 and mode != "block":
@@ -486,23 +523,23 @@ class HostKernel:
         return soup_state, alpha_sum
 
     @staticmethod
-    def _combine_block_diagonal(parts: list[dict[str, object]], target_rank: int) -> torch.Tensor:
-        ordered = sorted(parts, key=lambda item: int(item.get("role", -1)))
+    def _combine_block_diagonal(parts: list[_SoupContribution], target_rank: int) -> torch.Tensor:
+        ordered = sorted(parts, key=lambda item: item.role if item.role is not None else -1)
         if not ordered:
             raise ValueError("No parts to combine")
-        base = ordered[0]["tensor"]
+        base = ordered[0].tensor
         if base.ndim != 2:
             raise ValueError("Block-diagonal merge expects 2D tensors")
         axis = 0 if base.shape[0] <= base.shape[1] else 1
         other_dim = base.shape[1 - axis]
         scaled: list[torch.Tensor] = []
         for part in ordered:
-            tensor = part["tensor"]
+            tensor = part.tensor
             if tensor.ndim != 2:
                 raise ValueError("Incompatible tensor rank for block merge")
             if tensor.shape[1 - axis] != other_dim:
                 raise ValueError("Mismatched dimensions for block merge")
-            alpha_val = float(part.get("alpha", 0.0))
+            alpha_val = part.alpha
             scaled.append(tensor * alpha_val)
         combined = torch.cat(scaled, dim=axis)
         if axis == 0:
@@ -518,38 +555,66 @@ class HostKernel:
         return self.organelles.get(organelle_id)
 
     # ------------------------------------------------------------------
-    def export_organelle_adapter(self, organelle_id: str, path: str | 'Path') -> None:
-        """Persist an organelle's adapter state to disk via torch.save.
+    def export_organelle_adapter(self, organelle_id: str, path: str | Path) -> None:
+        """Persist an organelle's adapter state to disk via safetensors.
 
         Creates parent directories as needed.
         """
-        import os
-        from pathlib import Path as _P
-        import torch as _t
         org = self.organelles.get(organelle_id)
         if org is None:
             raise KeyError(f"Unknown organelle {organelle_id}")
         state = org.export_adapter_state()
-        p = _P(path)
+        if not state:
+            raise ValueError(f"Organelle {organelle_id} exported an empty adapter state")
+        tensor_state: dict[str, torch.Tensor] = {}
+        for key, value in state.items():
+            if not isinstance(key, str):
+                raise TypeError("Adapter state keys must be strings")
+            if not isinstance(value, torch.Tensor):
+                raise TypeError("Adapter state values must be torch.Tensors")
+            tensor_state[key] = value.detach().cpu().contiguous()
+        p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        _t.save(state, p)
+        save_file(tensor_state, str(p))
 
-    def import_organelle_adapter(self, organelle_id: str, path: str | 'Path', alpha: float = 1.0) -> None:
+    def import_organelle_adapter(
+        self, organelle_id: str, path: str | Path, alpha: float = 1.0
+    ) -> None:
         """Load an adapter state from disk and import into the organelle.
 
         If the organelle does not implement import_adapter_state, this is a no-op.
         """
-        from pathlib import Path as _P
-        import torch as _t
         org = self.organelles.get(organelle_id)
         if org is None:
             raise KeyError(f"Unknown organelle {organelle_id}")
-        p = _P(path)
-        state = _t.load(p, map_location="cpu")
+        p = Path(path)
+        state = load_file(str(p))
         try:
-            org.import_adapter_state(state, alpha=alpha)  # type: ignore[attr-defined]
+            org.import_adapter_state(state, alpha=alpha)
         except Exception:
             pass
+
+    def load_organelle_adapter(self, organelle_id: str, path: str | Path) -> None:
+        """Load an adapter state from disk, preferring exact replacement.
+
+        Some organelles implement a dedicated `load_adapter_state(state)` which replaces
+        the current adapter weights. When unavailable, this falls back to
+        `import_adapter_state(state, alpha=1.0)`.
+        """
+        org = self.organelles.get(organelle_id)
+        if org is None:
+            raise KeyError(f"Unknown organelle {organelle_id}")
+        p = Path(path)
+        state = load_file(str(p))
+        loader = getattr(org, "load_adapter_state", None)
+        if callable(loader):
+            loader(state)
+            return
+        importer = getattr(org, "import_adapter_state", None)
+        if callable(importer):
+            importer(state, alpha=1.0)
+            return
+        raise AttributeError(f"Organelle {organelle_id} does not support adapter loading")
 
     # ------------------------------------------------------------------
     def _apply_assimilation_seed(self, organelle: Organelle) -> None:
@@ -566,7 +631,6 @@ class HostKernel:
             return
         except AttributeError:
             return
-
 
 
 __all__ = ["HostKernel", "HostStepResult", "RouteMetrics"]

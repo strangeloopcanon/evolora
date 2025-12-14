@@ -17,11 +17,13 @@ def test_policy_attempts_and_parsed_counters_increment() -> None:
     # Fake host returns a valid JSON policy
     ledger = ATPLedger()
     ledger.ensure_energy(oid, 1.0)
+
     def fake_step(prompt: str, intent: str, max_routes: int, allowed_organelle_ids: list[str]):  # type: ignore[override]
         answer = json.dumps({"budget_frac": 1.1})
         metrics = SimpleNamespace(tokens=16)
         envelope = SimpleNamespace(observation=SimpleNamespace(state={"answer": answer}))
         return SimpleNamespace(envelope=envelope, responses={oid: metrics})
+
     host = SimpleNamespace(step=fake_step, ledger=ledger)
 
     loop = EcologyLoop(

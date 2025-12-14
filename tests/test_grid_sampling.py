@@ -1,5 +1,5 @@
+from symbiont_ecology.config import CanaryConfig, ControllerConfig, GridConfig, PricingConfig
 from symbiont_ecology.environment.grid import GridEnvironment, GridTask
-from symbiont_ecology.config import GridConfig, ControllerConfig, PricingConfig, CanaryConfig
 
 
 def _env_for(families):
@@ -52,9 +52,11 @@ def test_canary_sampling_path():
     state = env.controller.get_state(cell)
     state.success_ema = 0.9
     env.controller.cells[cell] = state
+
     class _R:
         def random(self):
             return 0.0
+
     env.rng = _R()
     task = env.sample_task()
     assert isinstance(task, GridTask)

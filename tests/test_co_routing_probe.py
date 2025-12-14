@@ -12,6 +12,7 @@ def test_probe_co_routing_increments_counts():
         rng=__import__("random").Random(0),
         sample_task=lambda: SimpleNamespace(prompt="p"),
     )
+
     # Host that returns two route events with distinct organelles
     def step(prompt: str, intent: str, max_routes: int, allowed_organelle_ids):  # noqa: ARG002
         a, b = allowed_organelle_ids[:2]
@@ -33,6 +34,5 @@ def test_probe_co_routing_increments_counts():
     loop._probe_co_routing(["A", "B"])
     assert hasattr(loop, "_co_routing_counts")
     # Either (A,B) or (B,A) key should be counted as 1 or 2 depending on RNG
-    counts = getattr(loop, "_co_routing_counts")
+    counts = loop._co_routing_counts
     assert any(k[0] in ("A", "B") and k[1] in ("A", "B") for k in counts.keys())
-

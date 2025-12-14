@@ -14,7 +14,9 @@ def test_evoscope_anim_frames(tmp_path: Path) -> None:
             ]
         )
     )
-    import sys, types
+    import sys
+    import types
+
     sys.path.insert(0, str(run.parents[1] / "scripts"))
     # stub imageio so import works without external dep
     dummy = types.SimpleNamespace()

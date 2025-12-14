@@ -1,8 +1,8 @@
 import torch
 
 from symbiont_ecology import EcologyConfig
-from symbiont_ecology.host.kernel import HostKernel
 from symbiont_ecology.evolution.ledger import ATPLedger
+from symbiont_ecology.host.kernel import HostKernel
 from symbiont_ecology.routing.router import BanditRouter
 
 
@@ -31,4 +31,3 @@ def test_build_lora_soup_state_projects_rank():
         assert min(v.shape) >= 2  # projected rank at most 2 but dims unchanged
     # Alpha sum recorded
     assert alpha_sum["lora_A"] == 1.0
-

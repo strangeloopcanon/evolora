@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import random
 import textwrap
@@ -13,14 +12,19 @@ from typing import Dict, Optional, Tuple
 import torch
 
 from symbiont_ecology.config import EcologyConfig
-from symbiont_ecology.environment.human import HumanBandit, HumanFeedbackResult
+from symbiont_ecology.economics.api import compute_route_cost
+from symbiont_ecology.environment.colony_utils import colony_c2c_debit
 from symbiont_ecology.environment.grid import GridEnvironment, GridKey, GridTask
+from symbiont_ecology.environment.human import HumanBandit, HumanFeedbackResult
+from symbiont_ecology.environment.policy import parse_policy_json
+from symbiont_ecology.environment.stats import compute_mean_ci, power_proxy, team_accept
+from symbiont_ecology.environment.telemetry_utils import sanitize_telemetry
+from symbiont_ecology.evaluation import EvaluationManager
+from symbiont_ecology.evaluation.manager import EvaluationTask
 from symbiont_ecology.evolution.assimilation import AssimilationTester
 from symbiont_ecology.evolution.meta import MetaEvolver
 from symbiont_ecology.evolution.morphogenesis import MorphogenesisController
 from symbiont_ecology.evolution.population import Genome, PopulationManager
-from symbiont_ecology.evaluation import EvaluationManager
-from symbiont_ecology.evaluation.manager import EvaluationTask
 from symbiont_ecology.host.kernel import HostKernel, RouteMetrics
 from symbiont_ecology.metrics.persistence import TelemetrySink
 from symbiont_ecology.metrics.telemetry import AssimilationEvent, EpisodeLog, RewardBreakdown
@@ -68,7 +72,9 @@ class EnergyGuardBandit:
         best_score = float("-inf")
         for idx, arm in enumerate(self.arms):
             avg = arm.reward / arm.pulls if arm.pulls > 0 else 0.0
-            bonus = math.sqrt(2.0 * math.log(total + 1) / arm.pulls) if arm.pulls > 0 else float("inf")
+            bonus = (
+                math.sqrt(2.0 * math.log(total + 1) / arm.pulls) if arm.pulls > 0 else float("inf")
+            )
             score = avg + bonus
             if score > best_score:
                 best_score = score
@@ -99,17 +105,31 @@ class EcologyLoop:
     _diversity_snapshot: dict[str, float] | None = field(default=None, init=False, repr=False)
     no_merge_counter: int = 0
     assim_fail_streak: int = 0
-    assim_gating_samples: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
-    assim_attempt_samples: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    assim_gating_samples: list[dict[str, object]] = field(
+        default_factory=list, init=False, repr=False
+    )
+    assim_attempt_samples: list[dict[str, object]] = field(
+        default_factory=list, init=False, repr=False
+    )
     _pending_hints: dict[str, list[str]] = field(default_factory=dict, init=False, repr=False)
-    trial_offspring: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
+    trial_offspring: dict[str, dict[str, object]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     promotions_this_gen: int = 0
     trial_creations_this_gen: int = 0
-    _qd_archive: dict[tuple[str, str, int], dict[str, object]] = field(default_factory=dict, init=False, repr=False)
+    _qd_archive: dict[tuple[str, str, int], dict[str, object]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _synergy_window: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
-    _synergy_sustain: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
-    _team_probe_candidates_gen: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
-    _team_gate_samples: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _synergy_sustain: dict[tuple[str, str], int] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _team_probe_candidates_gen: list[dict[str, object]] = field(
+        default_factory=list, init=False, repr=False
+    )
+    _team_gate_samples: list[dict[str, object]] = field(
+        default_factory=list, init=False, repr=False
+    )
     _team_gate_counts_gen: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     colonies: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
     _lp_mix_history: list[float] = field(default_factory=list, init=False, repr=False)
@@ -120,21 +140,37 @@ class EcologyLoop:
     _roi_relief: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     _population_refresh_gen: dict[str, object] = field(default_factory=dict, init=False, repr=False)
     _topup_fail_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
-    _active_policies: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
+    _active_policies: dict[str, dict[str, object]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _assim_attempt_total: int = field(default=0, init=False, repr=False)
     _policy_cost_total: float = field(default=0.0, init=False, repr=False)
     _policy_attempts_gen: int = field(default=0, init=False, repr=False)
     _policy_parsed_gen: int = field(default=0, init=False, repr=False)
     _policy_fail_counts: int = field(default=0, init=False, repr=False)
-    _policy_failure_samples: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
-    _co_routing_counts: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
-    _reserve_state: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
-    _hazard_state: dict[str, dict[str, object]] = field(default_factory=dict, init=False, repr=False)
+    _policy_failure_samples: list[dict[str, str]] = field(
+        default_factory=list, init=False, repr=False
+    )
+    _co_routing_counts: dict[tuple[str, str], int] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _reserve_state: dict[str, dict[str, object]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _hazard_state: dict[str, dict[str, object]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _hazard_cooldown: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _survival_events: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
-    _comms_credit_queue: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
-    _comms_events_history: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
-    _knowledge_store: dict[str, list[dict[str, object]]] = field(default_factory=dict, init=False, repr=False)
+    _comms_credit_queue: list[dict[str, object]] = field(
+        default_factory=list, init=False, repr=False
+    )
+    _comms_events_history: list[dict[str, object]] = field(
+        default_factory=list, init=False, repr=False
+    )
+    _knowledge_store: dict[str, list[dict[str, object]]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _knowledge_stats_gen: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _budget_snapshot_gen: dict[str, object] | None = field(default=None, init=False, repr=False)
     _power_econ_stats: dict[str, float | int] = field(default_factory=dict, init=False, repr=False)
@@ -146,7 +182,9 @@ class EcologyLoop:
     _winter_pre_roi: float = field(default=0.0, init=False, repr=False)
     _winter_pre_assim_attempts: int = field(default=0, init=False, repr=False)
     _last_assim_attempts: int = field(default=0, init=False, repr=False)
-    _colony_events_archive: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)
+    _colony_events_archive: list[dict[str, object]] = field(
+        default_factory=list, init=False, repr=False
+    )
     _colony_selection_pool: dict[str, object] = field(
         default_factory=lambda: {"members": [], "pot": 0.0, "events": []},
         init=False,
@@ -158,15 +196,11 @@ class EcologyLoop:
 
     def __post_init__(self) -> None:
         if hasattr(self.environment, "message_board"):
-            setattr(
-                self.environment,
-                "comms_history_cap",
-                max(1, int(getattr(self.config.comms, "history_cap", 64))),
+            self.environment.comms_history_cap = max(
+                1, int(getattr(self.config.comms, "history_cap", 64))
             )
-            setattr(
-                self.environment,
-                "default_comm_priority",
-                float(getattr(self.config.comms, "default_priority", 0.0)),
+            self.environment.default_comm_priority = float(
+                getattr(self.config.comms, "default_priority", 0.0)
             )
         history_limit = getattr(self.config.assimilation_tuning, "assimilation_history_limit", None)
         if isinstance(history_limit, int) and history_limit > 0:
@@ -304,13 +338,17 @@ class EcologyLoop:
             hazard_scale = float(getattr(tune, "colony_hazard_bandwidth_scale", 0.3))
             post_cap_base = int(getattr(tune, "colony_post_cap", 2))
             read_cap_base = int(getattr(tune, "colony_read_cap", 3))
-            post_cap_hazard = int(getattr(tune, "colony_post_cap_hazard", max(0, post_cap_base // 2)))
+            post_cap_hazard = int(
+                getattr(tune, "colony_post_cap_hazard", max(0, post_cap_base // 2))
+            )
             if post_cap_hazard <= 0:
                 post_cap_hazard = max(0, min(post_cap_base, 1))
-            read_cap_hazard = int(getattr(tune, "colony_read_cap_hazard", max(0, read_cap_base // 2)))
+            read_cap_hazard = int(
+                getattr(tune, "colony_read_cap_hazard", max(0, read_cap_base // 2))
+            )
             if read_cap_hazard <= 0:
                 read_cap_hazard = max(0, min(read_cap_base, 1))
-            for cid, meta in self.colonies.items():
+            for _cid, meta in self.colonies.items():
                 members = [str(x) for x in meta.get("members", [])]
                 pot = max(0.0, float(meta.get("pot", 0.0)))
                 hazard_members = sum(
@@ -327,14 +365,22 @@ class EcologyLoop:
                 if reserve_active:
                     reserve_scale = float(getattr(tune, "colony_reserve_bandwidth_scale", 0.3))
                     bandwidth *= max(0.0, min(1.0, reserve_scale))
-                    posts_cap = min(posts_cap, int(getattr(tune, "colony_reserve_post_cap", posts_cap)))
-                    reads_cap = min(reads_cap, int(getattr(tune, "colony_reserve_read_cap", reads_cap)))
+                    posts_cap = min(
+                        posts_cap, int(getattr(tune, "colony_reserve_post_cap", posts_cap))
+                    )
+                    reads_cap = min(
+                        reads_cap, int(getattr(tune, "colony_reserve_read_cap", reads_cap))
+                    )
                 winter_mode = bool(meta.get("winter_mode"))
                 if winter_mode:
                     winter_scale = float(getattr(tune, "colony_winter_bandwidth_scale", 0.1))
                     bandwidth *= max(0.0, min(1.0, winter_scale))
-                    posts_cap = min(posts_cap, int(getattr(tune, "colony_winter_post_cap", posts_cap)))
-                    reads_cap = min(reads_cap, int(getattr(tune, "colony_winter_read_cap", reads_cap)))
+                    posts_cap = min(
+                        posts_cap, int(getattr(tune, "colony_winter_post_cap", posts_cap))
+                    )
+                    reads_cap = min(
+                        reads_cap, int(getattr(tune, "colony_winter_read_cap", reads_cap))
+                    )
                 tier = int(meta.get("tier", 0))
                 if tier > 0:
                     boost = float(getattr(tune, "colony_tier_bandwidth_boost", 0.0))
@@ -421,7 +467,9 @@ class EcologyLoop:
                 colony_reads_left = remaining_budget
                 if member_colony is not None:
                     _cid, _meta = member_colony
-                    colony_reads_left = min(colony_reads_left, int(_meta.get("reads_left", remaining_budget)))
+                    colony_reads_left = min(
+                        colony_reads_left, int(_meta.get("reads_left", remaining_budget))
+                    )
                 max_reads = min(colony_reads_left, max_attempts, remaining_budget)
                 if max_reads <= 0:
                     continue
@@ -449,7 +497,10 @@ class EcologyLoop:
                     colony_ok = True
                     if member_colony is not None:
                         _cid, _meta = member_colony
-                        colony_ok = float(_meta.get("bandwidth_left", 0.0)) >= read_cost and int(_meta.get("reads_left", 1)) > 0
+                        colony_ok = (
+                            float(_meta.get("bandwidth_left", 0.0)) >= read_cost
+                            and int(_meta.get("reads_left", 1)) > 0
+                        )
                     if bal < read_cost or not colony_ok:
                         continue
                     try:
@@ -458,14 +509,18 @@ class EcologyLoop:
                         continue
                     if member_colony is not None:
                         _cid, _meta = member_colony
-                        _meta["bandwidth_left"] = max(0.0, float(_meta.get("bandwidth_left", 0.0)) - read_cost)
+                        _meta["bandwidth_left"] = max(
+                            0.0, float(_meta.get("bandwidth_left", 0.0)) - read_cost
+                        )
                         _meta["reads_left"] = max(0, int(_meta.get("reads_left", 1)) - 1)
                     reads_used += 1
                     self._comms_stats_gen["reads"] = self._comms_stats_gen.get("reads", 0) + 1
                     poster = msg.get("organelle_id") if isinstance(msg, dict) else None
                     poster_id = str(poster) if isinstance(poster, str) else None
                     baseline = self._estimate_power(organelle_id)
-                    self._queue_comms_credit(poster_id, organelle_id, baseline, credit_frac * read_cost)
+                    self._queue_comms_credit(
+                        poster_id, organelle_id, baseline, credit_frac * read_cost
+                    )
                     self._log_comms_event(
                         "read",
                         reader=organelle_id,
@@ -538,7 +593,9 @@ class EcologyLoop:
                 task = self._sample_task_for_org(organelle_id, lp_mix_value)
                 # Optional team routing: pick a synergy pair and run team episode
                 if team_enabled and team_used < team_max and len(self.population.population) >= 2:
-                    pair = self._select_synergy_pair(fallback_organelle=organelle_id, excluded=used_pairs)
+                    pair = self._select_synergy_pair(
+                        fallback_organelle=organelle_id, excluded=used_pairs
+                    )
                     if pair is not None and pair not in used_pairs:
                         if self._run_team_episode(pair, task):
                             team_used += 1
@@ -561,7 +618,9 @@ class EcologyLoop:
                     latent_prefix = self._pending_latents[organelle_id].pop(0)
                 prompt_text, scaffold_applied = self._apply_prompt_scaffold(task, prompt_text)
                 if scaffold_applied:
-                    self._prompt_scaffold_counts[task.family] = self._prompt_scaffold_counts.get(task.family, 0) + 1
+                    self._prompt_scaffold_counts[task.family] = (
+                        self._prompt_scaffold_counts.get(task.family, 0) + 1
+                    )
                 result = self.host.step(
                     prompt=prompt_text,
                     intent="solve task",
@@ -599,7 +658,9 @@ class EcologyLoop:
                 self.population.record_score(organelle_id, reward.total, meta=meta)
                 self.population.record_energy(organelle_id, settlement["cost"])
                 self.population.record_roi(organelle_id, settlement["roi"])
-                self.population.record_adapter_usage(organelle_id, metrics.active_adapters, metrics.tokens)
+                self.population.record_adapter_usage(
+                    organelle_id, metrics.active_adapters, metrics.tokens
+                )
                 utilisation_snapshot = {
                     module: self.population.average_adapter_usage(organelle_id, module)
                     for module in metrics.active_adapters
@@ -618,7 +679,9 @@ class EcologyLoop:
                             if organelle_id in meta.get("members", []):
                                 member_colony_post = (cid, meta)
                                 break
-                    self._post_c2c_latent(organelle_id, latent, c2c_post_cost, c2c_ttl, member_colony_post)
+                    self._post_c2c_latent(
+                        organelle_id, latent, c2c_post_cost, c2c_ttl, member_colony_post
+                    )
             executed_budget[organelle_id] = allowed
         budget_meta["final"] = executed_budget
         budget_meta["final_total"] = int(sum(executed_budget.values()))
@@ -633,7 +696,9 @@ class EcologyLoop:
             rng = getattr(self.environment, "rng", None)
             if rng is None:
                 rng = random.Random(self.generation_index)
-            candidates = sorted(active, key=lambda oid: self.population.average_roi(oid, limit=5), reverse=True)
+            candidates = sorted(
+                active, key=lambda oid: self.population.average_roi(oid, limit=5), reverse=True
+            )
             for organelle_id in candidates:
                 if posts_used >= post_gen_cap:
                     break
@@ -654,7 +719,10 @@ class EcologyLoop:
                             break
                 if member_colony is not None:
                     _cid, _meta = member_colony
-                    colony_ok = float(_meta.get("bandwidth_left", 0.0)) >= post_cost and int(_meta.get("posts_left", 1)) > 0
+                    colony_ok = (
+                        float(_meta.get("bandwidth_left", 0.0)) >= post_cost
+                        and int(_meta.get("posts_left", 1)) > 0
+                    )
                 if not colony_ok:
                     continue
                 if self.host.ledger.energy_balance(organelle_id) < post_cost:
@@ -693,12 +761,16 @@ class EcologyLoop:
                     continue
                 if member_colony is not None:
                     _cid, _meta = member_colony
-                    _meta["bandwidth_left"] = max(0.0, float(_meta.get("bandwidth_left", 0.0)) - post_cost)
+                    _meta["bandwidth_left"] = max(
+                        0.0, float(_meta.get("bandwidth_left", 0.0)) - post_cost
+                    )
                     _meta["posts_left"] = max(0, int(_meta.get("posts_left", 1)) - 1)
                 posts_used += 1
                 self._comms_stats_gen["posts"] = self._comms_stats_gen.get("posts", 0) + 1
                 colony_id = member_colony[0] if member_colony is not None else None
-                self._log_comms_event("post", poster=organelle_id, colony=colony_id, topic=topic, priority=priority)
+                self._log_comms_event(
+                    "post", poster=organelle_id, colony=colony_id, topic=topic, priority=priority
+                )
         merges = self._attempt_assimilation(capped=self.config.evolution.max_merges_per_gen)
         # review trial offspring for potential promotion or cull
         self._review_trial_offspring()
@@ -779,25 +851,41 @@ class EcologyLoop:
                 self._promotions_ema = smoothed
                 err = target - smoothed
                 # Adjust team_holdout_margin and team_min_power gently
-                margin = float(getattr(self.config.assimilation_tuning, "team_holdout_margin", getattr(self.config.assimilation_tuning, "holdout_margin", 0.02)))
+                margin = float(
+                    getattr(
+                        self.config.assimilation_tuning,
+                        "team_holdout_margin",
+                        getattr(self.config.assimilation_tuning, "holdout_margin", 0.02),
+                    )
+                )
                 power = float(getattr(self.config.assimilation_tuning, "team_min_power", 0.2))
                 margin_min = float(getattr(self.config.assimilation_tuning, "team_margin_min", 0.0))
                 margin_max = float(getattr(self.config.assimilation_tuning, "team_margin_max", 0.1))
                 power_min = float(getattr(self.config.assimilation_tuning, "team_power_min", 0.05))
                 power_max = float(getattr(self.config.assimilation_tuning, "team_power_max", 0.5))
                 # If under target, reduce margin and power; if over, increase
-                margin = max(margin_min, min(margin_max, margin - step * (1.0 if err > 0 else -1.0)))
+                margin = max(
+                    margin_min, min(margin_max, margin - step * (1.0 if err > 0 else -1.0))
+                )
                 power = max(power_min, min(power_max, power - step * (1.0 if err > 0 else -1.0)))
                 # Write back
-                setattr(self.config.assimilation_tuning, "team_holdout_margin", margin)
-                setattr(self.config.assimilation_tuning, "team_min_power", power)
-                summary["promotion_controller"] = {"team_holdout_margin": round(margin, 4), "team_min_power": round(power, 4), "target": target, "observed": observed_raw, "observed_smooth": round(smoothed, 3)}
+                self.config.assimilation_tuning.team_holdout_margin = margin
+                self.config.assimilation_tuning.team_min_power = power
+                summary["promotion_controller"] = {
+                    "team_holdout_margin": round(margin, 4),
+                    "team_min_power": round(power, 4),
+                    "target": target,
+                    "observed": observed_raw,
+                    "observed_smooth": round(smoothed, 3),
+                }
         except Exception:
             pass
         # Top co-routing pairs this gen (best-effort)
         try:
             if self._co_routing_counts:
-                top_pairs = sorted(self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+                top_pairs = sorted(
+                    self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True
+                )[:5]
                 summary["co_routing_top"] = {f"{a}:{b}": int(c) for (a, b), c in top_pairs}
                 self._co_routing_counts = {}
         except Exception:
@@ -805,7 +893,9 @@ class EcologyLoop:
         # Learning progress snapshot per cell (for analyzer LP heatmaps)
         try:
             lp_map = {
-                f"{family}:{depth}": float(self.environment.controller.lp_progress.get((family, depth), 0.0))
+                f"{family}:{depth}": float(
+                    self.environment.controller.lp_progress.get((family, depth), 0.0)
+                )
                 for (family, depth) in self.environment.controller.cells.keys()
             }
             summary["lp_progress"] = lp_map
@@ -833,7 +923,9 @@ class EcologyLoop:
                 if budgets:
                     summary["policy_budget_frac_avg"] = float(sum(budgets) / max(1, len(budgets)))
                 if reserves:
-                    summary["policy_reserve_ratio_avg"] = float(sum(reserves) / max(1, len(reserves)))
+                    summary["policy_reserve_ratio_avg"] = float(
+                        sum(reserves) / max(1, len(reserves))
+                    )
                 if getattr(self, "_policy_cost_total", 0.0) > 0.0:
                     summary["policy_cost_total"] = float(self._policy_cost_total)
             summary["policy_attempts"] = int(self._policy_attempts_gen)
@@ -859,7 +951,7 @@ class EcologyLoop:
         except Exception:
             pass
         if hasattr(self, "assim_gating_counts"):
-            summary["assimilation_gating"] = getattr(self, "assim_gating_counts")
+            summary["assimilation_gating"] = self.assim_gating_counts
         samples = getattr(self, "assim_gating_samples_snapshot", None)
         if samples:
             summary["assimilation_gating_samples"] = samples
@@ -878,7 +970,11 @@ class EcologyLoop:
                 int(getattr(self.config.assimilation_tuning, "assimilation_history_summary", 6)),
             )
             history_snapshot: dict[str, list[dict[str, object]]] = {}
-            for (organelle_id, family, depth), records in self.population.assimilation_history.items():
+            for (
+                organelle_id,
+                family,
+                depth,
+            ), records in self.population.assimilation_history.items():
                 if not records:
                     continue
                 trimmed = records[-summary_limit:]
@@ -890,7 +986,9 @@ class EcologyLoop:
             organelle_id: float(self.population.average_roi(organelle_id, limit=5))
             for organelle_id in self.population.population
         }
-        if getattr(self.config, "foraging", None) and getattr(self.config.foraging, "enabled", False):
+        if getattr(self.config, "foraging", None) and getattr(
+            self.config.foraging, "enabled", False
+        ):
             top_k = int(getattr(self.config.foraging, "telemetry_top_k", 3))
             max_orgs = int(getattr(self.config.foraging, "telemetry_max_orgs", 10))
             ids_sorted = sorted(
@@ -913,7 +1011,8 @@ class EcologyLoop:
                 top_cells = self.population.top_cells(oid, limit=top_k)
                 if top_cells:
                     top_cells_snapshot[oid] = [
-                        {"family": fam, "depth": depth, "q": round(val, 4)} for fam, depth, val in top_cells
+                        {"family": fam, "depth": depth, "q": round(val, 4)}
+                        for fam, depth, val in top_cells
                     ]
             summary["foraging"] = {
                 "traits": trait_snapshot,
@@ -935,13 +1034,27 @@ class EcologyLoop:
                     "winter_mode": bool(meta.get("winter_mode", False)),
                     "hazard_z": float(meta.get("hazard_z", 0.0)),
                     "variance_guard": bool(meta.get("variance_guard", False)),
-                    "bandwidth_budget": float(meta.get("bandwidth_budget", meta.get("bandwidth_left", 0.0))),
+                    "bandwidth_budget": float(
+                        meta.get("bandwidth_budget", meta.get("bandwidth_left", 0.0))
+                    ),
                     "hazard_members": int(meta.get("hazard_members", 0)),
                     "bankrupt_violations": int(meta.get("bankrupt_violations", 0)),
                     "roi_mean": float(meta.get("roi_mean", 0.0)),
                     "fitness": float(meta.get("fitness", 0.0)),
-                    "tax_rate": float(meta.get("tax_rate", getattr(self.config.assimilation_tuning, "colony_tax_rate", 0.1))),
-                    "subsidy_frac": float(meta.get("subsidy_frac", getattr(self.config.assimilation_tuning, "colony_subsidy_fraction", 0.25))),
+                    "tax_rate": float(
+                        meta.get(
+                            "tax_rate",
+                            getattr(self.config.assimilation_tuning, "colony_tax_rate", 0.1),
+                        )
+                    ),
+                    "subsidy_frac": float(
+                        meta.get(
+                            "subsidy_frac",
+                            getattr(
+                                self.config.assimilation_tuning, "colony_subsidy_fraction", 0.25
+                            ),
+                        )
+                    ),
                     "events": list(meta.get("events", [])),
                     "tier": int(meta.get("tier", 0)),
                     "tier_cooldown": int(meta.get("tier_cooldown", 0)),
@@ -963,7 +1076,9 @@ class EcologyLoop:
             if tier_counts:
                 summary["colony_tier_counts"] = {str(k): v for k, v in sorted(tier_counts.items())}
                 total_colonies = sum(tier_counts.values())
-                tier_mean = sum(level * count for level, count in tier_counts.items()) / max(1, total_colonies)
+                tier_mean = sum(level * count for level, count in tier_counts.items()) / max(
+                    1, total_colonies
+                )
                 summary["colony_tier_mean"] = float(tier_mean)
         winter_block = {
             "active": bool(self._winter_active),
@@ -976,9 +1091,7 @@ class EcologyLoop:
         summary["winter"] = winter_block
         if getattr(self, "_team_probe_candidates_gen", None):
             summary["team_probe_candidates"] = [
-                {
-                    **{k: (list(v) if k == "pair" else v) for k, v in cand.items()}
-                }
+                {**{k: (list(v) if k == "pair" else v) for k, v in cand.items()}}
                 for cand in self._team_probe_candidates_gen
             ]
         stats = getattr(self, "_power_econ_stats", None)
@@ -1020,9 +1133,7 @@ class EcologyLoop:
             for organelle_id in self.population.population
         }
         summary["mean_energy_balance"] = (
-            float(
-                sum(summary["energy_balance"].values()) / max(len(summary["energy_balance"]), 1)
-            )
+            float(sum(summary["energy_balance"].values()) / max(len(summary["energy_balance"]), 1))
             if summary["energy_balance"]
             else 0.0
         )
@@ -1115,7 +1226,10 @@ class EcologyLoop:
             }
             if roi_snapshot:
                 summary["roi_relief_active"] = roi_snapshot
-        if self.evaluation_manager and self.generation_index % self.evaluation_manager.config.cadence == 0:
+        if (
+            self.evaluation_manager
+            and self.generation_index % self.evaluation_manager.config.cadence == 0
+        ):
             evaluation_result = self.evaluation_manager.evaluate(self.host, self.environment)
             summary["evaluation"] = evaluation_result
             summary["evaluation"]["reward_weight"] = self.evaluation_manager.config.reward_weight
@@ -1191,14 +1305,7 @@ class EcologyLoop:
             price_multiplier = min(max(1.0, premium_cap), price_multiplier)
         config = self.config.energy
         revenue = price * reward.total
-        cost = (
-            config.alpha * metrics.flops_estimate
-            + config.beta * metrics.memory_gb
-            + config.gamma * metrics.latency_ms
-            + config.lambda_p * metrics.trainable_params
-        )
-        cost *= price_multiplier
-        cost *= max(0.0, min(self.config.energy.cost_scale, 1.0))
+        cost = compute_route_cost(config, metrics, price_multiplier=price_multiplier).total_cost
         roi = revenue / max(cost, 1e-6) if cost > 0 else (float("inf") if revenue > 0 else 0.0)
         if not math.isfinite(roi):
             roi = 0.0
@@ -1212,7 +1319,9 @@ class EcologyLoop:
         if stats is not None:
             stats["episodes"] = int(stats.get("episodes", 0)) + 1
             stats["power_sum"] = float(stats.get("power_sum", 0.0)) + power_need
-            stats["price_multiplier_sum"] = float(stats.get("price_multiplier_sum", 0.0)) + price_multiplier
+            stats["price_multiplier_sum"] = (
+                float(stats.get("price_multiplier_sum", 0.0)) + price_multiplier
+            )
         settlement = {
             "energy_before": energy_before,
             "energy_after": energy_after,
@@ -1261,7 +1370,9 @@ class EcologyLoop:
         meta["_pot_earn_gen"] = float(meta.get("_pot_earn_gen", 0.0)) + tax
         settlement["energy_after"] = float(self.host.ledger.energy_balance(organelle_id))
         settlement["colony_tax"] = tax
-        self._log_colony_event(meta, self.generation_index, "tax", member=organelle_id, amount=float(tax), colony=cid)
+        self._log_colony_event(
+            meta, self.generation_index, "tax", member=organelle_id, amount=float(tax), colony=cid
+        )
 
     def _record_episode(
         self,
@@ -1308,7 +1419,9 @@ class EcologyLoop:
             },
         )
         self.logs.append(episode)
-        if getattr(self.config, "foraging", None) and getattr(self.config.foraging, "enabled", False):
+        if getattr(self.config, "foraging", None) and getattr(
+            self.config.foraging, "enabled", False
+        ):
             genome = self.population.population.get(organelle_id)
             decay = float(getattr(self.config.foraging, "q_decay_default", 0.3))
             if genome is not None and math.isfinite(getattr(genome, "q_decay", decay)):
@@ -1351,7 +1464,9 @@ class EcologyLoop:
         excluded = excluded or set()
         try:
             if hasattr(self, "_co_routing_counts") and self._co_routing_counts:
-                pairs_sorted = sorted(self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True)
+                pairs_sorted = sorted(
+                    self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True
+                )
                 for (a, b), _c in pairs_sorted:
                     pair = (min(a, b), max(a, b))
                     if pair in excluded:
@@ -1362,7 +1477,10 @@ class EcologyLoop:
             pass
         # Fallback by ROI
         try:
-            scored = [(oid, float(self.population.average_roi(oid, limit=5))) for oid in self.population.population.keys()]
+            scored = [
+                (oid, float(self.population.average_roi(oid, limit=5)))
+                for oid in self.population.population.keys()
+            ]
             scored.sort(key=lambda x: x[1], reverse=True)
             top = [oid for oid, _ in scored[: min(6, len(scored))]]
             if fallback_organelle and fallback_organelle in top and len(top) >= 2:
@@ -1410,11 +1528,19 @@ class EcologyLoop:
             settlement = self._settle_episode(oid, task, reward, metrics)
             results.append((oid, metrics, success, reward, settlement))
             # record episode per member
-            adapter_utilisation = {k: float(v) for k, v in metrics.active_adapters.items()} if isinstance(metrics.active_adapters, dict) else {}
-            self._record_episode(task, oid, reward, metrics, settlement, success, adapter_utilisation)
+            adapter_utilisation = (
+                {k: float(v) for k, v in metrics.active_adapters.items()}
+                if isinstance(metrics.active_adapters, dict)
+                else {}
+            )
+            self._record_episode(
+                task, oid, reward, metrics, settlement, success, adapter_utilisation
+            )
             # C2C: post latent capsule from this team step
             try:
-                if bool(getattr(self.config.comms, "c2c_enabled", False)):  # pragma: no cover - integration exercised in long runs
+                if bool(
+                    getattr(self.config.comms, "c2c_enabled", False)
+                ):  # pragma: no cover - integration exercised in long runs
                     ttl = int(getattr(self.config.comms, "c2c_ttl", 5))
                     cost = float(getattr(self.config.comms, "c2c_post_cost", 0.1))
                     latent = result.envelope.observation.state.get("latent")
@@ -1431,7 +1557,10 @@ class EcologyLoop:
             return False
         # Optional: single handoff (solver→checker)
         try:
-            if bool(getattr(self.config.assimilation_tuning, "team_handoff_enabled", False)) and len(results) == 2:
+            if (
+                bool(getattr(self.config.assimilation_tuning, "team_handoff_enabled", False))
+                and len(results) == 2
+            ):
                 # Cap and cost
                 cap = int(getattr(self.config.assimilation_tuning, "team_handoff_cap_per_gen", 4))
                 cost = float(getattr(self.config.assimilation_tuning, "team_handoff_cost", 0.05))
@@ -1449,16 +1578,19 @@ class EcologyLoop:
                         "Partner answer:\n{answer}\nRespond with a critique and improved answer that differs.",
                     )
                 )
-                handoff_prompt = (
-                    f"{prompt_template.format(answer=winner_answer)}\n\nTask:\n{task.prompt}".strip()
-                )
+                handoff_prompt = f"{prompt_template.format(answer=winner_answer)}\n\nTask:\n{task.prompt}".strip()
                 # charge small energy to checker if possible
                 try:
                     if self.host.ledger.energy_balance(checker_id) >= cost:
                         self.host.ledger.consume_energy(checker_id, cost)
                 except Exception:
                     pass
-                result_rev = self.host.step(prompt=handoff_prompt, intent="team handoff", max_routes=1, allowed_organelle_ids=[checker_id])
+                result_rev = self.host.step(
+                    prompt=handoff_prompt,
+                    intent="team handoff",
+                    max_routes=1,
+                    allowed_organelle_ids=[checker_id],
+                )
                 m_rev = result_rev.responses.get(checker_id)
                 if m_rev is not None:
                     success_rev, reward_rev = task.evaluate(m_rev.answer)
@@ -1480,12 +1612,19 @@ class EcologyLoop:
         if best is not None and bool(best[2]):
             try:
                 hint = "Team tip: cross-check units and counts."
-                self.environment.post_message(best[0], hint, cost=float(getattr(self.config.comms, "post_cost", 0.2)), ttl=int(getattr(self.config.comms, "ttl", 10)))
+                self.environment.post_message(
+                    best[0],
+                    hint,
+                    cost=float(getattr(self.config.comms, "post_cost", 0.2)),
+                    ttl=int(getattr(self.config.comms, "ttl", 10)),
+                )
             except Exception:
                 pass
         return True
 
-    def _curriculum_allowed_cells(self) -> list[GridKey] | None:  # pragma: no cover - exercised indirectly in long runs
+    def _curriculum_allowed_cells(
+        self,
+    ) -> list[GridKey] | None:  # pragma: no cover - exercised indirectly in long runs
         cfg = getattr(self.config, "curriculum", None)
         if cfg is None:
             return None
@@ -1508,7 +1647,9 @@ class EcologyLoop:
                 allowed.append(cell)
         return allowed or None
 
-    def _sample_cell_with_curriculum(self, lp_mix: float) -> GridKey:  # pragma: no cover - randomness hinders determinism
+    def _sample_cell_with_curriculum(
+        self, lp_mix: float
+    ) -> GridKey:  # pragma: no cover - randomness hinders determinism
         allowed = self._curriculum_allowed_cells()
         controller = self.environment.controller
         if not allowed:
@@ -1524,7 +1665,10 @@ class EcologyLoop:
         try:
             cell = self._sample_cell_with_curriculum(lp_mix)
             state = self.environment.controller.get_state(cell)
-            use_canary = state.success_ema > self.environment.canary_q_min and self.environment.rng.random() < 0.1
+            use_canary = (
+                state.success_ema > self.environment.canary_q_min
+                and self.environment.rng.random() < 0.1
+            )
             return self.environment.sample_task_from_cell(cell, canary=use_canary)
         except Exception:
             return self.environment.sample_task()
@@ -1544,7 +1688,11 @@ class EcologyLoop:
         q_map = self.population.cell_values.get(organelle_id, {})
         counts = self.population.cell_counts.get(organelle_id, {})
         q_init = float(getattr(forage_cfg, "q_init", 0.0)) if forage_cfg else 0.0
-        beta = genome.beta_exploit if genome is not None else (forage_cfg.beta_default if forage_cfg else 1.5)
+        beta = (
+            genome.beta_exploit
+            if genome is not None
+            else (forage_cfg.beta_default if forage_cfg else 1.5)
+        )
         if not math.isfinite(beta) or beta <= 0.0:
             beta = forage_cfg.beta_default if forage_cfg else 1.5
         total_visits = sum(counts.values()) + len(cells)
@@ -1583,7 +1731,9 @@ class EcologyLoop:
         return choice
 
     def _sample_task_with_policy(self, lp_mix: float, organelle_id: str) -> GridTask:
-        if getattr(self.config, "foraging", None) and getattr(self.config.foraging, "enabled", False):
+        if getattr(self.config, "foraging", None) and getattr(
+            self.config.foraging, "enabled", False
+        ):
             rng = getattr(self.environment, "rng", random)
             if lp_mix > 0.0 and rng.random() < lp_mix:
                 cell = self._sample_cell_with_curriculum(lp_mix)
@@ -1608,118 +1758,11 @@ class EcologyLoop:
 
     @staticmethod
     def _parse_policy_json(text: str, allowed: list[str]) -> dict[str, object]:
-        """Extract a tiny policy payload.
+        return parse_policy_json(text=text, allowed=allowed)
 
-        Strategy (best-effort, no heavy deps):
-        1) Prefer fenced ```json blocks; else any fenced block; else the outermost {...} span.
-        2) Try strict json.loads; on failure, apply light repairs (strip fences, drop trailing commas,
-           normalize Python literals, convert single quotes).
-        3) If JSON parsing fails, fall back to `key=value` pairs and coerce numbers/bools.
-        4) Return only keys in `allowed`.
-        """
-        import json as _json
-        import re as _re
-
-        def _find_fenced(block: str) -> list[str]:
-            candidates: list[str] = []
-            # ```json ... ``` preferred
-            for m in _re.finditer(r"```json\s*([\s\S]*?)\s*```", block, _re.IGNORECASE):
-                candidates.append(m.group(1))
-            # any ``` ... ```
-            for m in _re.finditer(r"```\s*([\s\S]*?)\s*```", block):
-                candidates.append(m.group(1))
-            return candidates
-
-        def _outer_object(block: str) -> str | None:
-            start = block.find("{")
-            if start == -1:
-                return None
-            depth = 0
-            for i in range(start, len(block)):
-                ch = block[i]
-                if ch == '{':
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0:
-                        return block[start : i + 1]
-            return None
-
-        def _repair(s: str) -> str:
-            # strip code fences accidentally included
-            s = s.strip().strip('`')
-            # normalize common Python literals to JSON
-            s = _re.sub(r"\bTrue\b", "true", s)
-            s = _re.sub(r"\bFalse\b", "false", s)
-            s = _re.sub(r"\bNone\b", "null", s)
-            # remove trailing commas before closing } or ]
-            s = _re.sub(r",\s*([}\]])", r"\1", s)
-            # single-quoted keys -> double quotes
-            s = _re.sub(r"([{,]\s*)'([^'\s]+)'\s*:", r'\1"\2":', s)
-            # single-quoted string values -> double quotes (conservative, no nested quotes)
-            s = _re.sub(r":\s*'([^']*)'\s*([,}])", r': "\1"\2', s)
-            return s
-
-        def _try_load(s: str) -> dict[str, object] | None:
-            try:
-                data = _json.loads(s)
-            except Exception:
-                try:
-                    data = _json.loads(_repair(s))
-                except Exception:
-                    return None
-            if not isinstance(data, dict):
-                return None
-            return {k: v for k, v in data.items() if k in allowed}
-
-        def _coerce_value(token: str) -> object:
-            raw = token.strip()
-            percent = raw.endswith("%")
-            if percent:
-                raw = raw[:-1].strip()
-            lower = raw.lower()
-            if lower in {"true", "false"}:
-                return lower == "true"
-            if lower == "null":
-                return None
-            if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
-                raw = raw[1:-1]
-            try:
-                if "." in raw or "e" in lower:
-                    value = float(raw)
-                else:
-                    value = float(int(raw))
-                if percent:
-                    value = value / 100.0
-                return value
-            except Exception:
-                return raw
-
-        def _parse_kv_pairs(block: str) -> dict[str, object]:
-            kvs: dict[str, object] = {}
-            equals_matches = _re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*([^\s;,]+)", block)
-            colon_matches = _re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*([^\s;,{}]+)", block)
-            for key, value in equals_matches + colon_matches:
-                if allowed and key not in allowed:
-                    continue
-                kvs.setdefault(key, _coerce_value(value))
-            return kvs
-
-        candidates = _find_fenced(text)
-        outer = _outer_object(text)
-        if outer:
-            candidates.append(outer)
-        candidates.append(text)
-        for cand in candidates:
-            parsed = _try_load(cand)
-            if parsed:
-                return parsed
-        kvs = _parse_kv_pairs(text)
-        if kvs:
-            return kvs
-        return {}
-
-    def run_colony_inference(self, member_ids: list[str], prompt: str, strategy: str = "best_of_two") -> dict[str, object]:
+    def run_colony_inference(
+        self, member_ids: list[str], prompt: str, strategy: str = "best_of_two"
+    ) -> dict[str, object]:
         """Run an ad-hoc inference over a set of members and return the selected answer.
 
         - strategy="best_of_two" chooses the answer with the larger number of non-whitespace characters
@@ -1729,7 +1772,9 @@ class EcologyLoop:
         answers: dict[str, str] = {}
         tokens: dict[str, int] = {}
         for oid in member_ids:
-            result = self.host.step(prompt=prompt, intent="colony infer", max_routes=1, allowed_organelle_ids=[oid])
+            result = self.host.step(
+                prompt=prompt, intent="colony infer", max_routes=1, allowed_organelle_ids=[oid]
+            )
             metrics = result.responses.get(oid)
             ans = ""
             tok = 0
@@ -1740,11 +1785,18 @@ class EcologyLoop:
             tokens[oid] = tok
         selected_id = member_ids[0] if member_ids else ""
         if strategy == "best_of_two" and len(member_ids) >= 2:
+
             def _score(a: str) -> int:
                 return len(str(a).strip())
+
             selected_id = max(member_ids, key=lambda oid: _score(answers.get(oid, "")))
         selected_answer = answers.get(selected_id, "")
-        return {"selected_id": selected_id, "selected_answer": selected_answer, "answers": answers, "tokens": tokens}
+        return {
+            "selected_id": selected_id,
+            "selected_answer": selected_answer,
+            "answers": answers,
+            "tokens": tokens,
+        }
 
     def _probe_co_routing(self, active_ids: list[str]) -> None:
         """Run a few light routing probes to populate co‑routing counts per generation.
@@ -1806,7 +1858,9 @@ class EcologyLoop:
         threshold = max(0.0, 0.9 * aggregate)
         return recent >= threshold
 
-    def _compute_budget_map(self, active_ids: list[str], base_bs: int) -> tuple[dict[str, int], dict[str, object]]:
+    def _compute_budget_map(
+        self, active_ids: list[str], base_bs: int
+    ) -> tuple[dict[str, int], dict[str, object]]:
         env_cfg = self.config.environment
         if not getattr(env_cfg, "budget_enabled", True):
             budgets = {oid: max(0, base_bs) for oid in active_ids}
@@ -1816,9 +1870,15 @@ class EcologyLoop:
                 "per_org": {
                     oid: {
                         "energy": 0.0,
-                        "trait": float(getattr(self.population.population.get(oid, None), "explore_rate", 0.0))
-                        if oid in self.population.population
-                        else 0.0,
+                        "trait": (
+                            float(
+                                getattr(
+                                    self.population.population.get(oid, None), "explore_rate", 0.0
+                                )
+                            )
+                            if oid in self.population.population
+                            else 0.0
+                        ),
                         "policy": 1.0,
                         "raw": budgets[oid],
                     }
@@ -1855,7 +1915,11 @@ class EcologyLoop:
                 trait = 0.5
             trait_factor = max(0.1, 1.0 + trait_bonus * (trait - 0.5))
             policy_frac = 1.0
-            pol = self._active_policies.get(organelle_id) if hasattr(self, "_active_policies") else None
+            pol = (
+                self._active_policies.get(organelle_id)
+                if hasattr(self, "_active_policies")
+                else None
+            )
             if isinstance(pol, dict) and isinstance(pol.get("budget_frac"), (int, float)):
                 policy_frac = float(pol["budget_frac"])
             elif require_policy:
@@ -1928,7 +1992,11 @@ class EcologyLoop:
         return max(0, per_org)
 
     def _sample_task_for_org(self, organelle_id: str, lp_mix: float) -> GridTask:
-        task = self._sample_task_with_policy(lp_mix, organelle_id) if lp_mix > 0.0 else self.environment.sample_task()
+        task = (
+            self._sample_task_with_policy(lp_mix, organelle_id)
+            if lp_mix > 0.0
+            else self.environment.sample_task()
+        )
         cfg = getattr(self.config, "survival", None)
         if cfg is None or not cfg.enabled:
             return task
@@ -1960,7 +2028,11 @@ class EcologyLoop:
             return task
 
     def _log_survival_event(self, organelle_id: str, event_type: str, **payload: object) -> None:
-        entry: dict[str, object] = {"gen": self.generation_index, "org": organelle_id, "type": event_type}
+        entry: dict[str, object] = {
+            "gen": self.generation_index,
+            "org": organelle_id,
+            "type": event_type,
+        }
         entry.update(payload)
         self._survival_events.append(entry)
         if len(self._survival_events) > 200:
@@ -1977,7 +2049,9 @@ class EcologyLoop:
         for organelle_id in organelle_ids:
             balance = float(self.host.ledger.energy_balance(organelle_id))
             avg_cost = float(self.population.average_energy(organelle_id, limit=reserve_window))
-            reserve_threshold = max(ticket * float(cfg.reserve_ratio), float(cfg.reserve_cost_beta) * max(avg_cost, 0.0))
+            reserve_threshold = max(
+                ticket * float(cfg.reserve_ratio), float(cfg.reserve_cost_beta) * max(avg_cost, 0.0)
+            )
             prev_reserve = self._reserve_state.get(organelle_id, {})
             was_reserve = bool(prev_reserve.get("active"))
             reserve_active = reserve_threshold > 0.0 and balance < reserve_threshold
@@ -1987,9 +2061,13 @@ class EcologyLoop:
                 "balance": balance,
             }
             if reserve_active and not was_reserve:
-                self._log_survival_event(organelle_id, "reserve_enter", balance=balance, threshold=reserve_threshold)
+                self._log_survival_event(
+                    organelle_id, "reserve_enter", balance=balance, threshold=reserve_threshold
+                )
             elif was_reserve and not reserve_active:
-                self._log_survival_event(organelle_id, "reserve_exit", balance=balance, threshold=reserve_threshold)
+                self._log_survival_event(
+                    organelle_id, "reserve_exit", balance=balance, threshold=reserve_threshold
+                )
 
             roi_vals = self.population.roi.get(organelle_id, [])[-hazard_window:]
             z_score = 0.0
@@ -2022,10 +2100,14 @@ class EcologyLoop:
                 if down > 0:
                     try:
                         organelle = self.host.get_organelle(organelle_id)
-                        current_rank = getattr(organelle, "rank", None) if organelle is not None else None
+                        current_rank = (
+                            getattr(organelle, "rank", None) if organelle is not None else None
+                        )
                         if isinstance(current_rank, int) and current_rank > 1:
                             target_rank = max(1, current_rank - down)
-                            if target_rank < current_rank and self.host.resize_organelle_rank(organelle_id, target_rank):
+                            if target_rank < current_rank and self.host.resize_organelle_rank(
+                                organelle_id, target_rank
+                            ):
                                 genome = self.population.population.get(organelle_id)
                                 if genome is not None:
                                     genome.rank = target_rank
@@ -2095,32 +2177,23 @@ class EcologyLoop:
             "hazard_active_count": len(hazard_active),
             "price_bias_active_count": len(bias_active),
             "price_bias_active_ids": bias_active,
-            "reserve_thresholds": {oid: float(info.get("threshold", 0.0)) for oid, info in self._reserve_state.items()},
-            "hazard_zscores": {oid: float(info.get("z", 0.0)) for oid, info in self._hazard_state.items()},
+            "reserve_thresholds": {
+                oid: float(info.get("threshold", 0.0)) for oid, info in self._reserve_state.items()
+            },
+            "hazard_zscores": {
+                oid: float(info.get("z", 0.0)) for oid, info in self._hazard_state.items()
+            },
         }
-        events = [event for event in self._survival_events if event.get("gen") == self.generation_index]
+        events = [
+            event for event in self._survival_events if event.get("gen") == self.generation_index
+        ]
         if events:
             snapshot["events"] = events
         return snapshot
 
     @staticmethod
     def _colony_c2c_debit(meta: dict[str, object], amount: float, counter_key: str) -> bool:
-        """Attempt to pay a C2C cost from colony pot & bandwidth.
-
-        Returns True when the debit succeeds and updates pot/bandwidth/counter.
-        """
-        try:
-            bandwidth = float(meta.get("c2c_bandwidth_left", meta.get("bandwidth_left", 0.0)))
-            counter = int(meta.get(counter_key, 0))
-            pot = float(meta.get("pot", 0.0))
-        except Exception:
-            return False
-        if bandwidth < amount or counter <= 0 or pot < amount:
-            return False
-        meta["pot"] = pot - amount
-        meta["c2c_bandwidth_left"] = max(0.0, bandwidth - amount)
-        meta[counter_key] = counter - 1
-        return True
+        return colony_c2c_debit(meta=meta, amount=amount, counter_key=counter_key)
 
     def _colony_expected_cost(self, members: list[str], window: int) -> float:
         total = 0.0
@@ -2137,7 +2210,9 @@ class EcologyLoop:
             total += avg_cost * window
         return total
 
-    def _colony_roi_series(self, members: list[str], window: int) -> tuple[list[float], list[float]]:
+    def _colony_roi_series(
+        self, members: list[str], window: int
+    ) -> tuple[list[float], list[float]]:
         history: list[float] = []
         latest: list[float] = []
         window = max(1, window)
@@ -2294,7 +2369,9 @@ class EcologyLoop:
         cap = cap_value if cap_value > 0 else None
         minted = self.population.grant_evidence(organelle_id, amount, cap=cap)
         if minted and self._power_econ_stats is not None:
-            self._power_econ_stats["tokens_minted"] = int(self._power_econ_stats.get("tokens_minted", 0)) + minted
+            self._power_econ_stats["tokens_minted"] = (
+                int(self._power_econ_stats.get("tokens_minted", 0)) + minted
+            )
         return minted
 
     def _build_comms_hint(self, organelle_id: str, cell_meta: tuple[str, str] | None) -> str:
@@ -2343,7 +2420,9 @@ class EcologyLoop:
             return f"focus={cell_meta[0]}:{cell_meta[1]}"
         return "share best cell and ROI once improved"
 
-    def _queue_comms_credit(self, poster: str | None, reader: str, baseline: float, credit_amount: float) -> None:
+    def _queue_comms_credit(
+        self, poster: str | None, reader: str, baseline: float, credit_amount: float
+    ) -> None:
         if not poster or poster == reader or credit_amount <= 0.0:
             return
         window = int(getattr(self.config.comms, "credit_power_window", 6))
@@ -2385,7 +2464,9 @@ class EcologyLoop:
                 try:
                     self.host.ledger.credit_energy(poster, credit_amount)
                     self._comms_stats_gen["credits"] = self._comms_stats_gen.get("credits", 0) + 1
-                    self._log_comms_event("credit", poster=poster, reader=reader, delta=delta, amount=credit_amount)
+                    self._log_comms_event(
+                        "credit", poster=poster, reader=reader, delta=delta, amount=credit_amount
+                    )
                 except Exception:
                     pass
                 continue
@@ -2465,16 +2546,20 @@ class EcologyLoop:
                 )
                 self._winter_pre_roi = 0.0
                 self._winter_pre_assim_attempts = 0
-                bonus = float(self.config.energy.m) * max(0.0, float(getattr(cfg, "post_winter_bonus", 0.0)))
+                bonus = float(self.config.energy.m) * max(
+                    0.0, float(getattr(cfg, "post_winter_bonus", 0.0))
+                )
                 if bonus > 0.0:
                     credited = self._apply_post_winter_bonus(bonus)
                     if credited:
-                        self._winter_events_gen.append({
-                            "gen": self.generation_index,
-                            "type": "winter_bonus",
-                            "credited": credited,
-                            "amount": bonus,
-                        })
+                        self._winter_events_gen.append(
+                            {
+                                "gen": self.generation_index,
+                                "type": "winter_bonus",
+                                "credited": credited,
+                                "amount": bonus,
+                            }
+                        )
                 self._winter_counter = 0
             return
 
@@ -2606,7 +2691,9 @@ class EcologyLoop:
             else:
                 self._knowledge_store.pop(organelle_id, None)
         if expired:
-            self._knowledge_stats_gen["expired"] = self._knowledge_stats_gen.get("expired", 0) + expired
+            self._knowledge_stats_gen["expired"] = (
+                self._knowledge_stats_gen.get("expired", 0) + expired
+            )
 
     def _prepare_knowledge_prompt(self, organelle_id: str, task: GridTask) -> str:
         if not self._knowledge_enabled():
@@ -2635,7 +2722,9 @@ class EcologyLoop:
             return ""
         read_cost = max(0.0, float(getattr(cfg, "read_cost", 0.0)))
         if read_cost > 0.0 and not self.host.ledger.consume_energy(organelle_id, read_cost):
-            self._knowledge_stats_gen["read_denied"] = self._knowledge_stats_gen.get("read_denied", 0) + 1
+            self._knowledge_stats_gen["read_denied"] = (
+                self._knowledge_stats_gen.get("read_denied", 0) + 1
+            )
             return ""
         max_items = max(1, int(getattr(cfg, "max_items", len(relevant))))
         snippet = "\n".join(f"- {relevant[idx]}" for idx in range(min(len(relevant), max_items)))
@@ -2643,7 +2732,9 @@ class EcologyLoop:
         self._knowledge_stats_gen["hits"] = self._knowledge_stats_gen.get("hits", 0) + 1
         return f"Memory cache for this cell:\n{snippet}"
 
-    def _record_knowledge_entry(self, organelle_id: str, task: GridTask, metrics: RouteMetrics) -> None:
+    def _record_knowledge_entry(
+        self, organelle_id: str, task: GridTask, metrics: RouteMetrics
+    ) -> None:
         if not self._knowledge_enabled():
             return
         answer = getattr(metrics, "answer", "")
@@ -2660,7 +2751,9 @@ class EcologyLoop:
         cfg = self._knowledge_cfg()
         write_cost = max(0.0, float(getattr(cfg, "write_cost", 0.0)))
         if write_cost > 0.0 and not self.host.ledger.consume_energy(organelle_id, write_cost):
-            self._knowledge_stats_gen["write_denied"] = self._knowledge_stats_gen.get("write_denied", 0) + 1
+            self._knowledge_stats_gen["write_denied"] = (
+                self._knowledge_stats_gen.get("write_denied", 0) + 1
+            )
             return
         updated = [{"cell": task.cell, "note": note, "gen": self.generation_index}]
         updated.extend(entry for entry in existing if entry.get("note") != note)
@@ -2670,7 +2763,9 @@ class EcologyLoop:
         self._knowledge_store[organelle_id] = updated
         self._knowledge_stats_gen["writes"] = self._knowledge_stats_gen.get("writes", 0) + 1
 
-    def _log_colony_event(self, meta: dict[str, object], generation: int, event_type: str, **payload: object) -> None:
+    def _log_colony_event(
+        self, meta: dict[str, object], generation: int, event_type: str, **payload: object
+    ) -> None:
         events = meta.setdefault("events", [])
         entry: dict[str, object] = {"gen": generation, "type": event_type}
         entry.update(payload)
@@ -2814,10 +2909,12 @@ class EcologyLoop:
         snippet = answer.strip().splitlines()
         preview = snippet[0] if snippet else ""
         preview = preview[:160]
-        self._policy_failure_samples.append({
-            "organelle_id": organelle_id,
-            "sample": preview,
-        })
+        self._policy_failure_samples.append(
+            {
+                "organelle_id": organelle_id,
+                "sample": preview,
+            }
+        )
         if len(self._policy_failure_samples) > 10:
             self._policy_failure_samples = self._policy_failure_samples[-10:]
 
@@ -2852,13 +2949,19 @@ class EcologyLoop:
             pol = self._active_policies.get(genome.organelle_id)
             if pol and isinstance(pol.get("reserve_ratio"), (int, float)):
                 rr = float(pol["reserve_ratio"]) if pol["reserve_ratio"] is not None else 0.0
-                rr = max(getattr(self.config.policy, "reserve_min", 0.0), min(getattr(self.config.policy, "reserve_max", 0.75), rr))
+                rr = max(
+                    getattr(self.config.policy, "reserve_min", 0.0),
+                    min(getattr(self.config.policy, "reserve_max", 0.75), rr),
+                )
                 reserve = rr * 4.0 * self.config.energy.m
                 if self.host.ledger.energy_balance(genome.organelle_id) < reserve:
                     self._record_assimilation_gate(
                         reason="reserve_active",
                         organelle_id=genome.organelle_id,
-                        details={"reserve": reserve, "balance": self.host.ledger.energy_balance(genome.organelle_id)},
+                        details={
+                            "reserve": reserve,
+                            "balance": self.host.ledger.energy_balance(genome.organelle_id),
+                        },
                     )
                     continue
             self._assim_attempt_total += 1
@@ -2919,7 +3022,11 @@ class EcologyLoop:
                 self._record_assimilation_gate(
                     reason="cautious_skip",
                     organelle_id=genome.organelle_id,
-                    details={"generation": self.generation_index, "z": hazard_state.get("z"), "roi": hazard_state.get("roi")},
+                    details={
+                        "generation": self.generation_index,
+                        "z": hazard_state.get("z"),
+                        "roi": hazard_state.get("roi"),
+                    },
                 )
                 self._log_survival_event(
                     genome.organelle_id,
@@ -2930,7 +3037,11 @@ class EcologyLoop:
                 )
                 continue
 
-            min_power_recovery = float(getattr(self.config.survival, "min_power_recovery", 0.0)) if getattr(self.config, "survival", None) else 0.0
+            min_power_recovery = (
+                float(getattr(self.config.survival, "min_power_recovery", 0.0))
+                if getattr(self.config, "survival", None)
+                else 0.0
+            )
             if cooldown > 0 and min_power_recovery > 0.0:
                 recent_roi = float(self.population.average_roi(genome.organelle_id, limit=5))
                 if recent_roi < min_power_recovery:
@@ -2938,7 +3049,11 @@ class EcologyLoop:
                     self._record_assimilation_gate(
                         reason="cautious_skip",
                         organelle_id=genome.organelle_id,
-                        details={"generation": self.generation_index, "cooldown": cooldown, "roi": recent_roi},
+                        details={
+                            "generation": self.generation_index,
+                            "cooldown": cooldown,
+                            "roi": recent_roi,
+                        },
                     )
                     self._log_survival_event(
                         genome.organelle_id,
@@ -2950,7 +3065,11 @@ class EcologyLoop:
                     continue
 
             threshold = self.config.evolution.assimilation_threshold
-            hazard_margin = getattr(self.config.survival, "hazard_holdout_margin", 0.0) if getattr(self.config, "survival", None) else 0.0
+            hazard_margin = (
+                getattr(self.config.survival, "hazard_holdout_margin", 0.0)
+                if getattr(self.config, "survival", None)
+                else 0.0
+            )
             if cooldown > 0 and hazard_margin:
                 threshold += float(hazard_margin)
 
@@ -2983,7 +3102,8 @@ class EcologyLoop:
                     organelle_id=genome.organelle_id,
                     details={
                         "generation": self.generation_index,
-                        "cooldown_remaining": per_cell_interval - (self.generation_index - last_attempt),
+                        "cooldown_remaining": per_cell_interval
+                        - (self.generation_index - last_attempt),
                     },
                 )
                 continue
@@ -3035,7 +3155,6 @@ class EcologyLoop:
             min_samples_required = self._min_samples_required(tuning)
             base_min = self._min_window_requirement(tuning)
             available = len(scores) - (len(scores) % 2)
-            tokens_available = self.population.evidence_tokens(genome.organelle_id)
             token_spent = False
             min_window = base_min if available < base_min else min(base_min, available)
             step = max(2, int(getattr(tuning, "window_step", 2)))
@@ -3110,7 +3229,9 @@ class EcologyLoop:
             except Exception:
                 min_power = 0.1
             try:
-                dr_min_power = float(getattr(self.config.assimilation_tuning, "dr_min_power", min_power))
+                dr_min_power = float(
+                    getattr(self.config.assimilation_tuning, "dr_min_power", min_power)
+                )
                 min_power = max(min_power, dr_min_power)
             except Exception:
                 pass
@@ -3135,7 +3256,9 @@ class EcologyLoop:
             try:
                 if bool(result.event.dr_used):
                     dr_sizes = result.event.dr_sample_sizes or {}
-                    min_stratum = int(getattr(self.config.assimilation_tuning, "dr_min_stratum_size", 2))
+                    min_stratum = int(
+                        getattr(self.config.assimilation_tuning, "dr_min_stratum_size", 2)
+                    )
                     contributing = 0
                     for _k, s in dr_sizes.items():
                         try:
@@ -3233,7 +3356,11 @@ class EcologyLoop:
                             pre_roi = None
                             if holdout_info:
                                 pre_roi = holdout_info.get("candidate_roi")
-                            audit_info = {"post_roi": float(post_roi), "pre_roi": float(pre_roi) if pre_roi is not None else None, "tasks": len(tasks)}
+                            audit_info = {
+                                "post_roi": float(post_roi),
+                                "pre_roi": float(pre_roi) if pre_roi is not None else None,
+                                "tasks": len(tasks),
+                            }
                         except Exception:
                             audit_info = {"post_roi": None, "pre_roi": None, "tasks": 0}
                     if audit_info is not None:
@@ -3241,7 +3368,9 @@ class EcologyLoop:
                         pre_roi_val = audit_info.get("pre_roi")
                         post_roi_val = audit_info.get("post_roi")
                         delta_val: float | None = None
-                        if isinstance(pre_roi_val, (int, float)) and isinstance(post_roi_val, (int, float)):
+                        if isinstance(pre_roi_val, (int, float)) and isinstance(
+                            post_roi_val, (int, float)
+                        ):
                             delta_val = float(post_roi_val) - float(pre_roi_val)
                         audit_info["delta"] = delta_val
                         audit_entry = {
@@ -3270,11 +3399,19 @@ class EcologyLoop:
                 attempt_detail["global_probe_passed"] = False
                 # Offspring merge path: allow energy-eligible trial child
                 mode = getattr(self.config.assimilation_tuning, "merge_mode", "strict")
-                enable_trials = bool(getattr(self.config.assimilation_tuning, "trial_offspring_enabled", False))
+                enable_trials = bool(
+                    getattr(self.config.assimilation_tuning, "trial_offspring_enabled", False)
+                )
                 cap = int(getattr(self.config.assimilation_tuning, "trial_per_gen_cap", 0))
-                if enable_trials and mode in {"offspring", "hybrid"} and self.trial_creations_this_gen < cap:
+                if (
+                    enable_trials
+                    and mode in {"offspring", "hybrid"}
+                    and self.trial_creations_this_gen < cap
+                ):
                     soup_ids, stats_map = self._select_soup_members(cell, genome.organelle_id)
-                    child_id = self._create_trial_offspring(cell, genome.organelle_id, soup_ids, stats_map)
+                    child_id = self._create_trial_offspring(
+                        cell, genome.organelle_id, soup_ids, stats_map
+                    )
                     if child_id:
                         self.trial_creations_this_gen += 1
                         attempt_detail["trial_offspring_created"] = child_id
@@ -3295,7 +3432,9 @@ class EcologyLoop:
                             a_series: list[float] = []
                             b_series: list[float] = []
                             for index, task in enumerate(tasks, start=1):
-                                grid_task = task.to_grid_task(self.environment, task_id=f"team_{index:04d}")
+                                grid_task = task.to_grid_task(
+                                    self.environment, task_id=f"team_{index:04d}"
+                                )
                                 best_roi = 0.0
                                 for oid in (genome.organelle_id, partner):
                                     result_i = self.host.step(
@@ -3315,8 +3454,16 @@ class EcologyLoop:
                                         + energy_cfg.gamma * metrics_i.latency_ms
                                         + energy_cfg.lambda_p * metrics_i.trainable_params
                                     )
-                                    roi_i = (float("inf") if revenue_i > 0 else 0.0) if cost_i <= 0.0 else (revenue_i / cost_i)
-                                    roi_i = 0.0 if not math.isfinite(roi_i) else float(max(0.0, min(roi_i, 10.0)))
+                                    roi_i = (
+                                        (float("inf") if revenue_i > 0 else 0.0)
+                                        if cost_i <= 0.0
+                                        else (revenue_i / cost_i)
+                                    )
+                                    roi_i = (
+                                        0.0
+                                        if not math.isfinite(roi_i)
+                                        else float(max(0.0, min(roi_i, 10.0)))
+                                    )
                                     if oid == genome.organelle_id:
                                         a_series.append(roi_i)
                                     else:
@@ -3330,7 +3477,9 @@ class EcologyLoop:
                             ci_low, ci_high, team_mu, team_se = self._compute_mean_ci(team_series)
                             margin = float(self.config.assimilation_tuning.holdout_margin)
                             min_power_tasks = 8
-                            accept = len(team_series) >= min_power_tasks and (ci_low > baseline + margin)
+                            accept = len(team_series) >= min_power_tasks and (
+                                ci_low > baseline + margin
+                            )
                             if accept:
                                 cid = f"col_{genome.organelle_id[:4]}_{partner[:4]}"
                                 meta = self.colonies.setdefault(
@@ -3369,7 +3518,9 @@ class EcologyLoop:
                 "uplift": float(result.event.uplift),
                 "p_value": float(result.event.p_value),
                 "passed": bool(decision_final),
-                "ema": float(self.environment.organism_stats.get(genome.organelle_id, {}).get(cell, 0.0)),
+                "ema": float(
+                    self.environment.organism_stats.get(genome.organelle_id, {}).get(cell, 0.0)
+                ),
                 "roi": float(self.population.average_roi(genome.organelle_id)),
                 "probes": probe_records,
                 "holdout": holdout_info,
@@ -3426,7 +3577,11 @@ class EcologyLoop:
     ) -> str | None:
         try:
             organelle = self.host.get_organelle(candidate_id)
-            target_rank = int(getattr(organelle, "rank", self.config.host.max_lora_rank)) if organelle is not None else self.config.host.max_lora_rank
+            target_rank = (
+                int(getattr(organelle, "rank", self.config.host.max_lora_rank))
+                if organelle is not None
+                else self.config.host.max_lora_rank
+            )
             target_rank = max(1, min(target_rank, self.config.host.max_lora_rank))
             # weights based on roi*ema, same as merge
             weights: list[float] = []
@@ -3475,7 +3630,9 @@ class EcologyLoop:
                 "parents": list(soup_ids),
                 "cell": {"family": cell[0], "depth": cell[1]},
                 "created_gen": self.generation_index,
-                "probation_left": int(getattr(self.config.assimilation_tuning, "trial_probation_gens", 5)),
+                "probation_left": int(
+                    getattr(self.config.assimilation_tuning, "trial_probation_gens", 5)
+                ),
                 "promoted": False,
             }
             return child_id
@@ -3521,8 +3678,11 @@ class EcologyLoop:
                 z = delta / max(se, 1e-12)
                 z_alpha = 1.64
                 from math import erf, sqrt
-                Phi = lambda x: 0.5 * (1.0 + erf(x / sqrt(2.0)))
-                power = max(0.0, min(1.0, 1.0 - float(Phi(z_alpha - z))))
+
+                def phi(x: float) -> float:
+                    return 0.5 * (1.0 + erf(x / sqrt(2.0)))
+
+                power = max(0.0, min(1.0, 1.0 - float(phi(z_alpha - z))))
             else:
                 mean_u = uplift
                 power = 0.0
@@ -3569,19 +3729,11 @@ class EcologyLoop:
 
     @staticmethod
     def _sanitize_telemetry(value: object) -> object:
-        if isinstance(value, float):
-            if math.isfinite(value):
-                return float(value)
-            return 0.0
-        if isinstance(value, (int, str, bool)) or value is None:
-            return value
-        if isinstance(value, dict):
-            return {key: EcologyLoop._sanitize_telemetry(val) for key, val in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [EcologyLoop._sanitize_telemetry(item) for item in value]
-        return str(value)
+        return sanitize_telemetry(value)
 
-    def _record_assimilation_gate(self, reason: str, organelle_id: str, details: dict[str, object]) -> None:
+    def _record_assimilation_gate(
+        self, reason: str, organelle_id: str, details: dict[str, object]
+    ) -> None:
         limit = max(1, int(getattr(self.config.assimilation_tuning, "gating_snapshot_limit", 48)))
         sample = {
             "generation": self.generation_index,
@@ -3652,15 +3804,21 @@ class EcologyLoop:
         if not getattr(self.config.qd, "enabled", False):
             return len(self._qd_archive)
         # cost bins as in _select_soup_members
-        energies = {oid: float(self.population.average_energy(oid)) for oid in self.population.population.keys()}
+        energies = {
+            oid: float(self.population.average_energy(oid))
+            for oid in self.population.population.keys()
+        }
         vals = sorted(v for v in energies.values() if math.isfinite(v))
         bins: list[float] = []
         if vals:
             try:
-                qs = quantiles(vals, n=max(2, getattr(self.config.qd, "cost_bins", 3)), method="inclusive")
+                qs = quantiles(
+                    vals, n=max(2, getattr(self.config.qd, "cost_bins", 3)), method="inclusive"
+                )
                 bins = [float(x) for x in qs]
             except Exception:
                 bins = [vals[len(vals) // 2]]
+
         def cost_bin(val: float) -> int:
             if not bins:
                 return 0
@@ -3668,6 +3826,7 @@ class EcologyLoop:
                 if val <= edge:
                     return i
             return len(bins)
+
         for oid in self.population.population.keys():
             best = self.environment.best_cell_score(oid)
             if not best:
@@ -3708,8 +3867,10 @@ class EcologyLoop:
         ids = list(self.population.population.keys())
         if len(ids) < 2:
             return
-        ranked = sorted(ids, key=lambda oid: self.population.average_roi(oid, limit=5), reverse=True)
-        pairs = [(ranked[i], ranked[i+1]) for i in range(0, min(len(ranked)-1, 3), 2)]
+        ranked = sorted(
+            ids, key=lambda oid: self.population.average_roi(oid, limit=5), reverse=True
+        )
+        pairs = [(ranked[i], ranked[i + 1]) for i in range(0, min(len(ranked) - 1, 3), 2)]
         tasks = self._sample_holdout_tasks()
         if not tasks:
             return
@@ -3789,14 +3950,21 @@ class EcologyLoop:
         recent = self._synergy_window[-(windows * 4) :]
         by_pair: dict[tuple[str, str], list[dict[str, object]]] = {}
         for rec in recent:
-            a = str(rec.get("a")); b = str(rec.get("b")); s = float(rec.get("synergy", 0.0))
+            a = str(rec.get("a"))
+            b = str(rec.get("b"))
             pair = (min(a, b), max(a, b))
             by_pair.setdefault(pair, []).append(rec)
-        variance_improve = float(getattr(self.config.assimilation_tuning, "colony_variance_improve", 0.2))
+        variance_improve = float(
+            getattr(self.config.assimilation_tuning, "colony_variance_improve", 0.2)
+        )
         margin = float(getattr(self.config.assimilation_tuning, "holdout_margin", 0.03))
-        review_interval = int(getattr(self.config.assimilation_tuning, "colony_review_interval", max(3, windows)))
+        review_interval = int(
+            getattr(self.config.assimilation_tuning, "colony_review_interval", max(3, windows))
+        )
         required_passes = int(getattr(self.config.assimilation_tuning, "colony_required_passes", 2))
-        expand_delta = float(getattr(self.config.assimilation_tuning, "colony_expand_delta", margin))
+        expand_delta = float(
+            getattr(self.config.assimilation_tuning, "colony_expand_delta", margin)
+        )
         for (a, b), records in by_pair.items():
             if len(records) < windows:
                 continue
@@ -3822,11 +3990,13 @@ class EcologyLoop:
             if cid in self.colonies:
                 continue
             colony_meta = self._create_colony_meta(cid, [a, b])
-            colony_meta.update({
-                "last_delta": mean_s,
-                "margin": margin,
-                "last_variance_ratio": float(window_records[-1].get("variance_ratio", 1.0)),
-            })
+            colony_meta.update(
+                {
+                    "last_delta": mean_s,
+                    "margin": margin,
+                    "last_variance_ratio": float(window_records[-1].get("variance_ratio", 1.0)),
+                }
+            )
             colony_meta["review_interval"] = review_interval
             colony_meta["required_passes"] = required_passes
             colony_meta["holdout_passes"] = 0
@@ -3834,7 +4004,13 @@ class EcologyLoop:
             colony_meta["last_review"] = self.generation_index
             colony_meta.setdefault("expand_history", [])
             self.colonies[cid] = colony_meta
-            self._log_colony_event(colony_meta, self.generation_index, "create", members=list(colony_meta.get("members", [])), reason="synergy")
+            self._log_colony_event(
+                colony_meta,
+                self.generation_index,
+                "create",
+                members=list(colony_meta.get("members", [])),
+                reason="synergy",
+            )
 
     def _colony_refresh_roles(self, meta: dict[str, object]) -> None:
         members = [str(x) for x in meta.get("members", [])]
@@ -3898,7 +4074,9 @@ class EcologyLoop:
         self._colony_refresh_roles(meta)
         return meta
 
-    def _dissolve_colony(self, cid: str, *, reason: str, reassign_pot: bool = False) -> tuple[list[str], float]:
+    def _dissolve_colony(
+        self, cid: str, *, reason: str, reassign_pot: bool = False
+    ) -> tuple[list[str], float]:
         meta = self.colonies.get(cid)
         if meta is None:
             return [], 0.0
@@ -3913,11 +4091,20 @@ class EcologyLoop:
                 except Exception:
                     pass
         meta["pot"] = 0.0
-        self._log_colony_event(meta, self.generation_index, "dissolve", reason=reason, members=list(members), pot=float(pot))
+        self._log_colony_event(
+            meta,
+            self.generation_index,
+            "dissolve",
+            reason=reason,
+            members=list(members),
+            pot=float(pot),
+        )
         self.colonies.pop(cid, None)
         return members, float(inherited_pot)
 
-    def _replicate_colony(self, parent_cid: str, candidates: list[str], *, inherited_pot: float = 0.0) -> dict[str, object] | None:
+    def _replicate_colony(
+        self, parent_cid: str, candidates: list[str], *, inherited_pot: float = 0.0
+    ) -> dict[str, object] | None:
         parent = self.colonies.get(parent_cid)
         if parent is None:
             return None
@@ -3937,9 +4124,17 @@ class EcologyLoop:
         parent["pot"] = parent_pot - pot_share
         inherited_pot = max(0.0, float(inherited_pot))
         child_cid = f"{parent_cid}_c{self.generation_index}"
-        child_meta = self._create_colony_meta(child_cid, members, template=parent, pot=pot_share + inherited_pot)
+        child_meta = self._create_colony_meta(
+            child_cid, members, template=parent, pot=pot_share + inherited_pot
+        )
         self.colonies[child_cid] = child_meta
-        self._log_colony_event(parent, self.generation_index, "selection_win", child=child_cid, fitness=float(parent.get("fitness", 0.0)))
+        self._log_colony_event(
+            parent,
+            self.generation_index,
+            "selection_win",
+            child=child_cid,
+            fitness=float(parent.get("fitness", 0.0)),
+        )
         self._log_colony_event(
             child_meta,
             self.generation_index,
@@ -3975,7 +4170,9 @@ class EcologyLoop:
         margin = float(getattr(cfg, "colony_selection_margin", 0.05))
         if best_fit - worst_fit < margin:
             return
-        freed_members, freed_pot = self._dissolve_colony(worst_cid, reason="selection", reassign_pot=True)
+        freed_members, freed_pot = self._dissolve_colony(
+            worst_cid, reason="selection", reassign_pot=True
+        )
         if not freed_members and freed_pot <= 0.0:
             return
         pool = self._colony_selection_pool
@@ -3993,7 +4190,13 @@ class EcologyLoop:
         if reward_bonus > 0.0 and best_meta is not None:
             pool_pot -= reward_bonus
             best_meta["pot"] = float(best_meta.get("pot", 0.0)) + reward_bonus
-            self._log_colony_event(best_meta, self.generation_index, "selection_bonus", amount=float(reward_bonus), source=worst_cid)
+            self._log_colony_event(
+                best_meta,
+                self.generation_index,
+                "selection_bonus",
+                amount=float(reward_bonus),
+                source=worst_cid,
+            )
         pool["pot"] = max(0.0, pool_pot)
         event_payload = {
             "gen": self.generation_index,
@@ -4005,20 +4208,28 @@ class EcologyLoop:
         pool_events.append(event_payload)
         if len(pool_events) > 200:
             del pool_events[:-200]
-        self._colony_selection_stats["dissolved"] = int(self._colony_selection_stats.get("dissolved", 0)) + 1
+        self._colony_selection_stats["dissolved"] = (
+            int(self._colony_selection_stats.get("dissolved", 0)) + 1
+        )
         min_pool = float(getattr(cfg, "colony_selection_min_pool", 0.0))
         created = 0
         min_pool = max(0.0, min_pool)
         while len(pool_members) >= min_size:
             if pool["pot"] < min_pool:
                 break
-            reserve_floor = float(best_meta.get("reserve_floor", self.config.energy.m)) if best_meta else self.config.energy.m
+            reserve_floor = (
+                float(best_meta.get("reserve_floor", self.config.energy.m))
+                if best_meta
+                else self.config.energy.m
+            )
             inherit_target = max(min_pool, reserve_floor * 0.5)
             inherit_amount = min(float(pool["pot"]), inherit_target)
             if inherit_amount <= 0.0:
                 break
             pool["pot"] = max(0.0, float(pool["pot"]) - inherit_amount)
-            child_meta = self._replicate_colony(best_cid, pool_members, inherited_pot=inherit_amount)
+            child_meta = self._replicate_colony(
+                best_cid, pool_members, inherited_pot=inherit_amount
+            )
             if child_meta is None:
                 pool["pot"] = float(pool.get("pot", 0.0)) + inherit_amount
                 break
@@ -4035,7 +4246,9 @@ class EcologyLoop:
             if pool["pot"] < min_pool:
                 break
         if created:
-            self._colony_selection_stats["replicated"] = int(self._colony_selection_stats.get("replicated", 0)) + created
+            self._colony_selection_stats["replicated"] = (
+                int(self._colony_selection_stats.get("replicated", 0)) + created
+            )
         self._colony_selection_stats["pool_members"] = len(pool_members)
         self._colony_selection_stats["pool_pot"] = round(float(pool.get("pot", 0.0)), 4)
         events = self._colony_selection_stats.setdefault("events", [])
@@ -4063,7 +4276,7 @@ class EcologyLoop:
         demote_delta = float(getattr(cfg, "colony_tier_demote_delta", -0.05))
         hazard_floor = float(getattr(cfg, "colony_tier_hazard_floor", -2.0))
         cooldown_default = int(getattr(cfg, "colony_tier_cooldown", 3))
-        for cid, meta in self.colonies.items():
+        for _cid, meta in self.colonies.items():
             tier = int(meta.get("tier", 0))
             cooldown = int(meta.get("tier_cooldown", 0))
             if cooldown > 0:
@@ -4078,7 +4291,9 @@ class EcologyLoop:
             if tier < tier_count - 1 and passes >= promote_passes and delta >= promote_delta:
                 new_tier = tier + 1
                 reason = "tier_promote"
-            elif tier > 0 and (failures >= demote_failures or delta <= demote_delta or hazard <= hazard_floor):
+            elif tier > 0 and (
+                failures >= demote_failures or delta <= demote_delta or hazard <= hazard_floor
+            ):
                 new_tier = tier - 1
                 reason = "tier_demote"
             if new_tier != tier:
@@ -4115,12 +4330,16 @@ class EcologyLoop:
             pot = float(meta.get("pot", 0.0))
             earn = float(meta.pop("_pot_earn_gen", 0.0))
             if earn:
-                self._log_colony_event(meta, self.generation_index, "pot_update", pot=float(pot), earn=float(earn))
+                self._log_colony_event(
+                    meta, self.generation_index, "pot_update", pot=float(pot), earn=float(earn)
+                )
             reserve_ticket_mult = float(getattr(cfg, "colony_reserve_ticket_multiplier", 3.0))
             reserve_ratio_cfg = float(getattr(cfg, "colony_reserve_ratio", 0.25))
             reserve_cost_window = int(getattr(cfg, "colony_reserve_cost_window", 6))
             expected_cost = self._colony_expected_cost(members, reserve_cost_window)
-            reserve_floor = max(self.config.energy.m * reserve_ticket_mult, reserve_ratio_cfg * expected_cost)
+            reserve_floor = max(
+                self.config.energy.m * reserve_ticket_mult, reserve_ratio_cfg * expected_cost
+            )
             meta["reserve_floor"] = float(reserve_floor)
             reserve_prev = bool(meta.get("reserve_active"))
             reserve_active = pot < reserve_floor
@@ -4152,16 +4371,16 @@ class EcologyLoop:
                 try:
                     hist_mean = sum(roi_history) / len(roi_history)
                     hist_std = pstdev(roi_history) if len(roi_history) > 1 else 0.0
-                    latest_mean = (
-                        sum(roi_latest) / len(roi_latest) if roi_latest else hist_mean
-                    )
+                    latest_mean = sum(roi_latest) / len(roi_latest) if roi_latest else hist_mean
                     if hist_std > 1e-6:
                         hazard_z = (latest_mean - hist_mean) / hist_std
                 except Exception:
                     hazard_z = 0.0
             meta["hazard_z"] = float(hazard_z)
             subsidy_threshold = float(getattr(cfg, "colony_subsidy_threshold", 1.0))
-            subsidy_frac = float(meta.get("subsidy_frac", getattr(cfg, "colony_subsidy_fraction", 0.25)))
+            subsidy_frac = float(
+                meta.get("subsidy_frac", getattr(cfg, "colony_subsidy_fraction", 0.25))
+            )
             subsidies: list[tuple[str, float]] = []
             if subsidy_frac > 0.0 and subsidy_threshold > 0.0:
                 threshold_balance = subsidy_threshold * self.config.energy.m
@@ -4183,7 +4402,9 @@ class EcologyLoop:
                     pot -= grant
                     subsidies.append((member, grant))
             for member, amount in subsidies:
-                self._log_colony_event(meta, self.generation_index, "subsidy", member=member, amount=float(amount))
+                self._log_colony_event(
+                    meta, self.generation_index, "subsidy", member=member, amount=float(amount)
+                )
             meta["pot"] = pot
             roi_vals = [
                 float(self.population.average_roi(m, limit=5))
@@ -4228,7 +4449,9 @@ class EcologyLoop:
                 )
                 self._exit_colony_winter(meta)
             review_interval = int(meta.get("review_interval", 5))
-            last_review = int(meta.get("last_review", meta.get("created_gen", self.generation_index)))
+            last_review = int(
+                meta.get("last_review", meta.get("created_gen", self.generation_index))
+            )
             required_passes = int(meta.get("required_passes", 2))
             margin = float(meta.get("margin", getattr(cfg, "holdout_margin", 0.03)))
             variance_improve = float(getattr(cfg, "colony_variance_improve", 0.2))
@@ -4246,14 +4469,20 @@ class EcologyLoop:
                         solo_stats = [self._team_holdout_stats([mem], tasks) for mem in members]
                         solo_means = [float(stat["mean"]) for stat in solo_stats]
                         solo_vars = [float(stat["variance"]) for stat in solo_stats]
-                        delta = float(team_stats["mean"]) - max(solo_means) if solo_means else float(team_stats["mean"])
+                        delta = (
+                            float(team_stats["mean"]) - max(solo_means)
+                            if solo_means
+                            else float(team_stats["mean"])
+                        )
                         min_var = min((v for v in solo_vars if v > 1e-6), default=0.0)
                         team_var = float(team_stats["variance"])
                         if min_var > 0.0:
                             variance_ratio = team_var / min_var
                         else:
                             variance_ratio = 0.0 if team_var <= 1e-6 else 1.0
-                        pass_gate = delta >= margin and variance_ratio <= (1.0 - variance_improve + 1e-6)
+                        pass_gate = delta >= margin and variance_ratio <= (
+                            1.0 - variance_improve + 1e-6
+                        )
                     except Exception:
                         delta = float("-inf")
                         variance_ratio = 1.0
@@ -4314,7 +4543,9 @@ class EcologyLoop:
                     and int(meta.get("holdout_failures", 0)) >= 1
                 ):
                     try:  # pragma: no cover
-                        worst = min(members, key=lambda oid: self.population.average_roi(oid, limit=5))
+                        worst = min(
+                            members, key=lambda oid: self.population.average_roi(oid, limit=5)
+                        )
                         members.remove(worst)
                         meta["members"] = members
                         self._colony_refresh_roles(meta)
@@ -4323,26 +4554,38 @@ class EcologyLoop:
                     except Exception:  # pragma: no cover
                         pass
                 if int(meta.get("holdout_failures", 0)) >= max_failures:
-                    self._log_colony_event(meta, self.generation_index, "dissolve", reason="failures")
+                    self._log_colony_event(
+                        meta, self.generation_index, "dissolve", reason="failures"
+                    )
                     self.colonies.pop(cid, None)
                     continue
-                expand_ok = delta >= expand_delta and variance_ratio <= (1.0 - variance_improve + 1e-6)
+                expand_ok = delta >= expand_delta and variance_ratio <= (
+                    1.0 - variance_improve + 1e-6
+                )
                 history = meta.setdefault("expand_history", [])
                 history.append(bool(expand_ok))
-                meta["expand_history"] = history[-max(1, expand_windows):]
+                meta["expand_history"] = history[-max(1, expand_windows) :]
             reserve_ratio = float(meta.get("reserve_ratio", 0.25))
             privileges_unlocked = int(meta.get("holdout_passes", 0)) >= required_passes
-            if privileges_unlocked and not meta.get("freeze_reproduction") and not meta.get("winter_mode"):
+            if (
+                privileges_unlocked
+                and not meta.get("freeze_reproduction")
+                and not meta.get("winter_mode")
+            ):
                 for m in members:
                     bal = self.host.ledger.energy_balance(m)
                     ticket = self.config.energy.m
                     reserve = reserve_ratio * 4.0 * ticket
-                    if pot > reserve and bal < max(ticket, self.config.assimilation_tuning.energy_floor or ticket):
+                    if pot > reserve and bal < max(
+                        ticket, self.config.assimilation_tuning.energy_floor or ticket
+                    ):
                         amount = min(pot - reserve, max(ticket - bal, 0.0))
                         if amount > 0:
                             self.host.ledger.credit_energy(m, amount)
                             pot -= amount
-                            self._log_colony_event(meta, self.generation_index, "topup", member=m, amount=float(amount))
+                            self._log_colony_event(
+                                meta, self.generation_index, "topup", member=m, amount=float(amount)
+                            )
             meta["pot"] = pot
             # Attempt cautious expansion to a 3rd member if synergy persists
             try:
@@ -4357,18 +4600,26 @@ class EcologyLoop:
                 )
                 if can_expand:
                     # Pick a candidate outside the colony with highest recent ROI
-                    candidates = [oid for oid in self.population.population.keys() if oid not in members]
+                    candidates = [
+                        oid for oid in self.population.population.keys() if oid not in members
+                    ]
                     if candidates:
-                        best_cand = max(candidates, key=lambda oid: self.population.average_roi(oid, limit=5))
+                        best_cand = max(
+                            candidates, key=lambda oid: self.population.average_roi(oid, limit=5)
+                        )
                         tasks = self._sample_holdout_tasks()
                         if tasks:
                             current_stats = self._team_holdout_stats(members, tasks)
                             expanded_stats = self._team_holdout_stats(members + [best_cand], tasks)
-                            delta_expand = float(expanded_stats["mean"]) - float(current_stats["mean"])
+                            delta_expand = float(expanded_stats["mean"]) - float(
+                                current_stats["mean"]
+                            )
                             current_var = float(current_stats["variance"])
                             expanded_var = float(expanded_stats["variance"])
                             if current_var > 1e-6:
-                                variance_gain = expanded_var <= (1.0 - variance_improve + 1e-6) * current_var
+                                variance_gain = (
+                                    expanded_var <= (1.0 - variance_improve + 1e-6) * current_var
+                                )
                             else:
                                 variance_gain = expanded_var <= 1e-6
                             if delta_expand >= expand_delta and variance_gain:
@@ -4378,7 +4629,9 @@ class EcologyLoop:
                                 meta["last_review"] = self.generation_index
                                 meta["last_delta"] = float(delta_expand)
                                 meta["last_variance_ratio"] = (
-                                    expanded_var / max(current_var, 1e-6) if current_var > 1e-6 else 0.0
+                                    expanded_var / max(current_var, 1e-6)
+                                    if current_var > 1e-6
+                                    else 0.0
                                 )
                                 meta["expand_history"] = []
                                 self._log_colony_event(
@@ -4465,7 +4718,9 @@ class EcologyLoop:
         selected = bandit.arms[choice]
         smoothing = 0.12
         current_floor = tuning.energy_floor if tuning.energy_floor > 0.0 else base_floor
-        current_threshold = tuning.energy_floor_roi if tuning.energy_floor_roi > 0.0 else base_threshold
+        current_threshold = (
+            tuning.energy_floor_roi if tuning.energy_floor_roi > 0.0 else base_threshold
+        )
         new_floor = (1.0 - smoothing) * current_floor + smoothing * selected.floor
         new_threshold = (1.0 - smoothing) * current_threshold + smoothing * selected.roi
         new_floor = max(ticket, min(self.host.ledger.energy_cap, new_floor))
@@ -4497,7 +4752,9 @@ class EcologyLoop:
             "decay_applied": decay_applied,
         }
 
-    def _maybe_top_up_energy(self, genome: Genome, balance: float) -> tuple[float, dict[str, float | str]]:
+    def _maybe_top_up_energy(
+        self, genome: Genome, balance: float
+    ) -> tuple[float, dict[str, float | str]]:
         tuning = self.config.assimilation_tuning
         floor = getattr(tuning, "energy_floor", 0.0)
         roi_threshold = getattr(tuning, "energy_floor_roi", 0.0)
@@ -4567,7 +4824,9 @@ class EcologyLoop:
                     info["evidence_bypass"] = True
                     self._register_roi_success(genome.organelle_id)
                     if self._power_econ_stats is not None:
-                        self._power_econ_stats["tokens_used"] = int(self._power_econ_stats.get("tokens_used", 0)) + 1
+                        self._power_econ_stats["tokens_used"] = (
+                            int(self._power_econ_stats.get("tokens_used", 0)) + 1
+                        )
                     return new_balance, info
             info["status"] = "skip_low_roi"
             # info-aware top-up when close to required window
@@ -4590,7 +4849,9 @@ class EcologyLoop:
                         info["info_topup"] = int(info_need)
                         self._register_roi_success(genome.organelle_id)
                         if self._power_econ_stats is not None:
-                            self._power_econ_stats["info_topups"] = int(self._power_econ_stats.get("info_topups", 0)) + 1
+                            self._power_econ_stats["info_topups"] = (
+                                int(self._power_econ_stats.get("info_topups", 0)) + 1
+                            )
                         return new_balance, info
             self._register_roi_skip(genome.organelle_id)
             return balance, info
@@ -4679,7 +4940,9 @@ class EcologyLoop:
             return float("-inf")
         return sum(rois) / len(rois)
 
-    def _team_holdout_stats(self, member_ids: list[str], tasks: list[EvaluationTask]) -> dict[str, object]:
+    def _team_holdout_stats(
+        self, member_ids: list[str], tasks: list[EvaluationTask]
+    ) -> dict[str, object]:
         if not tasks or not member_ids:
             return {"mean": 0.0, "variance": 0.0, "series": []}
         energy_cfg = self.config.energy
@@ -4719,11 +4982,15 @@ class EcologyLoop:
         variance = float(pstdev(rois)) if len(rois) >= 2 else 0.0
         return {"mean": mean_val, "variance": variance, "series": rois}
 
-    def _evaluate_team_holdout_roi(self, a_id: str, b_id: str, tasks: list[EvaluationTask]) -> float:
+    def _evaluate_team_holdout_roi(
+        self, a_id: str, b_id: str, tasks: list[EvaluationTask]
+    ) -> float:
         stats = self._team_holdout_stats([a_id, b_id], tasks)
         return float(stats.get("mean", 0.0))
 
-    def _evaluate_multi_team_holdout_roi(self, member_ids: list[str], tasks: list[EvaluationTask]) -> float:
+    def _evaluate_multi_team_holdout_roi(
+        self, member_ids: list[str], tasks: list[EvaluationTask]
+    ) -> float:
         stats = self._team_holdout_stats(member_ids, tasks)
         return float(stats.get("mean", 0.0))
 
@@ -4797,10 +5064,7 @@ class EcologyLoop:
             min_floor = base_floor
         else:
             min_floor = max(2, floor_override)
-        while (
-            tokens_available > 0
-            and available_even < target_min
-        ):
+        while tokens_available > 0 and available_even < target_min:
             reduced = max(min_floor, target_min - token_window)
             if not self.population.consume_evidence(organelle_id, 1):
                 break
@@ -4821,44 +5085,22 @@ class EcologyLoop:
         return normalized
 
     @staticmethod
-    def _compute_mean_ci(series: list[float], alpha: float = 0.05) -> tuple[float, float, float, float]:
-        """Compute a normal-approximation CI for the mean of a series.
-
-        Returns (ci_low, ci_high, mean, se). Uses sample std (Bessel corrected) when n>1.
-        """
-        n = len(series)
-        if n == 0:
-            return (0.0, 0.0, 0.0, float("inf"))
-        mu = sum(series) / n
-        if n > 1:
-            var = sum((x - mu) ** 2 for x in series) / (n - 1)
-        else:
-            var = 0.0
-        se = math.sqrt(max(var, 1e-12)) / math.sqrt(n)
-        z = 1.96 if abs(alpha - 0.05) < 1e-6 else 1.0
-        return (mu - z * se, mu + z * se, mu, se)
+    def _compute_mean_ci(
+        series: list[float], alpha: float = 0.05
+    ) -> tuple[float, float, float, float]:
+        return compute_mean_ci(series=series, alpha=alpha)
 
     @staticmethod
-    def _power_proxy(mu: float, baseline: float, margin: float, se: float, alpha: float = 0.05) -> float:
-        """Approximate one-sided power using a normal approximation.
-
-        Computes z_eff = (mu - (baseline + margin)) / se and returns Phi(z_eff - z_alpha).
-        This is a heuristic proxy in lieu of an exact test; bounded to [0,1].
-        """
-        import math as _m
-        if se <= 0.0:
-            return 1.0 if mu > (baseline + margin) else 0.0
-        z_alpha = 1.645 if abs(alpha - 0.05) < 1e-6 else 1.0
-        z_eff = (mu - (baseline + margin)) / max(se, 1e-6)
-        # standard normal CDF via erf
-        cdf = 0.5 * (1.0 + _m.erf((z_eff - z_alpha) / _m.sqrt(2.0)))
-        return max(0.0, min(1.0, float(cdf)))
+    def _power_proxy(
+        mu: float, baseline: float, margin: float, se: float, alpha: float = 0.05
+    ) -> float:
+        return power_proxy(mu=mu, baseline=baseline, margin=margin, se=se, alpha=alpha)
 
     @staticmethod
     def _team_accept(ci_low: float, baseline: float, margin: float, n: int, min_tasks: int) -> bool:
-        if n < min_tasks:
-            return False
-        return ci_low > (baseline + margin)
+        return team_accept(
+            ci_low=ci_low, baseline=baseline, margin=margin, n=n, min_tasks=min_tasks
+        )
 
     def _maybe_team_probes(self) -> int:
         """Probe a few high-ROI pairs per generation and promote colonies when CI gate passes.
@@ -4870,8 +5112,12 @@ class EcologyLoop:
             return 0
         gate_counts: dict[str, int] = {}
         self._team_gate_counts_gen = gate_counts
-        sample_override = int(getattr(self.config.assimilation_tuning, "team_holdout_sample_size", 0) or 0)
-        handoff_enabled = bool(getattr(self.config.assimilation_tuning, "team_handoff_enabled", False))
+        sample_override = int(
+            getattr(self.config.assimilation_tuning, "team_holdout_sample_size", 0) or 0
+        )
+        handoff_enabled = bool(
+            getattr(self.config.assimilation_tuning, "team_handoff_enabled", False)
+        )
         handoff_prompt = str(
             getattr(
                 self.config.assimilation_tuning,
@@ -4879,7 +5125,9 @@ class EcologyLoop:
                 "Partner answer:\n{answer}\nProvide a critique or improved answer.",
             )
         )
-        handoff_cap = int(getattr(self.config.assimilation_tuning, "team_handoff_cap_per_gen", 0) or 0)
+        handoff_cap = int(
+            getattr(self.config.assimilation_tuning, "team_handoff_cap_per_gen", 0) or 0
+        )
 
         def _record_team_gate(reason: str, data: dict[str, object]) -> None:
             payload = self._sanitize_telemetry(data)
@@ -4904,7 +5152,9 @@ class EcologyLoop:
         seen: set[tuple[str, str]] = set()
         # 1) From co-routing counts
         if hasattr(self, "_co_routing_counts") and self._co_routing_counts:
-            pairs_sorted = sorted(self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True)
+            pairs_sorted = sorted(
+                self._co_routing_counts.items(), key=lambda kv: kv[1], reverse=True
+            )
             for (a, b), _c in pairs_sorted:
                 if a in top and b in top and (a, b) not in seen:
                     pairs.append((a, b))
@@ -4919,7 +5169,7 @@ class EcologyLoop:
         promotions = 0
         rng = self.environment.rng
         rng.shuffle(pairs)
-        for (a_id, b_id) in pairs[:per_gen]:
+        for a_id, b_id in pairs[:per_gen]:
             override = sample_override if sample_override > 0 else None
             sampler = self._sample_holdout_tasks
             if override is None:
@@ -4959,7 +5209,11 @@ class EcologyLoop:
                         + energy_cfg.gamma * metrics_a.latency_ms
                         + energy_cfg.lambda_p * metrics_a.trainable_params
                     )
-                    roi_a = (float("inf") if revenue_a > 0 else 0.0) if cost_a <= 0.0 else (revenue_a / cost_a)
+                    roi_a = (
+                        (float("inf") if revenue_a > 0 else 0.0)
+                        if cost_a <= 0.0
+                        else (revenue_a / cost_a)
+                    )
                     roi_a = 0.0 if not math.isfinite(roi_a) else float(max(0.0, min(roi_a, 10.0)))
                     a_series.append(roi_a)
                     best_roi = max(best_roi, roi_a)
@@ -4989,12 +5243,20 @@ class EcologyLoop:
                         + energy_cfg.gamma * metrics_b.latency_ms
                         + energy_cfg.lambda_p * metrics_b.trainable_params
                     )
-                    roi_b = (float("inf") if revenue_b > 0 else 0.0) if cost_b <= 0.0 else (revenue_b / cost_b)
+                    roi_b = (
+                        (float("inf") if revenue_b > 0 else 0.0)
+                        if cost_b <= 0.0
+                        else (revenue_b / cost_b)
+                    )
                     roi_b = 0.0 if not math.isfinite(roi_b) else float(max(0.0, min(roi_b, 10.0)))
                     b_series.append(roi_b)
                     best_roi = max(best_roi, roi_b)
                     answer_b = str(metrics_b.answer)
-                    if partner_answer.strip() and answer_b.strip() and partner_answer.strip() == answer_b.strip():
+                    if (
+                        partner_answer.strip()
+                        and answer_b.strip()
+                        and partner_answer.strip() == answer_b.strip()
+                    ):
                         identical_answers += 1
                     if len(answer_samples) < 2:
                         answer_samples.append((partner_answer.strip(), answer_b.strip()))
@@ -5070,7 +5332,9 @@ class EcologyLoop:
                         "created_gen": self.generation_index,
                     },
                 )
-                self._log_colony_event(meta, self.generation_index, "create", members=list(meta.get("members", [])))
+                self._log_colony_event(
+                    meta, self.generation_index, "create", members=list(meta.get("members", []))
+                )
                 promotions += 1
                 attempt_info["colony_id"] = cid
                 _record_team_gate("accepted", attempt_info)
@@ -5088,7 +5352,9 @@ class EcologyLoop:
             self.promotions_this_gen += promotions
         return promotions
 
-    def _holdout_accepts(self, candidate_id: str, mate_ids: list[str]) -> tuple[bool, dict[str, object] | None]:
+    def _holdout_accepts(
+        self, candidate_id: str, mate_ids: list[str]
+    ) -> tuple[bool, dict[str, object] | None]:
         cfg = self.config.assimilation_tuning
         retries = 0
         margin = cfg.holdout_margin
@@ -5123,7 +5389,13 @@ class EcologyLoop:
             if organelle is None:
                 continue
             adapters = self.host._active_adapters(organelle)
-            key = tuple(sorted((module, int(count)) for module, count in adapters.items() if module not in {"rank", "total"}))
+            key = tuple(
+                sorted(
+                    (module, int(count))
+                    for module, count in adapters.items()
+                    if module not in {"rank", "total"}
+                )
+            )
             mapping.setdefault(key, []).append(organelle_id)
         return mapping
 
@@ -5148,7 +5420,9 @@ class EcologyLoop:
         gini = (2.0 * cumulative) / (n * total) - (n + 1) / n
         shares = [val / total for val in values if val > 0.0]
         effective = 1.0 / sum(share * share for share in shares) if shares else 0.0
-        species_shares = [sum(balances[oid] for oid in ids) / total for ids in species_map.values() if ids]
+        species_shares = [
+            sum(balances[oid] for oid in ids) / total for ids in species_map.values() if ids
+        ]
         metrics.update(
             {
                 "energy_gini": float(max(0.0, min(gini, 1.0))),
@@ -5164,14 +5438,22 @@ class EcologyLoop:
             self._diversity_snapshot = None
             return
         organelle_ids = self.host.list_organelle_ids()
-        balances = {org_id: max(0.0, self.host.ledger.energy_balance(org_id)) for org_id in organelle_ids}
+        balances = {
+            org_id: max(0.0, self.host.ledger.energy_balance(org_id)) for org_id in organelle_ids
+        }
         species_map = self._species_partition()
         metrics_before = self._compute_diversity_metrics(balances, species_map)
         total_energy = sum(balances.values())
         enforced = False
-        if total_energy > 0 and cfg.energy_gini_cap < 1.0 and metrics_before["energy_gini"] > cfg.energy_gini_cap:
+        if (
+            total_energy > 0
+            and cfg.energy_gini_cap < 1.0
+            and metrics_before["energy_gini"] > cfg.energy_gini_cap
+        ):
             mean_energy = total_energy / max(len(organelle_ids), 1)
-            blended = {org_id: 0.5 * balances[org_id] + 0.5 * mean_energy for org_id in organelle_ids}
+            blended = {
+                org_id: 0.5 * balances[org_id] + 0.5 * mean_energy for org_id in organelle_ids
+            }
             scale = total_energy / (sum(blended.values()) or 1.0)
             for org_id, value in blended.items():
                 new_energy = value * scale
@@ -5220,11 +5502,15 @@ class EcologyLoop:
         if self.assim_fail_streak % 10 != 0:
             return
         decay = max(0.5, min(cfg.adaptive_decay, 1.0))
-        new_threshold = max(cfg.adaptive_floor, self.config.evolution.assimilation_threshold * decay)
+        new_threshold = max(
+            cfg.adaptive_floor, self.config.evolution.assimilation_threshold * decay
+        )
         self.config.evolution.assimilation_threshold = new_threshold
         self.assimilation.update_thresholds(uplift_threshold=new_threshold)
         # relax p-value marginally when decay triggers
-        self.config.evolution.assimilation_p_value = min(0.5, self.config.evolution.assimilation_p_value * (1.0 + (1.0 - decay)))
+        self.config.evolution.assimilation_p_value = min(
+            0.5, self.config.evolution.assimilation_p_value * (1.0 + (1.0 - decay))
+        )
 
     def _auto_nudge_evidence(self, summary: dict[str, object]) -> None:
         """Adapt assimilation evidence knobs in‑run when progress stalls.
@@ -5236,7 +5522,6 @@ class EcologyLoop:
         if not isinstance(gating, dict):
             gating = {}
         low_power = int(gating.get("low_power", 0) or 0)
-        uplift_below = int(gating.get("uplift_below_threshold", 0) or 0)
         topup_blocked = int(gating.get("topup_roi_blocked", 0) or 0)
         insufficient = int(gating.get("insufficient_scores", 0) or 0)
         promotions = int(summary.get("promotions", 0) or 0)
@@ -5254,13 +5539,19 @@ class EcologyLoop:
             }
         base = self._nudge_baseline  # type: ignore[attr-defined]
         # Decide whether to nudge up evidence or relax back
-        stall = (self.assim_fail_streak >= 8) or (low_power >= 2 and promotions == 0 and merges == 0) or (topup_blocked >= 5)
+        stall = (
+            (self.assim_fail_streak >= 8)
+            or (low_power >= 2 and promotions == 0 and merges == 0)
+            or (topup_blocked >= 5)
+        )
         changed: dict[str, float] = {}
         # Optional: auto-tune min_window downward when insufficient_scores dominates
         if bool(getattr(tuning, "window_autotune", False)) and insufficient >= 50:
             mw = self._min_window_requirement(tuning)
             min_samples_floor = self._min_samples_required(tuning)
-            lower = max(2 * min_samples_floor, int(getattr(tuning, "min_window_min", 2 * min_samples_floor)))
+            lower = max(
+                2 * min_samples_floor, int(getattr(tuning, "min_window_min", 2 * min_samples_floor))
+            )
             if lower % 2 != 0:
                 lower += 1
             if mw > lower:
@@ -5314,12 +5605,14 @@ class EcologyLoop:
             stipend = float(getattr(tuning, "trial_stipend", 0.5))
             bonus = float(getattr(tuning, "energy_topup_roi_bonus", 0.0))
             tau = float(self.config.controller.tau)
+
             def step_towards(cur: float, tgt: float, step: float) -> float:
                 if cur > tgt:
                     return max(tgt, cur - step)
                 if cur < tgt:
                     return min(tgt, cur + step)
                 return cur
+
             new_mw = int(step_towards(mw, base["min_window"], 2.0))
             new_ho = int(step_towards(ho, base["holdout"], 2.0))
             new_cap = int(step_towards(cap, base["cap"], 1.0))
@@ -5474,7 +5767,9 @@ class EcologyLoop:
             parent = survivors[idx % len(survivors)]
             self._spawn_replacement_from(parent)
 
-    def _maybe_refresh_population(self, survivors: list[Genome]) -> None:  # pragma: no cover - relies on stochastic long runs
+    def _maybe_refresh_population(
+        self, survivors: list[Genome]
+    ) -> None:  # pragma: no cover - relies on stochastic long runs
         strategy = getattr(self.config, "population_strategy", None)
         if strategy is None:
             return
@@ -5525,7 +5820,10 @@ class EcologyLoop:
         total_required: int
 
         # Always probe the focus cell first
-        focus_tasks = [self.environment.sample_task_from_cell(cell, canary=False) for _ in range(max(1, per_cell))]
+        focus_tasks = [
+            self.environment.sample_task_from_cell(cell, canary=False)
+            for _ in range(max(1, per_cell))
+        ]
         for task in focus_tasks:
             if not self._run_probe_task(organelle_id, task):
                 gating["global_probe_failed"] += 1
@@ -5574,7 +5872,9 @@ class EcologyLoop:
         success, _reward = task.evaluate(metrics.answer)
         return success
 
-    def _select_soup_members(self, cell: GridKey, candidate_id: str) -> tuple[list[str], dict[str, dict[str, float]]]:
+    def _select_soup_members(
+        self, cell: GridKey, candidate_id: str
+    ) -> tuple[list[str], dict[str, dict[str, float]]]:
         soup_size = max(2, self.config.assimilation_tuning.soup_size)
         stats_map: dict[str, dict[str, float]] = {}
         candidate_roi = max(self.population.average_roi(candidate_id, limit=5), 0.0)
@@ -5587,7 +5887,11 @@ class EcologyLoop:
         bins: list[float] = []
         if energy_values:
             try:
-                qs = quantiles(energy_values, n=max(2, getattr(self.config.qd, "cost_bins", 3)), method="inclusive")
+                qs = quantiles(
+                    energy_values,
+                    n=max(2, getattr(self.config.qd, "cost_bins", 3)),
+                    method="inclusive",
+                )
                 bins = [float(x) for x in qs]
             except Exception:
                 bins = [energy_values[len(energy_values) // 2]]
@@ -5600,11 +5904,14 @@ class EcologyLoop:
                 if val <= edge:
                     return i
             return len(bins)
+
         cand_bin = cost_bin(energies.get(candidate_id, 0.0))
 
         novelty_weight = float(getattr(self.config.qd, "novelty_weight", 0.3))
         novelty_floor = float(getattr(self.config.qd, "novelty_min", 0.05))
-        candidate_novelty = self.population.cell_novelty(candidate_id, cell, scale=novelty_weight, floor=novelty_floor)
+        candidate_novelty = self.population.cell_novelty(
+            candidate_id, cell, scale=novelty_weight, floor=novelty_floor
+        )
         stats_map[candidate_id] = {
             "roi": float(candidate_roi),
             "ema": candidate_ema,
@@ -5620,7 +5927,9 @@ class EcologyLoop:
                 continue
             roi = self.population.average_roi(organelle_id, limit=5)
             mbin = cost_bin(energies.get(organelle_id, 0.0))
-            novelty = self.population.cell_novelty(organelle_id, cell, scale=novelty_weight, floor=novelty_floor)
+            novelty = self.population.cell_novelty(
+                organelle_id, cell, scale=novelty_weight, floor=novelty_floor
+            )
             candidates.append((organelle_id, float(ema), float(roi), mbin, float(novelty)))
         # Prefer same-bin mates; fallback to global best if insufficient
         candidates.sort(
@@ -5680,6 +5989,7 @@ class EcologyLoop:
         # optional fisher-style importance weighting
         importances: dict[str, float] = {}
         if method == "fisher_svd":
+
             def _fallback_importance(org: object | None) -> float:
                 if org is None:
                     return 0.0
@@ -5713,7 +6023,11 @@ class EcologyLoop:
                 max_importance = 1.0
             importances = {k: (v / max_importance) for k, v in importances.items()}
         organelle = self.host.get_organelle(candidate_id)
-        target_rank = int(getattr(organelle, "rank", self.config.host.max_lora_rank)) if organelle is not None else self.config.host.max_lora_rank
+        target_rank = (
+            int(getattr(organelle, "rank", self.config.host.max_lora_rank))
+            if organelle is not None
+            else self.config.host.max_lora_rank
+        )
         target_rank = max(1, min(target_rank, self.config.host.max_lora_rank))
         block_roles: dict[str, int] | None = None
         block_mode = False
@@ -5751,9 +6065,16 @@ class EcologyLoop:
                                 else:
                                     organelle = self.host.get_organelle(oid)
                                     summed_rank += max(
-                                        1, int(getattr(organelle, "rank", target_rank)) if organelle is not None else target_rank
+                                        1,
+                                        (
+                                            int(getattr(organelle, "rank", target_rank))
+                                            if organelle is not None
+                                            else target_rank
+                                        ),
                                     )
-                            block_rank = max(1, min(self.config.host.max_lora_rank, rank_cap, summed_rank))
+                            block_rank = max(
+                                1, min(self.config.host.max_lora_rank, rank_cap, summed_rank)
+                            )
                             block_mode = True
 
         mutation_meta: dict[str, dict[str, object]] = {}
@@ -5788,8 +6109,7 @@ class EcologyLoop:
             if genome_meta is not None:
                 if getattr(genome_meta, "rank_noise", None):
                     record["rank_noise"] = {
-                        key: round(float(value), 3)
-                        for key, value in genome_meta.rank_noise.items()
+                        key: round(float(value), 3) for key, value in genome_meta.rank_noise.items()
                     }
                 if getattr(genome_meta, "adapter_dropout", None):
                     if genome_meta.adapter_dropout:

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
 
-SoupEntry = float | str | dict[str, Any] | list[Any]
+SoupEntry = Union[float, str, dict[str, Any], list[Any]]
 
 
 class RouteEvent(BaseModel):

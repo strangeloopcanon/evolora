@@ -17,3 +17,22 @@ def test_policy_parse_percentages():
     text = "budget_frac:60% reserve_ratio=15%"
     out = EcologyLoop._parse_policy_json(text, allowed)
     assert out == {"budget_frac": 0.6, "reserve_ratio": 0.15}
+
+
+def test_policy_parse_null_string_and_filtering():
+    allowed = ["tag", "budget_frac"]
+    text = "tag='hello' budget_frac=null extra=1"
+    out = EcologyLoop._parse_policy_json(text, allowed)
+    assert out == {"tag": "hello", "budget_frac": None}
+
+
+def test_policy_parse_non_object_json_falls_back_to_empty():
+    allowed = ["budget_frac"]
+    out = EcologyLoop._parse_policy_json("[1,2,3]", allowed)
+    assert out == {}
+
+
+def test_policy_parse_unclosed_outer_object_returns_empty():
+    allowed = ["budget_frac"]
+    out = EcologyLoop._parse_policy_json("{", allowed)
+    assert out == {}

@@ -12,4 +12,3 @@ def test_energy_guard_bandit_basic_flow():
     # Next selection should consider UCB; just ensure it returns a valid arm
     idx1 = bandit.select()
     assert idx1 in (0, 1)
-

@@ -39,7 +39,7 @@ class MorphogenesisController:
                 continue
 
             current_total = self.host.total_trainable_parameters()
-            current_org = self.host._trainable_params(organelle)  # type: ignore[attr-defined]
+            current_org = self.host._trainable_params(organelle)
             estimated = self.host.estimate_trainable(organelle, target_rank)
             projected_total = current_total - current_org + estimated
             budget = max(base_budget, projected_total)
@@ -72,10 +72,12 @@ class MorphogenesisController:
             for module, count in adapters.items():
                 if module in {"rank", "total"} or count <= 0:
                     continue
-                utilisation = population.average_adapter_usage(genome.organelle_id, module, limit=10)
+                utilisation = population.average_adapter_usage(
+                    genome.organelle_id, module, limit=10
+                )
                 module_summary.setdefault(module, []).append((genome, utilisation))
 
-        for module, entries in module_summary.items():
+        for _module, entries in module_summary.items():
             if len(entries) <= cap:
                 continue
             entries.sort(key=lambda item: (item[1], population.average_roi(item[0].organelle_id)))

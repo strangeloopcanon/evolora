@@ -11,7 +11,11 @@ def test_apply_reward_mints_total_without_double_cost() -> None:
 
     # Build a minimal envelope
     obs = Observation(state={"text": "2+2"})
-    env = MessageEnvelope(observation=obs, intent=host.router.intent_factory("test", []), plan=Plan(steps=[], confidence=0.1))
+    env = MessageEnvelope(
+        observation=obs,
+        intent=host.router.intent_factory("test", []),
+        plan=Plan(steps=[], confidence=0.1),
+    )
 
     before = host.ledger.accounts[org_id].balance
     reward = RewardBreakdown(
@@ -27,4 +31,3 @@ def test_apply_reward_mints_total_without_double_cost() -> None:
 
     # total = 1.0 - 0.2 = 0.8; minting should add exactly total (not subtract cost twice)
     assert abs((after - before) - (reward.total)) < 1e-6
-

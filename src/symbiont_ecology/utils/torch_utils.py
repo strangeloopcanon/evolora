@@ -8,7 +8,9 @@ from contextlib import contextmanager
 import torch
 
 
-def resolve_device(device: str | int | torch.device | None = None) -> torch.device:  # pragma: no cover - hardware dependent
+def resolve_device(
+    device: str | int | torch.device | None = None,
+) -> torch.device:  # pragma: no cover - hardware dependent
     if device is None or device == "auto":
         if torch.cuda.is_available():
             return torch.device("cuda")

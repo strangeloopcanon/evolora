@@ -1,6 +1,6 @@
 from symbiont_ecology.environment.synthetic import (
-    TaskFactory,
     SyntheticTask,
+    TaskFactory,
     _is_prime,
     evaluate_population_responses,
 )

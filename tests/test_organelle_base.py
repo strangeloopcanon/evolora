@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from symbiont_ecology.config import HebbianConfig
 from symbiont_ecology.interfaces.messages import MessageEnvelope
 from symbiont_ecology.metrics.telemetry import RewardBreakdown
@@ -28,6 +26,16 @@ def test_organelle_base_step_and_context() -> None:
     assert org.steps == 1
     envelope = MessageEnvelope.model_construct()
     assert org.forward(envelope) is envelope
-    org.update(envelope, RewardBreakdown(task_reward=0.0, novelty_bonus=0.0, competence_bonus=0.0, helper_bonus=0.0, risk_penalty=0.0, cost_penalty=0.0))
+    org.update(
+        envelope,
+        RewardBreakdown(
+            task_reward=0.0,
+            novelty_bonus=0.0,
+            competence_bonus=0.0,
+            helper_bonus=0.0,
+            risk_penalty=0.0,
+            cost_penalty=0.0,
+        ),
+    )
     assert org.export_adapter_state() == {}
     assert org.fisher_importance() == 0.0

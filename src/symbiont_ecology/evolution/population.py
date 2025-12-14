@@ -84,7 +84,9 @@ class PopulationManager:
     roi: dict[str, List[float]] = field(default_factory=dict)
     adapter_usage: dict[str, dict[str, List[float]]] = field(default_factory=dict)
     energy_delta: dict[str, List[float]] = field(default_factory=dict)
-    assimilation_history: dict[tuple[str, str, str], list[dict[str, object]]] = field(default_factory=dict)
+    assimilation_history: dict[tuple[str, str, str], list[dict[str, object]]] = field(
+        default_factory=dict
+    )
     evidence_credit: dict[str, int] = field(default_factory=dict)
     cell_values: dict[str, dict[tuple[str, str], float]] = field(default_factory=dict)
     cell_counts: dict[str, dict[tuple[str, str], int]] = field(default_factory=dict)
@@ -117,23 +119,31 @@ class PopulationManager:
                 "word_count_focus", 0.0
             ) + random.gauss(0, self.config.mutation_rate * 0.5)
         if random.random() < 0.2:  # nosec B311
-            mutated_weights["logic_focus"] = mutated_weights.get(
-                "logic_focus", 0.0
-            ) + random.gauss(0, self.config.mutation_rate * 0.4)
+            mutated_weights["logic_focus"] = mutated_weights.get("logic_focus", 0.0) + random.gauss(
+                0, self.config.mutation_rate * 0.4
+            )
         rank_delta = random.choice([-1, 0, 0, 1])  # nosec B311
         mutated_rank = max(1, genome.rank + rank_delta)
         rank_noise = dict(getattr(genome, "rank_noise", {}))
         adapter_dropout = set(getattr(genome, "adapter_dropout", set()))
         duplication = dict(getattr(genome, "duplication_factors", {}))
-        layer_tags = list(getattr(self.config, "mutation_layer_tags", [])) or ["attn", "mlp", "proj"]
-        dropout_decay = max(0.0, min(1.0, float(getattr(self.config, "mutation_dropout_decay", 0.0))))
+        layer_tags = list(getattr(self.config, "mutation_layer_tags", [])) or [
+            "attn",
+            "mlp",
+            "proj",
+        ]
+        dropout_decay = max(
+            0.0, min(1.0, float(getattr(self.config, "mutation_dropout_decay", 0.0)))
+        )
         if adapter_dropout and random.random() < dropout_decay:  # nosec B311
             adapter_dropout_list = list(adapter_dropout)
             adapter_dropout.discard(random.choice(adapter_dropout_list))  # nosec B311
         dropout_prob = max(0.0, min(1.0, float(getattr(self.config, "mutation_dropout_prob", 0.0))))
         if layer_tags and random.random() < dropout_prob:  # nosec B311
             adapter_dropout.add(random.choice(layer_tags))  # nosec B311
-        duplication_prob = max(0.0, min(1.0, float(getattr(self.config, "mutation_duplication_prob", 0.0))))
+        duplication_prob = max(
+            0.0, min(1.0, float(getattr(self.config, "mutation_duplication_prob", 0.0)))
+        )
         duplication_scale = max(0.0, float(getattr(self.config, "mutation_duplication_scale", 0.5)))
         if layer_tags and random.random() < duplication_prob:  # nosec B311
             tag = random.choice(layer_tags)  # nosec B311
@@ -144,7 +154,9 @@ class PopulationManager:
             duplication[tag] = max(0.0, duplication[tag] * 0.5)
             if duplication[tag] < 0.05:
                 duplication.pop(tag, None)
-        rank_noise_prob = max(0.0, min(1.0, float(getattr(self.config, "mutation_rank_noise_prob", 0.0))))
+        rank_noise_prob = max(
+            0.0, min(1.0, float(getattr(self.config, "mutation_rank_noise_prob", 0.0)))
+        )
         rank_noise_scale = max(0.0, float(getattr(self.config, "mutation_rank_noise_scale", 1.0)))
         if layer_tags and random.random() < rank_noise_prob:  # nosec B311
             tag = random.choice(layer_tags)  # nosec B311
@@ -191,7 +203,9 @@ class PopulationManager:
             return 0
         return int(novelty * bins) % bins
 
-    def record_score(self, organelle_id: str, score: float, *, meta: dict[str, object] | None = None) -> None:
+    def record_score(
+        self, organelle_id: str, score: float, *, meta: dict[str, object] | None = None
+    ) -> None:
         self.history.setdefault(organelle_id, []).append(score)
         payload: dict[str, object]
         if meta is None:
@@ -425,7 +439,9 @@ class PopulationManager:
         if isinstance(limit, int) and limit > 0 and len(history) > limit:
             self.assimilation_history[key] = history[-limit:]
 
-    def assimilation_records(self, organelle_id: str, cell: tuple[str, str], limit: int = 10) -> list[dict[str, object]]:
+    def assimilation_records(
+        self, organelle_id: str, cell: tuple[str, str], limit: int = 10
+    ) -> list[dict[str, object]]:
         key = (organelle_id, cell[0], cell[1])
         records = self.assimilation_history.get(key, [])
         if not records:

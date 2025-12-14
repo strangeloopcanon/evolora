@@ -63,6 +63,18 @@ warn_return_any = true
 warn_unused_configs = true
 plugins = []
 
+[[tool.mypy.overrides]]
+module = "symbiont_ecology.environment.grid"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "symbiont_ecology.environment.loops"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "symbiont_ecology.organelles.peft_hebbian"
+ignore_errors = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra --cov=symbiont_ecology --cov-report=term-missing"

@@ -6,9 +6,9 @@ import json
 import math
 import random
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from copy import deepcopy
 
 from symbiont_ecology.config import (
     CanaryConfig,
@@ -44,7 +44,9 @@ class GridTask:
             # Be tolerant: extract the first numeric token anywhere in the string
             match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", clean)
             predicted = float(match.group(0)) if match else None
-            success = predicted is not None and math.isclose(predicted, float(self.target), rel_tol=1e-3)
+            success = predicted is not None and math.isclose(
+                predicted, float(self.target), rel_tol=1e-3
+            )
             task_reward = 1.0 if success else 0.0
 
         elif self.family == "string.sort":
@@ -290,7 +292,10 @@ class EnvironmentController:
             for state in self.cells.values():
                 state.price = min(
                     self.pricing.max,
-                    max(self.pricing.min, self.pricing.base + self.pricing.k * (self.ctrl.tau - state.success_ema)),
+                    max(
+                        self.pricing.min,
+                        self.pricing.base + self.pricing.k * (self.ctrl.tau - state.success_ema),
+                    ),
                 )
 
     def _bandit_score(self, cell: GridKey, total_pulls: int) -> float:
@@ -483,10 +488,12 @@ class GridEnvironment:
                 self.cache_bus.remove(entry)
                 continue
             entry["ttl"] = ttl - 1
-            cleaned.append({
-                "organelle_id": str(entry.get("organelle_id")),
-                "latent": list(entry.get("latent", [])),
-            })
+            cleaned.append(
+                {
+                    "organelle_id": str(entry.get("organelle_id")),
+                    "latent": list(entry.get("latent", [])),
+                }
+            )
             if len(cleaned) >= max_items:
                 break
         return cleaned
@@ -521,14 +528,15 @@ class GridEnvironment:
 
     def catastrophic_shift(self, *, scale: float = 0.5, rng: random.Random | None = None) -> None:
         local_rng = rng or self.rng
-        for cell, state in self.controller.cells.items():
+        for _cell, state in self.controller.cells.items():
             state.difficulty = max(0.05, min(0.95, local_rng.uniform(0.05, 0.95)))
             state.success_ema = max(0.05, min(0.95, self.controller.ctrl.tau * (1.0 - scale)))
             state.price = min(
                 self.controller.pricing.max,
                 max(
                     self.controller.pricing.min,
-                    self.controller.pricing.base + self.controller.pricing.k * (self.controller.ctrl.tau - state.success_ema),
+                    self.controller.pricing.base
+                    + self.controller.pricing.k * (self.controller.ctrl.tau - state.success_ema),
                 ),
             )
         self.organism_stats.clear()
@@ -767,7 +775,9 @@ class GridEnvironment:
         }
         if self.rng.random() < 0.45:
             sentence = self.rng.choice(base_sentences.get(depth, base_sentences["short"]))
-            prompt = f"Count the number of words in the sentence: '{sentence}'. Respond with an integer."
+            prompt = (
+                f"Count the number of words in the sentence: '{sentence}'. Respond with an integer."
+            )
             return prompt, self._count_alpha_words(sentence)
 
         mode = self.rng.choice(["html", "punctuation", "digits"])

@@ -1,5 +1,3 @@
-import math
-
 from symbiont_ecology.evolution.assimilation import AssimilationTester
 
 
@@ -39,4 +37,3 @@ def test_assimilation_bootstrap_includes_ci_and_power():
     assert ev.ci_low <= ev.uplift <= ev.ci_high
     # power is optional but if present should be bounded
     assert ev.power is None or (0.0 <= ev.power <= 1.0)
-

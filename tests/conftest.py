@@ -1,11 +1,3 @@
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
 import pytest
 import torch
 
@@ -15,7 +7,9 @@ from symbiont_ecology.organelles.hebbian import HebbianLoRAOrganelle
 @pytest.fixture(autouse=True)
 def _stub_gemma(monkeypatch):
     class _StubTokenizer:
-        def __call__(self, texts, return_tensors=None, padding=None, truncation=None, max_length=None):
+        def __call__(
+            self, texts, return_tensors=None, padding=None, truncation=None, max_length=None
+        ):
             ids = []
             for text in texts:
                 length = max(1, len(text.split()))
@@ -52,5 +46,7 @@ def _stub_gemma(monkeypatch):
         def trainable_parameters(self) -> int:  # pragma: no cover - simple stub
             return super().trainable_parameters()
 
-    monkeypatch.setattr("symbiont_ecology.host.kernel.GemmaBackbone", _StubBackbone)
-    monkeypatch.setattr("symbiont_ecology.organelles.peft_hebbian.HebbianPEFTOrganelle", _StubPEFTOrganelle)
+    monkeypatch.setattr("symbiont_ecology.host.kernel.HFBackbone", _StubBackbone)
+    monkeypatch.setattr(
+        "symbiont_ecology.organelles.peft_hebbian.HebbianPEFTOrganelle", _StubPEFTOrganelle
+    )

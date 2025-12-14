@@ -1,6 +1,7 @@
 import importlib.util
-import pytest
 from pathlib import Path
+
+import pytest
 
 _ANALYZER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "analyze_ecology_run.py"
 spec = importlib.util.spec_from_file_location("_analyzer", _ANALYZER_PATH)
@@ -43,8 +44,15 @@ def test_colony_selection_aggregates_series() -> None:
             "generation": 1,
             "avg_roi": 1.0,
             "colonies": 2,
-            "colony_selection": {"dissolved": 1, "replicated": 0, "pool_members": 2, "pool_pot": 1.0},
-            "colony_selection_events": [{"type": "selection", "dissolved": "col_x", "best": "col_y", "created": 0}],
+            "colony_selection": {
+                "dissolved": 1,
+                "replicated": 0,
+                "pool_members": 2,
+                "pool_pot": 1.0,
+            },
+            "colony_selection_events": [
+                {"type": "selection", "dissolved": "col_x", "best": "col_y", "created": 0}
+            ],
             "colony_selection_pool": [{"type": "pool_add", "count": 2, "pot": 1.0}],
             "colony_metrics": {
                 "col_x": {
@@ -61,8 +69,15 @@ def test_colony_selection_aggregates_series() -> None:
             "generation": 2,
             "avg_roi": 1.1,
             "colonies": 2,
-            "colony_selection": {"dissolved": 0, "replicated": 1, "pool_members": 1, "pool_pot": 0.5},
-            "colony_selection_events": [{"type": "replicate", "from": "col_y", "child": "col_y_c2"}],
+            "colony_selection": {
+                "dissolved": 0,
+                "replicated": 1,
+                "pool_members": 1,
+                "pool_pot": 0.5,
+            },
+            "colony_selection_events": [
+                {"type": "replicate", "from": "col_y", "child": "col_y_c2"}
+            ],
             "colony_metrics": {
                 "col_y": {
                     "bandwidth_budget": 0.75,
@@ -95,7 +110,14 @@ def test_merge_audit_summary_fields() -> None:
             "generation": 1,
             "avg_roi": 1.0,
             "merge_audits": [
-                {"organelle_id": "org_a", "cell": {"family": "math", "depth": "short"}, "pre_roi": 0.2, "post_roi": 0.35, "delta": 0.15, "tasks": 3}
+                {
+                    "organelle_id": "org_a",
+                    "cell": {"family": "math", "depth": "short"},
+                    "pre_roi": 0.2,
+                    "post_roi": 0.35,
+                    "delta": 0.15,
+                    "tasks": 3,
+                }
             ],
         },
         {
@@ -107,7 +129,14 @@ def test_merge_audit_summary_fields() -> None:
             "generation": 3,
             "avg_roi": 1.1,
             "merge_audits": [
-                {"organelle_id": "org_b", "cell": {"family": "word", "depth": "short"}, "pre_roi": 0.6, "post_roi": 0.5, "delta": -0.1, "tasks": 4}
+                {
+                    "organelle_id": "org_b",
+                    "cell": {"family": "word", "depth": "short"},
+                    "pre_roi": 0.6,
+                    "post_roi": 0.5,
+                    "delta": -0.1,
+                    "tasks": 4,
+                }
             ],
             "assimilation_attempts": [
                 {
@@ -133,7 +162,7 @@ def test_merge_audit_summary_fields() -> None:
                     "global_probe_passed": False,
                     "holdout": {"candidate_roi": 0.3},
                     "audit": {"delta": -0.1, "tasks": 4},
-                }
+                },
             ],
         },
     ]

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+
 from symbiont_ecology.environment.loops import EcologyLoop
 
 

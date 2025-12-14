@@ -1,5 +1,5 @@
+from symbiont_ecology.config import CanaryConfig, ControllerConfig, GridConfig, PricingConfig
 from symbiont_ecology.environment.grid import EnvironmentController
-from symbiont_ecology.config import GridConfig, ControllerConfig, PricingConfig, CanaryConfig
 
 
 def test_bandit_score_internal():
@@ -14,4 +14,3 @@ def test_bandit_score_internal():
     ec.bandit_success[cell] = 6.0
     score = ec._bandit_score(cell, total_pulls=100)
     assert isinstance(score, float) and score > 0.0
-

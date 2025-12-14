@@ -71,7 +71,13 @@ def _sample_summary():
         "co_routing_totals": {"org_a:org_b": 3},
         "colony_tier_counts_total": {"0": 1, "1": 1},
         "qd_archive_top": [
-            {"cell": "word.count:short", "bin": 0, "organelle": "org_a", "roi": 1.2, "novelty": 0.4},
+            {
+                "cell": "word.count:short",
+                "bin": 0,
+                "organelle": "org_a",
+                "roi": 1.2,
+                "novelty": 0.4,
+            },
             {"cell": "math:medium", "bin": 1, "organelle": "org_b", "roi": 1.05, "novelty": 0.3},
         ],
     }
@@ -98,7 +104,9 @@ def test_build_html_includes_charts(tmp_path: Path) -> None:
     # create fake image so gallery renders something
     (visuals / "avg_roi.png").write_bytes(b"fake")
 
-    html = evoscope.build_html(_sample_summary(), _sample_records(), _sample_assim_summary(), tmp_path)
+    html = evoscope.build_html(
+        _sample_summary(), _sample_records(), _sample_assim_summary(), tmp_path
+    )
 
     assert "cdn.jsdelivr.net/npm/chart.js" in html
     assert "const evoData" in html
