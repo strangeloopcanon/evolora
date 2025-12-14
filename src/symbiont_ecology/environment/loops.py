@@ -13,8 +13,12 @@ import torch
 
 from symbiont_ecology.config import EcologyConfig
 from symbiont_ecology.economics.api import compute_route_cost
+from symbiont_ecology.environment.colony_utils import colony_c2c_debit
 from symbiont_ecology.environment.grid import GridEnvironment, GridKey, GridTask
 from symbiont_ecology.environment.human import HumanBandit, HumanFeedbackResult
+from symbiont_ecology.environment.policy import parse_policy_json
+from symbiont_ecology.environment.stats import compute_mean_ci, power_proxy, team_accept
+from symbiont_ecology.environment.telemetry_utils import sanitize_telemetry
 from symbiont_ecology.evaluation import EvaluationManager
 from symbiont_ecology.evaluation.manager import EvaluationTask
 from symbiont_ecology.evolution.assimilation import AssimilationTester
@@ -1754,118 +1758,7 @@ class EcologyLoop:
 
     @staticmethod
     def _parse_policy_json(text: str, allowed: list[str]) -> dict[str, object]:
-        """Extract a tiny policy payload.
-
-        Strategy (best-effort, no heavy deps):
-        1) Prefer fenced ```json blocks; else any fenced block; else the outermost {...} span.
-        2) Try strict json.loads; on failure, apply light repairs (strip fences, drop trailing commas,
-           normalize Python literals, convert single quotes).
-        3) If JSON parsing fails, fall back to `key=value` pairs and coerce numbers/bools.
-        4) Return only keys in `allowed`.
-        """
-        import json as _json
-        import re as _re
-
-        def _find_fenced(block: str) -> list[str]:
-            candidates: list[str] = []
-            # ```json ... ``` preferred
-            for m in _re.finditer(r"```json\s*([\s\S]*?)\s*```", block, _re.IGNORECASE):
-                candidates.append(m.group(1))
-            # any ``` ... ```
-            for m in _re.finditer(r"```\s*([\s\S]*?)\s*```", block):
-                candidates.append(m.group(1))
-            return candidates
-
-        def _outer_object(block: str) -> str | None:
-            start = block.find("{")
-            if start == -1:
-                return None
-            depth = 0
-            for i in range(start, len(block)):
-                ch = block[i]
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        return block[start : i + 1]
-            return None
-
-        def _repair(s: str) -> str:
-            # strip code fences accidentally included
-            s = s.strip().strip("`")
-            # normalize common Python literals to JSON
-            s = _re.sub(r"\bTrue\b", "true", s)
-            s = _re.sub(r"\bFalse\b", "false", s)
-            s = _re.sub(r"\bNone\b", "null", s)
-            # remove trailing commas before closing } or ]
-            s = _re.sub(r",\s*([}\]])", r"\1", s)
-            # single-quoted keys -> double quotes
-            s = _re.sub(r"([{,]\s*)'([^'\s]+)'\s*:", r'\1"\2":', s)
-            # single-quoted string values -> double quotes (conservative, no nested quotes)
-            s = _re.sub(r":\s*'([^']*)'\s*([,}])", r': "\1"\2', s)
-            return s
-
-        def _try_load(s: str) -> dict[str, object] | None:
-            try:
-                data = _json.loads(s)
-            except Exception:
-                try:
-                    data = _json.loads(_repair(s))
-                except Exception:
-                    return None
-            if not isinstance(data, dict):
-                return None
-            return {k: v for k, v in data.items() if k in allowed}
-
-        def _coerce_value(token: str) -> object:
-            raw = token.strip()
-            percent = raw.endswith("%")
-            if percent:
-                raw = raw[:-1].strip()
-            lower = raw.lower()
-            if lower in {"true", "false"}:
-                return lower == "true"
-            if lower == "null":
-                return None
-            if (raw.startswith("'") and raw.endswith("'")) or (
-                raw.startswith('"') and raw.endswith('"')
-            ):
-                raw = raw[1:-1]
-            try:
-                if "." in raw or "e" in lower:
-                    value = float(raw)
-                else:
-                    value = float(int(raw))
-                if percent:
-                    value = value / 100.0
-                return value
-            except Exception:
-                return raw
-
-        def _parse_kv_pairs(block: str) -> dict[str, object]:
-            kvs: dict[str, object] = {}
-            equals_matches = _re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*([^\s;,]+)", block)
-            colon_matches = _re.findall(r"([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*([^\s;,{}]+)", block)
-            for key, value in equals_matches + colon_matches:
-                if allowed and key not in allowed:
-                    continue
-                kvs.setdefault(key, _coerce_value(value))
-            return kvs
-
-        candidates = _find_fenced(text)
-        outer = _outer_object(text)
-        if outer:
-            candidates.append(outer)
-        candidates.append(text)
-        for cand in candidates:
-            parsed = _try_load(cand)
-            if parsed:
-                return parsed
-        kvs = _parse_kv_pairs(text)
-        if kvs:
-            return kvs
-        return {}
+        return parse_policy_json(text=text, allowed=allowed)
 
     def run_colony_inference(
         self, member_ids: list[str], prompt: str, strategy: str = "best_of_two"
@@ -2300,22 +2193,7 @@ class EcologyLoop:
 
     @staticmethod
     def _colony_c2c_debit(meta: dict[str, object], amount: float, counter_key: str) -> bool:
-        """Attempt to pay a C2C cost from colony pot & bandwidth.
-
-        Returns True when the debit succeeds and updates pot/bandwidth/counter.
-        """
-        try:
-            bandwidth = float(meta.get("c2c_bandwidth_left", meta.get("bandwidth_left", 0.0)))
-            counter = int(meta.get(counter_key, 0))
-            pot = float(meta.get("pot", 0.0))
-        except Exception:
-            return False
-        if bandwidth < amount or counter <= 0 or pot < amount:
-            return False
-        meta["pot"] = pot - amount
-        meta["c2c_bandwidth_left"] = max(0.0, bandwidth - amount)
-        meta[counter_key] = counter - 1
-        return True
+        return colony_c2c_debit(meta=meta, amount=amount, counter_key=counter_key)
 
     def _colony_expected_cost(self, members: list[str], window: int) -> float:
         total = 0.0
@@ -3851,17 +3729,7 @@ class EcologyLoop:
 
     @staticmethod
     def _sanitize_telemetry(value: object) -> object:
-        if isinstance(value, float):
-            if math.isfinite(value):
-                return float(value)
-            return 0.0
-        if isinstance(value, (int, str, bool)) or value is None:
-            return value
-        if isinstance(value, dict):
-            return {key: EcologyLoop._sanitize_telemetry(val) for key, val in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [EcologyLoop._sanitize_telemetry(item) for item in value]
-        return str(value)
+        return sanitize_telemetry(value)
 
     def _record_assimilation_gate(
         self, reason: str, organelle_id: str, details: dict[str, object]
@@ -5220,46 +5088,19 @@ class EcologyLoop:
     def _compute_mean_ci(
         series: list[float], alpha: float = 0.05
     ) -> tuple[float, float, float, float]:
-        """Compute a normal-approximation CI for the mean of a series.
-
-        Returns (ci_low, ci_high, mean, se). Uses sample std (Bessel corrected) when n>1.
-        """
-        n = len(series)
-        if n == 0:
-            return (0.0, 0.0, 0.0, float("inf"))
-        mu = sum(series) / n
-        if n > 1:
-            var = sum((x - mu) ** 2 for x in series) / (n - 1)
-        else:
-            var = 0.0
-        se = math.sqrt(max(var, 1e-12)) / math.sqrt(n)
-        z = 1.96 if abs(alpha - 0.05) < 1e-6 else 1.0
-        return (mu - z * se, mu + z * se, mu, se)
+        return compute_mean_ci(series=series, alpha=alpha)
 
     @staticmethod
     def _power_proxy(
         mu: float, baseline: float, margin: float, se: float, alpha: float = 0.05
     ) -> float:
-        """Approximate one-sided power using a normal approximation.
-
-        Computes z_eff = (mu - (baseline + margin)) / se and returns Phi(z_eff - z_alpha).
-        This is a heuristic proxy in lieu of an exact test; bounded to [0,1].
-        """
-        import math as _m
-
-        if se <= 0.0:
-            return 1.0 if mu > (baseline + margin) else 0.0
-        z_alpha = 1.645 if abs(alpha - 0.05) < 1e-6 else 1.0
-        z_eff = (mu - (baseline + margin)) / max(se, 1e-6)
-        # standard normal CDF via erf
-        cdf = 0.5 * (1.0 + _m.erf((z_eff - z_alpha) / _m.sqrt(2.0)))
-        return max(0.0, min(1.0, float(cdf)))
+        return power_proxy(mu=mu, baseline=baseline, margin=margin, se=se, alpha=alpha)
 
     @staticmethod
     def _team_accept(ci_low: float, baseline: float, margin: float, n: int, min_tasks: int) -> bool:
-        if n < min_tasks:
-            return False
-        return ci_low > (baseline + margin)
+        return team_accept(
+            ci_low=ci_low, baseline=baseline, margin=margin, n=n, min_tasks=min_tasks
+        )
 
     def _maybe_team_probes(self) -> int:
         """Probe a few high-ROI pairs per generation and promote colonies when CI gate passes.
