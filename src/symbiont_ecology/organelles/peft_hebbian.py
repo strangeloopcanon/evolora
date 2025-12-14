@@ -312,6 +312,44 @@ class HebbianPEFTOrganelle(Organelle):
                     if incoming_b.shape == lora_b[self.organelle_id].weight.shape:
                         lora_b[self.organelle_id].weight.add_(incoming_b * alpha)
 
+    def load_adapter_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Replace adapter weights with a saved snapshot.
+
+        Unlike `import_adapter_state` (which is additive and used for merging), this loader
+        overwrites LoRA weights to match the provided snapshot exactly.
+        """
+        if not state:
+            return
+        try:
+            self.model.set_adapter(self.organelle_id)
+        except Exception:
+            pass
+        for name, module in self.model.named_modules():
+            if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
+                continue
+            lora_a = module.lora_A
+            lora_b = module.lora_B
+            if not isinstance(lora_a, dict) or self.organelle_id not in lora_a:
+                continue
+            key_a = f"{name}.lora_A"
+            key_b = f"{name}.lora_B"
+            if key_a in state:
+                incoming_a = state[key_a].to(
+                    lora_a[self.organelle_id].weight.device,
+                    lora_a[self.organelle_id].weight.dtype,
+                )
+                with torch.no_grad():
+                    if incoming_a.shape == lora_a[self.organelle_id].weight.shape:
+                        lora_a[self.organelle_id].weight.copy_(incoming_a)
+            if key_b in state:
+                incoming_b = state[key_b].to(
+                    lora_b[self.organelle_id].weight.device,
+                    lora_b[self.organelle_id].weight.dtype,
+                )
+                with torch.no_grad():
+                    if incoming_b.shape == lora_b[self.organelle_id].weight.shape:
+                        lora_b[self.organelle_id].weight.copy_(incoming_b)
+
     def trainable_parameters(self) -> int:
         total = 0
         for module in self.model.modules():

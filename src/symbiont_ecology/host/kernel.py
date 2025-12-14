@@ -594,6 +594,28 @@ class HostKernel:
         except Exception:
             pass
 
+    def load_organelle_adapter(self, organelle_id: str, path: str | Path) -> None:
+        """Load an adapter state from disk, preferring exact replacement.
+
+        Some organelles implement a dedicated `load_adapter_state(state)` which replaces
+        the current adapter weights. When unavailable, this falls back to
+        `import_adapter_state(state, alpha=1.0)`.
+        """
+        org = self.organelles.get(organelle_id)
+        if org is None:
+            raise KeyError(f"Unknown organelle {organelle_id}")
+        p = Path(path)
+        state = load_file(str(p))
+        loader = getattr(org, "load_adapter_state", None)
+        if callable(loader):
+            loader(state)
+            return
+        importer = getattr(org, "import_adapter_state", None)
+        if callable(importer):
+            importer(state, alpha=1.0)
+            return
+        raise AttributeError(f"Organelle {organelle_id} does not support adapter loading")
+
     # ------------------------------------------------------------------
     def _apply_assimilation_seed(self, organelle: Organelle) -> None:
         scale = getattr(self.config.assimilation_tuning, "seed_scale", 0.0)
