@@ -1,6 +1,7 @@
 import types
 
 import torch
+
 from symbiont_ecology.utils.torch_utils import resolve_device
 
 

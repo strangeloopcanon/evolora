@@ -13,7 +13,7 @@ from safetensors.torch import load_file, save_file
 
 from symbiont_ecology.config import EcologyConfig, HebbianConfig
 from symbiont_ecology.evolution.ledger import ATPLedger
-from symbiont_ecology.host.gemma import GemmaBackbone
+from symbiont_ecology.host.backbone import HFBackbone
 from symbiont_ecology.interfaces.messages import MessageEnvelope, Observation, Plan
 from symbiont_ecology.metrics.telemetry import RewardBreakdown, RouteEvent
 from symbiont_ecology.organelles import peft_hebbian
@@ -58,14 +58,14 @@ class HostKernel:
     router: BanditRouter
     ledger: ATPLedger
     device: torch.device = field(init=False)
-    backbone: GemmaBackbone = field(init=False)
+    backbone: HFBackbone = field(init=False)
     organelles: dict[str, Organelle] = field(default_factory=dict)
     assimilation_state: dict[str, torch.Tensor] = field(default_factory=dict)
     assimilation_weights: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.device = resolve_device(self.config.host.device)
-        self.backbone = GemmaBackbone(self.config.host)
+        self.backbone = HFBackbone(self.config.host)
 
     def freeze_host(self) -> None:
         for parameter in self._iter_host_parameters():

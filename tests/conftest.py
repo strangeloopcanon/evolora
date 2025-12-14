@@ -1,5 +1,6 @@
 import pytest
 import torch
+
 from symbiont_ecology.organelles.hebbian import HebbianLoRAOrganelle
 
 
@@ -45,7 +46,7 @@ def _stub_gemma(monkeypatch):
         def trainable_parameters(self) -> int:  # pragma: no cover - simple stub
             return super().trainable_parameters()
 
-    monkeypatch.setattr("symbiont_ecology.host.kernel.GemmaBackbone", _StubBackbone)
+    monkeypatch.setattr("symbiont_ecology.host.kernel.HFBackbone", _StubBackbone)
     monkeypatch.setattr(
         "symbiont_ecology.organelles.peft_hebbian.HebbianPEFTOrganelle", _StubPEFTOrganelle
     )

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+
 from symbiont_ecology import EcologyConfig
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.assimilation import AssimilationTester

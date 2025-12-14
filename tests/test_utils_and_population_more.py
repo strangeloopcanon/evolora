@@ -1,4 +1,5 @@
 import torch
+
 from symbiont_ecology.config import EvolutionConfig
 from symbiont_ecology.evolution.population import Genome, PopulationManager
 from symbiont_ecology.utils.torch_utils import clamp_norm, ensure_dtype, no_grad, resolve_device

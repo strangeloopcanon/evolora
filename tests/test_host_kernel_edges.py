@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 import torch
+
 from symbiont_ecology import EcologyConfig
 from symbiont_ecology.evolution.ledger import ATPLedger
 from symbiont_ecology.host.kernel import HostKernel

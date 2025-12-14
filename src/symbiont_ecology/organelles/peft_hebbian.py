@@ -1,4 +1,4 @@
-"""Hebbian-like PEFT LoRA organelle on Gemma backbone."""
+"""Hebbian-like PEFT LoRA organelle on a Hugging Face causal LM backbone."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import torch
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch import nn
 
-from symbiont_ecology.host.gemma import GemmaBackbone
+from symbiont_ecology.host.backbone import HFBackbone
 from symbiont_ecology.interfaces.messages import MessageEnvelope, Plan
 from symbiont_ecology.metrics.telemetry import RewardBreakdown
 from symbiont_ecology.organelles.base import Organelle, OrganelleContext
@@ -28,7 +28,7 @@ class TraceStore:
 class HebbianPEFTOrganelle(Organelle):
     def __init__(
         self,
-        backbone: GemmaBackbone,
+        backbone: HFBackbone,
         rank: int,
         context: OrganelleContext,
         activation_bias: float = 0.0,
