@@ -210,7 +210,7 @@ class EcologyLoop:
         self._mutation_stats_gen = {"rank_noise": 0, "dropout": 0, "duplication": 0}
         self._merge_audits_gen = []
 
-    def run_generation(self, batch_size: int) -> None:
+    def run_generation(self, batch_size: int) -> dict[str, object]:
         self.generation_index += 1
         self.promotions_this_gen = 0
         self.trial_creations_this_gen = 0
@@ -270,7 +270,7 @@ class EcologyLoop:
             self.evaluation_manager = EvaluationManager(runtime)
         organelle_ids = self.host.list_organelle_ids()
         if not organelle_ids:
-            return
+            return {}
 
         self._update_winter_cycle()
         ticket_base = self.config.energy.m

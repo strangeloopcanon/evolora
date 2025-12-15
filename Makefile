@@ -9,6 +9,7 @@ MYPY := $(VENV)/bin/mypy
 PYTEST := $(VENV)/bin/pytest
 BANDIT := $(VENV)/bin/bandit
 DETECT_SECRETS := $(VENV)/bin/detect-secrets
+DETECT_SECRETS_HOOK := $(VENV)/bin/detect-secrets-hook
 PIP_AUDIT := $(VENV)/bin/pip-audit
 PRECOMMIT := $(VENV)/bin/pre-commit
 
@@ -32,7 +33,7 @@ check: setup
 	$(RUFF) check src tests
 	$(MYPY) src
 	$(BANDIT) -q -r src/symbiont_ecology --severity-level medium
-	$(DETECT_SECRETS) scan --baseline .secrets.baseline
+	git ls-files -z | xargs -0 $(DETECT_SECRETS_HOOK) --baseline .secrets.baseline
 
 .PHONY: test
 test: setup

@@ -15,7 +15,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Iterator, Literal
+from typing import Iterator, Literal, SupportsFloat, SupportsInt, cast
 
 import torch
 from pydantic import BaseModel, Field
@@ -226,21 +226,27 @@ def _summarize_assimilation(path: Path) -> AssimilationMetrics:
 
 
 def _safe_int(value: object, default: int = 0) -> int:
-    try:
-        if value is None:
-            return default
-        return int(value)  # type: ignore[arg-type]
-    except Exception:
+    if value is None:
         return default
+    try:
+        return int(cast(SupportsInt, value))
+    except Exception:
+        try:
+            return int(str(value).strip())
+        except Exception:
+            return default
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)  # type: ignore[arg-type]
-    except Exception:
+    if value is None:
         return default
+    try:
+        return float(cast(SupportsFloat, value))
+    except Exception:
+        try:
+            return float(str(value).strip())
+        except Exception:
+            return default
 
 
 def _summarize_open_endedness(
