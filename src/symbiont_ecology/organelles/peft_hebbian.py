@@ -57,20 +57,14 @@ class HebbianPEFTOrganelle(Organelle):
             ],
         )
         if isinstance(base_model, PeftModel):
-            base_model.add_adapter(self.organelle_id, lora_cfg)
             model = base_model
-        else:
-            model = get_peft_model(base_model, lora_cfg)
-            try:
-                backbone.model = model  # share PEFT-wrapped backbone to avoid duplicate adapters
-            except AttributeError:
-                pass
-            # rename default adapter to organelle id if necessary
             try:
                 model.add_adapter(self.organelle_id, lora_cfg)
-                model.set_adapter(self.organelle_id)
             except Exception:
                 pass
+        else:
+            model = get_peft_model(base_model, lora_cfg, adapter_name=self.organelle_id)
+            backbone.model = model  # share PEFT-wrapped backbone to avoid duplicate adapters
         self.model = model
         try:
             self.model.set_adapter(self.organelle_id)
@@ -188,12 +182,16 @@ class HebbianPEFTOrganelle(Organelle):
         self._fisher_importance = decay * self._fisher_importance + (1.0 - decay) * fisher_delta
 
     def _update_lora_pair(self, module: nn.Module, scale: float) -> None:
-        # module.lora_A / lora_B are dict-like keyed by adapter name; choose first
+        # module.lora_A / lora_B are dict-like keyed by adapter name; update this organelle's adapter.
         try:
-            adapter_names = list(module.lora_A.keys())
-            if not adapter_names:
+            adapter = self.organelle_id
+            if adapter not in module.lora_A:
+                adapter_names = list(module.lora_A.keys())
+                if not adapter_names:
+                    return
+                adapter = adapter_names[0]
+            if adapter not in module.lora_B:
                 return
-            adapter = adapter_names[0]
             lora_a = module.lora_A[adapter]
             lora_b = module.lora_B[adapter]
             a_weight = lora_a.weight
@@ -245,12 +243,13 @@ class HebbianPEFTOrganelle(Organelle):
         for name, module in self.model.named_modules():
             if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
                 continue
-            lora_a = module.lora_A
-            lora_b = module.lora_B
-            if not isinstance(lora_a, dict) or self.organelle_id not in lora_a:
+            try:
+                if self.organelle_id not in module.lora_A or self.organelle_id not in module.lora_B:
+                    continue
+                weight_a = module.lora_A[self.organelle_id].weight.detach().cpu().clone()
+                weight_b = module.lora_B[self.organelle_id].weight.detach().cpu().clone()
+            except Exception:  # pragma: no cover - defensive against PEFT internals
                 continue
-            weight_a = lora_a[self.organelle_id].weight.detach().cpu().clone()
-            weight_b = lora_b[self.organelle_id].weight.detach().cpu().clone()
             state[f"{name}.lora_A"] = weight_a
             state[f"{name}.lora_B"] = weight_b
         return state
@@ -263,12 +262,11 @@ class HebbianPEFTOrganelle(Organelle):
             if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
                 continue
             try:
-                adapter_names = list(module.lora_A.keys())
+                adapter = self.organelle_id
+                if adapter not in module.lora_A or adapter not in module.lora_B:
+                    continue
             except Exception:
                 continue
-            if not adapter_names:
-                continue
-            adapter = adapter_names[0]
             try:
                 weight_a = module.lora_A[adapter].weight
                 weight_b = module.lora_B[adapter].weight
@@ -291,26 +289,29 @@ class HebbianPEFTOrganelle(Organelle):
         for name, module in self.model.named_modules():
             if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
                 continue
-            lora_a = module.lora_A
-            lora_b = module.lora_B
-            if not isinstance(lora_a, dict) or self.organelle_id not in lora_a:
+            try:
+                if self.organelle_id not in module.lora_A or self.organelle_id not in module.lora_B:
+                    continue
+            except Exception:  # pragma: no cover
                 continue
             key_a = f"{name}.lora_A"
             key_b = f"{name}.lora_B"
             if key_a in state:
                 incoming_a = state[key_a].to(
-                    lora_a[self.organelle_id].weight.device, lora_a[self.organelle_id].weight.dtype
+                    module.lora_A[self.organelle_id].weight.device,
+                    module.lora_A[self.organelle_id].weight.dtype,
                 )
                 with torch.no_grad():
-                    if incoming_a.shape == lora_a[self.organelle_id].weight.shape:
-                        lora_a[self.organelle_id].weight.add_(incoming_a * alpha)
+                    if incoming_a.shape == module.lora_A[self.organelle_id].weight.shape:
+                        module.lora_A[self.organelle_id].weight.add_(incoming_a * alpha)
             if key_b in state:
                 incoming_b = state[key_b].to(
-                    lora_b[self.organelle_id].weight.device, lora_b[self.organelle_id].weight.dtype
+                    module.lora_B[self.organelle_id].weight.device,
+                    module.lora_B[self.organelle_id].weight.dtype,
                 )
                 with torch.no_grad():
-                    if incoming_b.shape == lora_b[self.organelle_id].weight.shape:
-                        lora_b[self.organelle_id].weight.add_(incoming_b * alpha)
+                    if incoming_b.shape == module.lora_B[self.organelle_id].weight.shape:
+                        module.lora_B[self.organelle_id].weight.add_(incoming_b * alpha)
 
     def load_adapter_state(self, state: dict[str, torch.Tensor]) -> None:
         """Replace adapter weights with a saved snapshot.
@@ -327,28 +328,29 @@ class HebbianPEFTOrganelle(Organelle):
         for name, module in self.model.named_modules():
             if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
                 continue
-            lora_a = module.lora_A
-            lora_b = module.lora_B
-            if not isinstance(lora_a, dict) or self.organelle_id not in lora_a:
+            try:
+                if self.organelle_id not in module.lora_A or self.organelle_id not in module.lora_B:
+                    continue
+            except Exception:  # pragma: no cover
                 continue
             key_a = f"{name}.lora_A"
             key_b = f"{name}.lora_B"
             if key_a in state:
                 incoming_a = state[key_a].to(
-                    lora_a[self.organelle_id].weight.device,
-                    lora_a[self.organelle_id].weight.dtype,
+                    module.lora_A[self.organelle_id].weight.device,
+                    module.lora_A[self.organelle_id].weight.dtype,
                 )
                 with torch.no_grad():
-                    if incoming_a.shape == lora_a[self.organelle_id].weight.shape:
-                        lora_a[self.organelle_id].weight.copy_(incoming_a)
+                    if incoming_a.shape == module.lora_A[self.organelle_id].weight.shape:
+                        module.lora_A[self.organelle_id].weight.copy_(incoming_a)
             if key_b in state:
                 incoming_b = state[key_b].to(
-                    lora_b[self.organelle_id].weight.device,
-                    lora_b[self.organelle_id].weight.dtype,
+                    module.lora_B[self.organelle_id].weight.device,
+                    module.lora_B[self.organelle_id].weight.dtype,
                 )
                 with torch.no_grad():
-                    if incoming_b.shape == lora_b[self.organelle_id].weight.shape:
-                        lora_b[self.organelle_id].weight.copy_(incoming_b)
+                    if incoming_b.shape == module.lora_B[self.organelle_id].weight.shape:
+                        module.lora_B[self.organelle_id].weight.copy_(incoming_b)
 
     def trainable_parameters(self) -> int:
         total = 0
