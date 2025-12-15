@@ -86,4 +86,7 @@ def test_benchmark_suite_smoke_run(tmp_path: Path):
     assert result.name == "smoke"
     assert result.metrics.episodes > 0
     assert 0.0 <= result.metrics.success_rate <= 1.0
+    assert len(result.replicates) == 1
+    assert result.replicates[0].seed == 123
+    assert result.open_endedness.merges_total >= 0
     assert (tmp_path / "smoke" / "episodes.jsonl").exists()
