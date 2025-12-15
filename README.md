@@ -130,7 +130,7 @@ If a chunk is killed by macOS, rerun the same `--resume-from` command; it will p
       --generations 10 --batch-size 2 \
       --output artifacts_gemma_smoke
   ```
-- **Diagnostics run (≤20 generations, relaxed energy gate)**  
+- **Diagnostics run (≤20 generations, relaxed energy gate)**
   Use this before any overnight job to confirm merges can fire and to inspect the new telemetry snapshots.
   ```bash
   MPLCONFIGDIR=$(mktemp -d) \
@@ -240,6 +240,21 @@ This will sequentially run:
 - frozen base: `paper_qwen3_frozen.yaml`
 - single adapter: `paper_qwen3_single.yaml`
 - full ecology: `paper_qwen3_ecology.yaml`
+
+### Benchmark harness (one report + tables)
+
+For quick, reproducible comparisons (and CI), use the benchmark harness. It emits a single JSON report and a Markdown table with ROI + open-endedness metrics (merges, QD coverage, colonies, diversity):
+
+```bash
+# CI-safe: stub backend (no model downloads)
+AGENT_MODE=baseline .venv/bin/python scripts/benchmark_suite.py --mode ci
+
+# Paper-style suite: multiple seeds + HF backend
+AGENT_MODE=baseline .venv/bin/python scripts/benchmark_suite.py \
+  --suite config/benchmarks/paper_qwen3_suite.yaml
+```
+
+Outputs land under `artifacts_bench_*` with `benchmark_report.json` and `benchmark_report.md`.
 
 and write separate `artifacts_paper_qwen3_*_<timestamp>` directories for each, with plots and a `report.md` under each root.
 

@@ -9,12 +9,12 @@ __pycache__/
 
 # Local tooling
 .beads/
-.agents.yml
 
 
 # Artifacts & telemetry
 artifacts*/
 visuals/
+plots/
 results/
 *.report.md
 
@@ -35,6 +35,3 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
-
-# Detect-secrets
-.secrets.baseline

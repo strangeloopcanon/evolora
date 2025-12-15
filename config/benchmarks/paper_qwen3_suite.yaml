@@ -1,0 +1,22 @@
+cases:
+  - name: paper_qwen3_frozen
+    config_path: config/experiments/paper_qwen3_frozen.yaml
+    backend: hf
+    generations: 50
+    batch_size: 4
+    seeds: [1337, 2337, 3337]
+    disable_human: true
+  - name: paper_qwen3_single
+    config_path: config/experiments/paper_qwen3_single.yaml
+    backend: hf
+    generations: 50
+    batch_size: 4
+    seeds: [1337, 2337, 3337]
+    disable_human: true
+  - name: paper_qwen3_ecology
+    config_path: config/experiments/paper_qwen3_ecology.yaml
+    backend: hf
+    generations: 50
+    batch_size: 4
+    seeds: [1337, 2337, 3337]
+    disable_human: true
