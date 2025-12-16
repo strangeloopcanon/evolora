@@ -12,6 +12,18 @@ if [ ! -x "$PY" ]; then
   exit 1
 fi
 
+EXTRA_EVAL_ARGS=()
+if [ -n "${FINAL_HOLDOUT_TASKS:-}" ]; then
+  if [ ! -f "$FINAL_HOLDOUT_TASKS" ]; then
+    echo "FINAL_HOLDOUT_TASKS not found: $FINAL_HOLDOUT_TASKS" >&2
+    exit 2
+  fi
+  EXTRA_EVAL_ARGS+=(--final-holdout "$FINAL_HOLDOUT_TASKS")
+  if [ -n "${FINAL_HOLDOUT_SAMPLE_SIZE:-}" ]; then
+    EXTRA_EVAL_ARGS+=(--final-holdout-sample-size "$FINAL_HOLDOUT_SAMPLE_SIZE")
+  fi
+fi
+
 timestamp() {
   date +%Y%m%d_%H%M%S
 }
@@ -23,7 +35,8 @@ run_frozen() {
     --config config/experiments/paper_qwen3_frozen.yaml \
     --generations 50 \
     --output "$run_id" \
-    --checkpoint-every 5
+    --checkpoint-every 5 \
+    "${EXTRA_EVAL_ARGS[@]}"
   MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
 }
 
@@ -34,7 +47,8 @@ run_single() {
     --config config/experiments/paper_qwen3_single.yaml \
     --generations 50 \
     --output "$run_id" \
-    --checkpoint-every 5
+    --checkpoint-every 5 \
+    "${EXTRA_EVAL_ARGS[@]}"
   MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
 }
 
@@ -45,7 +59,8 @@ run_ecology() {
     --config config/experiments/paper_qwen3_ecology.yaml \
     --generations 50 \
     --output "$run_id" \
-    --checkpoint-every 5
+    --checkpoint-every 5 \
+    "${EXTRA_EVAL_ARGS[@]}"
   MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
 }
 
@@ -63,4 +78,3 @@ case "${1:-all}" in
     exit 1
     ;;
 esac
-

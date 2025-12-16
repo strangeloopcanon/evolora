@@ -1,0 +1,120 @@
+{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Run 6 completes after 6 retries and 8 fallbacks'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `TeamProbeSynergyDelta` to snake_case. Respond with the new name only.", "target": "team_probe_synergy_delta", "family": "code.format", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'scarcity under pressure routes symbiotic'. Respond with an integer.", "target": 5, "family": "word.count", "depth": "short"}
+{"prompt": "Convert the variable name `RecurrentEvalPasses` to snake_case. Respond with the new name only.", "target": "recurrent_eval_passes", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `BudgetEnergyCeiling` to snake_case. Respond with the new name only.", "target": "budget_energy_ceiling", "family": "code.format", "depth": "medium"}
+{"prompt": "Compute (23 + 12) * 11. Respond with the number only.", "target": 385, "family": "math", "depth": "medium"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div>vectors merge <strong>workflow</strong> <span>biosphere</span></div>` Respond with an integer.", "target": 4, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'agents quickly energy adapt tickets'. Respond with an integer.", "target": 5, "family": "word.count", "depth": "short"}
+{"prompt": "Convert the variable name `HoldoutSampleSize23` to snake_case. Respond with the new name only.", "target": "holdout_sample_size23", "family": "code.format", "depth": "medium"}
+{"prompt": "Convert the variable name `GlobalEpisodeCap` to snake_case. Respond with the new name only.", "target": "global_episode_cap", "family": "code.format", "depth": "medium"}
+{"prompt": "Multiply 13 by 13. Respond with the number only.", "target": 169, "family": "math", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'policy scarcity learn pressure tasks tickets colonies'. Respond with an integer.", "target": 7, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Run 7 completes after 8 retries and 8 fallbacks'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `TeamProbeSynergyDelta` to snake_case. Respond with the new name only.", "target": "team_probe_synergy_delta", "family": "code.format", "depth": "medium"}
+{"prompt": "Convert the variable name `DeltaRewardEnergy` to snake_case. Respond with the new name only.", "target": "delta_reward_energy", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div>align <strong>workflow</strong> biosphere vectors</div>` Respond with an integer.", "target": 4, "family": "word.count", "depth": "medium"}
+{"prompt": "Multiply 12 by 13. Respond with the number only.", "target": 156, "family": "math", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'tasks learn tickets policy emerge'. Respond with an integer.", "target": 5, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'tasks under adapt'. Respond with an integer.", "target": 3, "family": "word.count", "depth": "short"}
+{"prompt": "Multiply 11 by 13. Respond with the number only.", "target": 143, "family": "math", "depth": "short"}
+{"prompt": "Compute (3 + 3) * 12. Respond with the number only.", "target": 72, "family": "math", "depth": "medium"}
+{"prompt": "Compute 63 / 7. Respond with the number only.", "target": 9, "family": "math", "depth": "short"}
+{"prompt": "Subtract 22 from 68. Respond with the number only.", "target": 46, "family": "math", "depth": "short"}
+{"prompt": "Convert the variable name `AdapterStateCache` to snake_case. Respond with the new name only.", "target": "adapter_state_cache", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `colonyVarianceRatio` to snake_case. Respond with the new name only.", "target": "colony_variance_ratio", "family": "code.format", "depth": "short"}
+{"prompt": "Subtract 87 from 72. Respond with the number only.", "target": -15, "family": "math", "depth": "short"}
+{"prompt": "Convert the variable name `BudgetEnergyCeiling` to snake_case. Respond with the new name only.", "target": "budget_energy_ceiling", "family": "code.format", "depth": "medium"}
+{"prompt": "Multiply 10 by 4. Respond with the number only.", "target": 40, "family": "math", "depth": "short"}
+{"prompt": "Compute (24 + 4) * 7. Respond with the number only.", "target": 196, "family": "math", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'cooperate policy from energy under quickly agents'. Respond with an integer.", "target": 7, "family": "word.count", "depth": "short"}
+{"prompt": "Compute (27 + 26) * 6. Respond with the number only.", "target": 318, "family": "math", "depth": "medium"}
+{"prompt": "Compute (8 * 10) + 2. Respond with the number only.", "target": 82, "family": "math", "depth": "medium"}
+{"prompt": "Compute (23 - 9) / 8. Respond with the number only.", "target": 1.75, "family": "math", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'quickly across energy adapt colonies from pressure scarcity'. Respond with an integer.", "target": 8, "family": "word.count", "depth": "short"}
+{"prompt": "Convert the variable name `HoldoutSampleSize` to snake_case. Respond with the new name only.", "target": "holdout_sample_size", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `minWindowMax` to snake_case. Respond with the new name only.", "target": "min_window_max", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `EnergyTicketMultiplier` to snake_case. Respond with the new name only.", "target": "energy_ticket_multiplier", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Run 7 completes after 7 retries and 7 fallbacks'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `minWindowMax` to snake_case. Respond with the new name only.", "target": "min_window_max", "family": "code.format", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'agents policy quickly pressure routes adapt'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'emerge cooperate routes'. Respond with an integer.", "target": 3, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Run 4 completes after 5 retries and 1 fallbacks'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'routes across agents'. Respond with an integer.", "target": 3, "family": "word.count", "depth": "short"}
+{"prompt": "Compute (5 * 19) + 36. Respond with the number only.", "target": 131, "family": "math", "depth": "medium"}
+{"prompt": "Add 28 and 26. Respond with the number only.", "target": 54, "family": "math", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'tickets pressure agents selection'. Respond with an integer.", "target": 4, "family": "word.count", "depth": "short"}
+{"prompt": "Convert the variable name `BudgetEnergyCeiling` to snake_case. Respond with the new name only.", "target": "budget_energy_ceiling", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `mergeAuditEnabled` to snake_case. Respond with the new name only.", "target": "merge_audit_enabled", "family": "code.format", "depth": "short"}
+{"prompt": "Compute (16 * 12) + 29. Respond with the number only.", "target": 221, "family": "math", "depth": "medium"}
+{"prompt": "Convert the variable name `colonyVarianceRatio` to snake_case. Respond with the new name only.", "target": "colony_variance_ratio", "family": "code.format", "depth": "medium"}
+{"prompt": "Compute (66 - 6) / 2. Respond with the number only.", "target": 30.0, "family": "math", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'adapt pressure agents from emerge scarcity quickly tickets across'. Respond with an integer.", "target": 9, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div><strong>biosphere</strong> <span>workflow</span> merge <em>vectors</em> <em>align</em></div>` Respond with an integer.", "target": 5, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `MeanEnergyBalance` to snake_case. Respond with the new name only.", "target": "mean_energy_balance", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'cooperate quickly selection tasks niches'. Respond with an integer.", "target": 5, "family": "word.count", "depth": "short"}
+{"prompt": "Add 77 and 60. Respond with the number only.", "target": 137, "family": "math", "depth": "short"}
+{"prompt": "Compute (4 + 8) * 4. Respond with the number only.", "target": 48, "family": "math", "depth": "medium"}
+{"prompt": "Compute (7 * 13) + 48. Respond with the number only.", "target": 139, "family": "math", "depth": "medium"}
+{"prompt": "Convert the variable name `RouteCostPenalty3` to snake_case. Respond with the new name only.", "target": "route_cost_penalty3", "family": "code.format", "depth": "medium"}
+{"prompt": "Add 70 and 90. Respond with the number only.", "target": 160, "family": "math", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'learn symbiotic colonies adapt policy tasks under'. Respond with an integer.", "target": 7, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div><em>merge</em> align <span>workflow</span></div>` Respond with an integer.", "target": 3, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `mergeAuditEnabled` to snake_case. Respond with the new name only.", "target": "merge_audit_enabled", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Run 3 completes after 7 retries and 4 fallbacks'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "medium"}
+{"prompt": "Compute (96 - 9) / 7. Respond with the number only.", "target": 12.428571428571429, "family": "math", "depth": "medium"}
+{"prompt": "Convert the variable name `BudgetEnergyCeiling` to snake_case. Respond with the new name only.", "target": "budget_energy_ceiling", "family": "code.format", "depth": "short"}
+{"prompt": "Compute (9 * 8) + 29. Respond with the number only.", "target": 101, "family": "math", "depth": "medium"}
+{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Run 2 completes after 9 retries and 2 fallbacks'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "medium"}
+{"prompt": "Compute (62 - 9) / 8. Respond with the number only.", "target": 6.625, "family": "math", "depth": "medium"}
+{"prompt": "Convert the variable name `BudgetEnergyCeiling32` to snake_case. Respond with the new name only.", "target": "budget_energy_ceiling32", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `mergeAuditEnabled7` to snake_case. Respond with the new name only.", "target": "merge_audit_enabled7", "family": "code.format", "depth": "medium"}
+{"prompt": "Subtract 4 from 98. Respond with the number only.", "target": 94, "family": "math", "depth": "short"}
+{"prompt": "Compute (52 - 3) / 7. Respond with the number only.", "target": 7.0, "family": "math", "depth": "medium"}
+{"prompt": "Compute (85 - 8) / 8. Respond with the number only.", "target": 9.625, "family": "math", "depth": "medium"}
+{"prompt": "Add 28 and 69. Respond with the number only.", "target": 97, "family": "math", "depth": "short"}
+{"prompt": "Multiply 3 by 10. Respond with the number only.", "target": 30, "family": "math", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'emerge scarcity symbiotic tasks routes quickly colonies tickets across'. Respond with an integer.", "target": 9, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div><span>merge</span> <span>biosphere</span> align <strong>vectors</strong></div>` Respond with an integer.", "target": 4, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `EvidenceTokenWindow` to snake_case. Respond with the new name only.", "target": "evidence_token_window", "family": "code.format", "depth": "medium"}
+{"prompt": "Subtract 17 from 74. Respond with the number only.", "target": 57, "family": "math", "depth": "short"}
+{"prompt": "Convert the variable name `RecurrentEvalPasses` to snake_case. Respond with the new name only.", "target": "recurrent_eval_passes", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'pressure adapt learn quickly cooperate selection symbiotic'. Respond with an integer.", "target": 7, "family": "word.count", "depth": "short"}
+{"prompt": "Compute (11 * 18) + 23. Respond with the number only.", "target": 221, "family": "math", "depth": "medium"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div><span>biosphere</span> merge <span>align</span></div>` Respond with an integer.", "target": 3, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `colonyVarianceRatio` to snake_case. Respond with the new name only.", "target": "colony_variance_ratio", "family": "code.format", "depth": "short"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div>biosphere <em>vectors</em> merge align</div>` Respond with an integer.", "target": 4, "family": "word.count", "depth": "medium"}
+{"prompt": "Compute 16 / 4. Respond with the number only.", "target": 4, "family": "math", "depth": "short"}
+{"prompt": "Convert the variable name `TeamProbeSynergyDelta` to snake_case. Respond with the new name only.", "target": "team_probe_synergy_delta", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'pressure cooperate symbiotic learn agents colonies emerge policy from'. Respond with an integer.", "target": 9, "family": "word.count", "depth": "short"}
+{"prompt": "Convert the variable name `promotionTargetRate` to snake_case. Respond with the new name only.", "target": "promotion_target_rate", "family": "code.format", "depth": "medium"}
+{"prompt": "Multiply 2 by 7. Respond with the number only.", "target": 14, "family": "math", "depth": "short"}
+{"prompt": "Compute (15 * 12) + 22. Respond with the number only.", "target": 202, "family": "math", "depth": "medium"}
+{"prompt": "Convert the variable name `QdArchiveCoverage` to snake_case. Respond with the new name only.", "target": "qd_archive_coverage", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `RecurrentEvalPasses` to snake_case. Respond with the new name only.", "target": "recurrent_eval_passes", "family": "code.format", "depth": "short"}
+{"prompt": "Multiply 11 by 7. Respond with the number only.", "target": 77, "family": "math", "depth": "short"}
+{"prompt": "Convert the variable name `AdapterStateCache` to snake_case. Respond with the new name only.", "target": "adapter_state_cache", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `RouteCostPenalty` to snake_case. Respond with the new name only.", "target": "route_cost_penalty", "family": "code.format", "depth": "short"}
+{"prompt": "Compute (26 - 2) / 8. Respond with the number only.", "target": 3.0, "family": "math", "depth": "medium"}
+{"prompt": "Convert the variable name `GlobalEpisodeCap` to snake_case. Respond with the new name only.", "target": "global_episode_cap", "family": "code.format", "depth": "short"}
+{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Run 6 completes after 6 retries and 7 fallbacks'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "medium"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div><em>workflow</em> align <strong>vectors</strong></div>` Respond with an integer.", "target": 3, "family": "word.count", "depth": "medium"}
+{"prompt": "Multiply 6 by 8. Respond with the number only.", "target": 48, "family": "math", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'learn niches from under agents pressure adapt tasks'. Respond with an integer.", "target": 8, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div>vectors <strong>merge</strong> align biosphere workflow</div>` Respond with an integer.", "target": 5, "family": "word.count", "depth": "medium"}
+{"prompt": "Compute (19 * 8) + 39. Respond with the number only.", "target": 191, "family": "math", "depth": "medium"}
+{"prompt": "Convert the variable name `EnergyTicketMultiplier` to snake_case. Respond with the new name only.", "target": "energy_ticket_multiplier", "family": "code.format", "depth": "short"}
+{"prompt": "Convert the variable name `TeamProbeSynergyDelta` to snake_case. Respond with the new name only.", "target": "team_probe_synergy_delta", "family": "code.format", "depth": "short"}
+{"prompt": "Count the number of words in the sentence: 'scarcity routes learn'. Respond with an integer.", "target": 3, "family": "word.count", "depth": "short"}
+{"prompt": "Convert the variable name `RouteCostPenalty` to snake_case. Respond with the new name only.", "target": "route_cost_penalty", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of alphabetic words (ignore digits) in the sentence: 'Run 7 completes after 3 retries and 1 fallbacks'. Respond with an integer.", "target": 6, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `mergeAuditEnabled37` to snake_case. Respond with the new name only.", "target": "merge_audit_enabled37", "family": "code.format", "depth": "medium"}
+{"prompt": "Convert the variable name `RecurrentEvalPasses16` to snake_case. Respond with the new name only.", "target": "recurrent_eval_passes16", "family": "code.format", "depth": "short"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div><strong>align</strong> biosphere <em>workflow</em> merge</div>` Respond with an integer.", "target": 4, "family": "word.count", "depth": "medium"}
+{"prompt": "Convert the variable name `EnergyTicketMultiplier35` to snake_case. Respond with the new name only.", "target": "energy_ticket_multiplier35", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div>workflow <em>align</em> biosphere <span>merge</span> vectors</div>` Respond with an integer.", "target": 5, "family": "word.count", "depth": "medium"}
+{"prompt": "Multiply 6 by 7. Respond with the number only.", "target": 42, "family": "math", "depth": "short"}
+{"prompt": "Convert the variable name `bankruptcyGrace21` to snake_case. Respond with the new name only.", "target": "bankruptcy_grace21", "family": "code.format", "depth": "medium"}
+{"prompt": "Count the number of words in the sentence: 'agents learn policy quickly'. Respond with an integer.", "target": 4, "family": "word.count", "depth": "short"}
+{"prompt": "Count the number of words (ignore HTML tags) in the snippet: `<div><span>merge</span> align <span>workflow</span></div>` Respond with an integer.", "target": 3, "family": "word.count", "depth": "medium"}
+{"prompt": "Multiply 8 by 7. Respond with the number only.", "target": 56, "family": "math", "depth": "short"}

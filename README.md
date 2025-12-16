@@ -149,6 +149,16 @@ If a chunk is killed by macOS, rerun the same `--resume-from` command; it will p
     --full-gens 100 \
     --output artifacts_gemma_relaxed_$(date +%Y%m%d_%H%M%S)
   ```
+- **Final holdout evaluation (accuracy + cost, measurement-only)**
+  Add `--final-holdout` to write `final_holdout.json` / `final_holdout.md` into the run directory after training:
+  ```bash
+  MPLCONFIGDIR=$(mktemp -d) \
+    AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py \
+      --config config/experiments/paper_qwen3_ecology.yaml \
+      --generations 50 \
+      --output artifacts_qwen3_ecology_with_holdout \
+      --final-holdout config/evaluation/paper_qwen3_holdout_v1.jsonl
+  ```
 - **100-generation study**
   ```bash
   MPLCONFIGDIR=$(mktemp -d) \
@@ -259,6 +269,14 @@ This will sequentially run:
 - frozen base: `paper_qwen3_frozen.yaml`
 - single adapter: `paper_qwen3_single.yaml`
 - full ecology: `paper_qwen3_ecology.yaml`
+
+To include a fixed, measurement-only holdout suite (so paper packs include `holdout_acc` / `holdout_avg_cost`):
+
+```bash
+FINAL_HOLDOUT_TASKS=config/evaluation/paper_qwen3_holdout_v1.jsonl \
+FINAL_HOLDOUT_SAMPLE_SIZE=120 \
+scripts/run_paper_ecology_suite.sh all
+```
 
 ### Benchmark harness (one report + tables)
 

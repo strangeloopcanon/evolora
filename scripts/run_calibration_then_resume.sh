@@ -33,6 +33,8 @@ Options:
   --device <str>            Torch device override (e.g. mps/cpu/cuda)
   --batch-size <int>        Override synthetic batch size per generation
   --disable-human           Disable human bandit even if config enables it
+  --final-holdout <jsonl>   Run a measurement-only holdout after the full run
+  --final-holdout-sample-size <int>  Optional sample size for holdout tasks (default: all)
   --no-analyze              Skip final analyze step
 EOF
 }
@@ -47,6 +49,8 @@ DEVICE=""
 BATCH_SIZE=""
 DISABLE_HUMAN=0
 ANALYZE=1
+FINAL_HOLDOUT=""
+FINAL_HOLDOUT_SAMPLE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,6 +72,10 @@ while [ $# -gt 0 ]; do
       BATCH_SIZE="${2:-}"; shift 2 ;;
     --disable-human)
       DISABLE_HUMAN=1; shift ;;
+    --final-holdout)
+      FINAL_HOLDOUT="${2:-}"; shift 2 ;;
+    --final-holdout-sample-size)
+      FINAL_HOLDOUT_SAMPLE="${2:-}"; shift 2 ;;
     --no-analyze)
       ANALYZE=0; shift ;;
     -h|--help)
@@ -117,6 +125,18 @@ if [ "$DISABLE_HUMAN" -eq 1 ]; then
   EXTRA_ARGS+=(--disable-human)
 fi
 
+FINAL_HOLDOUT_ARGS=()
+if [ -n "$FINAL_HOLDOUT" ]; then
+  if ! [ -f "$FINAL_HOLDOUT" ]; then
+    echo "Holdout tasks not found: $FINAL_HOLDOUT" >&2
+    exit 2
+  fi
+  FINAL_HOLDOUT_ARGS+=(--final-holdout "$FINAL_HOLDOUT")
+  if [ -n "$FINAL_HOLDOUT_SAMPLE" ]; then
+    FINAL_HOLDOUT_ARGS+=(--final-holdout-sample-size "$FINAL_HOLDOUT_SAMPLE")
+  fi
+fi
+
 echo "[calibration] config=$CONFIG output=$OUTPUT gens=$CALIB_GENS seed=$SEED checkpoint_every=$CHECKPOINT_EVERY"
 MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
   --config "$CONFIG" \
@@ -133,6 +153,7 @@ MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
   --generations "$RESUME_GENS" \
   --checkpoint-every "$CHECKPOINT_EVERY" \
   --seed "$SEED" \
+  "${FINAL_HOLDOUT_ARGS[@]}" \
   "${EXTRA_ARGS[@]}"
 
 if [ "$ANALYZE" -eq 1 ]; then
