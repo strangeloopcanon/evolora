@@ -213,10 +213,17 @@ class HebbianPEFTOrganelle(Organelle):
         ones_b = torch.ones(r, 1, device=self.device, dtype=post.dtype)
         delta_a = pre.unsqueeze(1) @ ones_a
         delta_b = ones_b @ post.unsqueeze(0)
-        delta_a = clamp_norm(delta_a * scale * 1e-3, self.context.hebbian.max_update_norm).to(
+        lr = 1e-3
+        try:
+            lr = float(getattr(self.context.hebbian, "learning_rate", lr))
+        except Exception:
+            lr = 1e-3
+        if not math.isfinite(lr) or lr <= 0.0:
+            return
+        delta_a = clamp_norm(delta_a * scale * lr, self.context.hebbian.max_update_norm).to(
             a_weight.dtype
         )
-        delta_b = clamp_norm(delta_b * scale * 1e-3, self.context.hebbian.max_update_norm).to(
+        delta_b = clamp_norm(delta_b * scale * lr, self.context.hebbian.max_update_norm).to(
             b_weight.dtype
         )
 

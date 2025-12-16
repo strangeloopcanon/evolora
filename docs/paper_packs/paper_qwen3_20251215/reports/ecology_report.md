@@ -1,0 +1,139 @@
+# Ecology Run Analysis
+
+- Generations: 50
+- Total episodes: 2058
+- Average ROI: 1.421 (median 1.368, range 0.000 – 2.878, σ 0.672)
+- Average total reward: -0.174 (range -0.652 – 1.037)
+- Average energy cost: 0.951
+- Energy balance mean: 2.508 (range 2.387 – 2.780)
+- Curriculum lp_mix active: mean 0.636 | last 0.700 (base mean 0.450)
+- Active organelles per generation: 0 – 16 (bankrupt: 0 – 16)
+- Bankruptcy culls: total 0 (max per generation 0)
+- Assimilation merges (per summary): 20
+- Team routes / promotions: 556 / 13
+  - Team gate reasons (sum): accepted:13, low_power:175, ci_low:12
+  - Latest team gate snapshot: low_power:4
+  - Team gate sample: reason=low_power, tasks=3, same_answers=0
+- Prompt scaffolds applied (latest generation): word.count:15, math:3
+- Assimilation gating totals:
+  - canary_failed: 0
+  - low_energy: 34
+  - low_power: 206
+  - no_best_cell: 0
+  - no_activity: 3
+  - cooldown: 0
+  - uplift_below_threshold: 212
+  - cell_merges_exceeded: 0
+  - insufficient_scores: 131
+  - global_probe_failed: 0
+  - holdout_failed: 0
+  - topup_success: 512
+  - topup_roi_blocked: 0
+  - topup_cap_blocked: 0
+  - topup_already_sufficient: 235
+  - topup_disabled: 36
+  - reserve_guard: 0
+  - cautious_skip: 0
+- Population refreshes: 4 (latest: {'count': 1, 'reason': 'no_merges', 'no_merge_counter': 12})
+- Policy usage: 50/50 generations
+  - ROI when policy on/off: 1.421 / 0.000
+  - Fields used (total): budget_frac:14180, reserve_ratio:14161
+  - budget_frac mean: 0.50
+  - reserve_ratio mean: 0.00
+- Assimilation energy tuning: floor 0.745, ROI threshold 1.116
+- Assimilation tests: 115 (passes 7, failures 108)
+  - Mean sample size: 1.5
+  - CI excludes zero: 100.0%
+  - Power (proxy) mean: 0.94
+  - Methods: z_test+bootstrap: 108, z_test: 7
+- Assimilation history (latest per cell):
+  - org_97009641:word.count:short: gen 8, uplift +0.126
+  - org_1a07c6ce:word.count:short: gen 8, uplift +0.231
+  - org_0cd36685:word.count:short: gen 10, uplift +0.118
+  - org_b0dfe305:word.count:short: gen 10, uplift +0.307
+  - org_855b728e:math:short: gen 11, uplift +1.974
+- Knowledge cache: writes 71 (denied 32); reads 35 (denied 2, hits 35)
+  - Entries mean 32.50, latest 70; expired 1
+- Power economics:
+  - Episodes tracked: 2246; avg power need 1.000; avg price multiplier 1.250
+  - Evidence tokens minted/used: 1901 / 378
+- Top co-routing pairs (aggregate):
+  - org_0904c155:org_36500ae7: 3
+  - org_4aa91957:org_61ba9c8f: 2
+  - org_36500ae7:org_d5167577: 2
+  - org_4aa91957:org_d4af07a6: 1
+  - org_4aa91957:org_82c6459f: 1
+  - org_61ba9c8f:org_92e62930: 1
+  - org_0fdde794:org_1c42750e: 1
+  - org_263d2ebf:org_aa5dd1e7: 1
+  - org_7ce67de9:org_aa5dd1e7: 1
+  - org_11c5397a:org_61ba9c8f: 1
+- Colony events:
+  - create: 277
+  - reserve_enter: 50
+  - bandwidth: 1225
+  - tax: 49
+  - pot_update: 49
+  - subsidy: 2450
+  - holdout_pass: 225
+- Colony selection: dissolved 0 / replicated 0
+  - Pool mean members 0.00; pool mean pot 0.00
+- Colony tier mean: avg 0.00, last 0.00
+  - Tier totals: 0:50
+- Colony reserve guard (mean active colonies): 0.00
+- Colony winter mode (mean active colonies): 0.00
+- Colony hazard z-score (mean): 0.000
+- Foraging traits (mean): beta 1.42, decay 0.30, ucb 0.27, budget 0.40
+  - org_65041427 top cells: math:short (1.08), math:medium (0.39), word.count:medium (-0.02)
+- Winter cycle:
+  - Active ratio: 0.08; avg multipliers price 1.02, ticket 0.98
+  - Mean ΔROI after winter: -1.030; mean Δassim attempts: +0.00
+  - winter_start: 1
+  - winter_end: 1
+  - winter_bonus: 1
+- Colony bandwidth: mean 0.000, last 0.000
+  total members mean 2.00, last 2
+  ΔROI mean 0.0000; variance ratio mean 0.100
+  hazard members (max) 0
+- Budget totals: mean 30.04, median 34.00, last 32
+  cap max 120 (hit-rate 0.0%)
+  zero-alloc mean 1.12; energy ratio mean 3.98; trait mean 0.40; policy mean 0.50
+- Comms totals: posts 18 / reads 4 / credits 1
+- Mutation operators invoked:
+  - rank noise: 544, dropout masks: 443, duplications: 547
+- Comms events:
+  - post: 18
+  - read: 4
+  - credit: 1
+- Comms board (latest posts):
+  - org_0a0c37fa→word.count:short: best=word.count:short@0.35 | explore=0.23
+  - org_227853ed→word.count:short: best=word.count:short@0.35 | roi=0.10 | explore=0.32
+  - org_755c4234→general: Team tip: cross-check units and counts.
+  - org_07dd26f1→general: Team tip: cross-check units and counts.
+  - org_2732b12d→general: Team tip: cross-check units and counts.
+- Recent gating snapshots:
+  - gen 050 org_62b485e6: low_power | {"generation": 50, "min_power": 0.2, "power": 0.0, "sample_size": 1}
+  - gen 050 org_19afef62: uplift_below_threshold | {"ema": 0.35, "generation": 50, "relief": 0.060000000000000005, "tau": 0.35, "threshold": 0.00030072997498837423, "uplift_gate": 0.0}
+  - gen 050 org_278d8661: low_power | {"generation": 50, "min_power": 0.2, "power": 0.0, "sample_size": 1}
+  - gen 050 org_9a5630e7: uplift_below_threshold | {"ema": 0.35, "generation": 50, "relief": 0.060000000000000005, "tau": 0.35, "threshold": 0.00030072997498837423, "uplift_gate": 0.0}
+  - gen 050 org_d8aa5af6: insufficient_scores | {"generation": 50, "min_window": 12, "scores_available": 1}
+- Recent assimilation attempts:
+  - gen 045 org_88272b47@math:medium uplift=1.902 p=1.000 stat_pass=False holdout=False global=False topup=already_sufficient
+  - gen 045 org_fbc43c4c@math:short uplift=1.962 p=1.000 stat_pass=False holdout=False global=False topup=already_sufficient
+  - gen 047 org_12cbd75f@word.count:short uplift=0.090 p=1.000 stat_pass=False holdout=False global=False topup=credited
+  - gen 048 org_3dcc15b8@math:short uplift=1.949 p=1.000 stat_pass=False holdout=False global=False topup=already_sufficient
+  - gen 048 org_70720926@math:short uplift=1.959 p=1.000 stat_pass=False holdout=False global=False topup=already_sufficient
+- Assimilation (recent window) by family:
+  - math: 0/11 passes (0.0%), uplift μ +1.399, holdout ROI μ +0.000, audit Δμ +0.000
+  - word.count: 0/13 passes (0.0%), uplift μ +0.137, holdout ROI μ +0.000, audit Δμ +0.000
+- Diversity: mean energy Gini 0.589, effective pop 5.78, max species share 0.940, enforcement rate 94.0%
+- QD coverage: 6/6
+  archive size mean 4.6, last 5; coverage 19.2% (last 20.8%)
+  top bins: word.count:short[b3]:3.144, math:medium[b3]:2.980, math:short[b3]:2.502, word.count:medium[b3]:2.372, word.count:short[b0]:0.000
+- ROI volatility (std across organelles): 0.721
+- Trials/promotions: 36 / 20
+- Evaluation accuracy: 66.67% (2/3)
+  (reward weight 0.75)
+  - Evaluation by family:
+    * math: 100.00% (2/2), ΔROI μ -26.058, cost μ 27.204
+    * word.count: 0.00% (0/1), ΔROI μ -28.193, cost μ 28.193

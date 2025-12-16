@@ -21,7 +21,7 @@ grid:
   - medium
 energy:
   Emax: 30.0
-  m: 0.5
+  m: 0.0
   alpha: 5.0e-15
   beta: 0.015
   gamma: 0.0005

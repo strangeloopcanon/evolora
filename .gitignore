@@ -13,9 +13,9 @@ __pycache__/
 
 # Artifacts & telemetry
 artifacts*/
-visuals/
-plots/
-results/
+/visuals/
+/plots/
+/results/
 *.report.md
 
 

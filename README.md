@@ -139,6 +139,16 @@ If a chunk is killed by macOS, rerun the same `--resume-from` command; it will p
       --generations 20 --batch-size 2 \
       --output artifacts_gemma_debug
   ```
+- **Calibration → resume (same run directory, safe overnight workflow)**
+  This runs a short “calibration” segment first, then resumes the *same* `run_id` from `checkpoint.pt`
+  to the full length (so the second phase **builds on** the first; nothing restarts).
+  ```bash
+  scripts/run_calibration_then_resume.sh \
+    --config config/experiments/gemma_relaxed.yaml \
+    --calib-gens 10 \
+    --full-gens 100 \
+    --output artifacts_gemma_relaxed_$(date +%Y%m%d_%H%M%S)
+  ```
 - **100-generation study**
   ```bash
   MPLCONFIGDIR=$(mktemp -d) \
@@ -161,6 +171,15 @@ If a chunk is killed by macOS, rerun the same `--resume-from` command; it will p
     .venv311/bin/python scripts/analyze_ecology_run.py \
       artifacts_gemma_relaxed_autotune_v5 --plots --report
   ```
+- Paper pack (tracked table + curated plots)
+  ```bash
+  .venv311/bin/python scripts/paper_pack.py \
+    --frozen <run_dir_frozen> \
+    --single <run_dir_single> \
+    --ecology <run_dir_ecology> \
+    --output docs/paper_packs/<pack_name>
+  ```
+  Example (checked in): `docs/paper_packs/paper_qwen3_20251215/README.md`.
 The report now highlights ROI stats, assimilation gating totals, **recent gating snapshots**, and **the last few assimilation attempts** (control/treatment means, uplift vs. threshold, holdout verdict, top-up status), plus the diversity metrics (energy Gini, effective population, species share) and guard decay counters. Colony summaries add size/bandwidth timelines, mean ΔROI, and variance ratios so you can see when teams expand or shrink.
 
 ## Key Configuration Knobs

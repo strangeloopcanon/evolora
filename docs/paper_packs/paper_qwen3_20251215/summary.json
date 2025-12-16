@@ -1,0 +1,43 @@
+{
+  "git_commit": "7df1278",
+  "runs": {
+    "ecology": "artifacts_paper_qwen3_ecology_20251215_162621",
+    "frozen": "artifacts_paper_qwen3_frozen_20251215_094901",
+    "single": "artifacts_paper_qwen3_single_20251215_162455"
+  },
+  "summaries": {
+    "ecology": {
+      "avg_roi_max": 2.878099974551386,
+      "avg_roi_mean": 1.4212033572471765,
+      "avg_roi_min": 0.0,
+      "colonies_max": 1,
+      "episodes_total": 2058,
+      "generations": 50,
+      "merges_total": 20,
+      "qd_coverage_last": 0.20833333333333334,
+      "qd_coverage_max": 0.20833333333333334
+    },
+    "frozen": {
+      "avg_roi_max": 1.6049896531773413,
+      "avg_roi_mean": 0.9960282048520184,
+      "avg_roi_min": 0.3036013282607374,
+      "colonies_max": 0,
+      "episodes_total": 1727,
+      "generations": 50,
+      "merges_total": 0,
+      "qd_coverage_last": 0.0,
+      "qd_coverage_max": 0.0
+    },
+    "single": {
+      "avg_roi_max": 0.9750094133599394,
+      "avg_roi_mean": 0.06425045415237846,
+      "avg_roi_min": -0.050833784602719756,
+      "colonies_max": 0,
+      "episodes_total": 25,
+      "generations": 50,
+      "merges_total": 0,
+      "qd_coverage_last": 0.0,
+      "qd_coverage_max": 0.0
+    }
+  }
+}
