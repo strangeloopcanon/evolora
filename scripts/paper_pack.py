@@ -8,7 +8,9 @@ high-signal outputs needed for writeups and talks.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
+import re
 import subprocess
 from pathlib import Path
 from statistics import mean
@@ -52,6 +54,13 @@ def _summarize_run(run_dir: Path) -> dict[str, object]:
     colonies_series = [int(rec.get("colonies", 0) or 0) for rec in records]
     qd_series = [float(rec.get("qd_archive_coverage", 0.0) or 0.0) for rec in records]
     episodes_total = int(sum(int(rec.get("episodes", 0) or 0) for rec in records))
+    holdout: dict[str, object] | None = None
+    holdout_path = run_dir / "final_holdout.json"
+    if holdout_path.exists():
+        try:
+            holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
+        except Exception:
+            holdout = None
     return {
         "generations": len(records),
         "episodes_total": episodes_total,
@@ -62,6 +71,18 @@ def _summarize_run(run_dir: Path) -> dict[str, object]:
         "colonies_max": int(max(colonies_series)) if colonies_series else 0,
         "qd_coverage_last": float(qd_series[-1]) if qd_series else 0.0,
         "qd_coverage_max": float(max(qd_series)) if qd_series else 0.0,
+        "holdout_accuracy": (
+            float(holdout.get("accuracy", 0.0)) if isinstance(holdout, dict) else None
+        ),
+        "holdout_avg_cost": (
+            float(holdout.get("avg_cost", 0.0)) if isinstance(holdout, dict) else None
+        ),
+        "holdout_cost_per_correct": (
+            float(holdout.get("cost_per_correct", 0.0)) if isinstance(holdout, dict) else None
+        ),
+        "holdout_sample_size": (
+            int(holdout.get("sample_size", 0)) if isinstance(holdout, dict) else None
+        ),
         "roi_series": roi_series,
     }
 
@@ -80,6 +101,28 @@ def _format_pct(value: float) -> str:
     return f"{value:.1f}%"
 
 
+def _format_optional(value: object, fmt: str) -> str:
+    if value is None:
+        return "-"
+    try:
+        return format(float(value), fmt)
+    except Exception:
+        return "-"
+
+
+def _pack_date_label(out_dir: Path) -> str:
+    # Try to infer YYYY-MM-DD from folder names like paper_qwen3_20251216.
+    m = re.search(r"(\d{8})", out_dir.name)
+    if m:
+        stamp = m.group(1)
+        try:
+            parsed = dt.datetime.strptime(stamp, "%Y%m%d").date()
+            return parsed.isoformat()
+        except Exception:
+            pass
+    return dt.datetime.now(tz=dt.timezone.utc).date().isoformat()
+
+
 def _write_readme(
     out_dir: Path,
     *,
@@ -89,7 +132,7 @@ def _write_readme(
     comparison_plot: Path | None,
 ) -> None:
     lines: list[str] = []
-    lines.append("# Paper Candidate Pack — Qwen3-0.6B (2025-12-15)")
+    lines.append(f"# Paper Candidate Pack — Qwen3-0.6B ({_pack_date_label(out_dir)})")
     lines.append("")
     if commit:
         lines.append(f"- git_commit: `{commit[:7]}`")
@@ -100,9 +143,9 @@ def _write_readme(
     lines.append("## Summary Table")
     lines.append("")
     lines.append(
-        "| condition | gens | episodes | avg_roi (mean) | merges_total | colonies_max | qd_cov_max |"
+        "| condition | gens | episodes | avg_roi (mean) | merges_total | colonies_max | qd_cov_max | holdout_acc | holdout_avg_cost |"
     )
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for name in ["frozen", "single", "ecology"]:
         s = summaries[name]
         lines.append(
@@ -116,6 +159,8 @@ def _write_readme(
                     str(s["merges_total"]),
                     str(s["colonies_max"]),
                     _format_pct(float(s["qd_coverage_max"])),
+                    _format_optional(s.get("holdout_accuracy"), ".3f"),
+                    _format_optional(s.get("holdout_avg_cost"), ".3f"),
                 ]
             )
             + " |"
@@ -146,6 +191,7 @@ def _write_readme(
     lines.append("## Included Files")
     lines.append("")
     lines.append("- `reports/`: copied `report.md` from each run")
+    lines.append("- `reports/`: copied `final_holdout.md` when present")
     lines.append("- `plots/`: curated plots copied from each run + an aggregate comparison plot")
     lines.append("- `summary.json`: machine-readable summary extracted from `gen_summaries.jsonl`")
     lines.append("")
@@ -211,6 +257,10 @@ def main() -> None:
     (out_dir / "reports").mkdir(parents=True, exist_ok=True)
     for name, run_dir in runs.items():
         _maybe_copy(run_dir / "report.md", out_dir / "reports" / f"{name}_report.md")
+        _maybe_copy(
+            run_dir / "final_holdout.md",
+            out_dir / "reports" / f"{name}_final_holdout.md",
+        )
 
     curated = [
         "avg_roi.png",
@@ -221,8 +271,17 @@ def main() -> None:
         "qd_archive_coverage.png",
         "team_routes.png",
     ]
+    holdout_curated = [
+        "final_holdout_accuracy_by_family.png",
+        "final_holdout_cost_by_family.png",
+    ]
     for name, run_dir in runs.items():
         for filename in curated:
+            _maybe_copy(
+                run_dir / "visuals" / filename,
+                out_dir / "plots" / name / filename,
+            )
+        for filename in holdout_curated:
             _maybe_copy(
                 run_dir / "visuals" / filename,
                 out_dir / "plots" / name / filename,
