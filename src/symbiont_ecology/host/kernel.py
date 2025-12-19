@@ -404,9 +404,34 @@ class HostKernel:
 
     def retire_organelle(self, organelle_id: str) -> None:
         self.organelles.pop(organelle_id, None)
+        self._delete_backbone_adapter(organelle_id)
         self.router.arms.pop(organelle_id, None)
         self.ledger.accounts.pop(organelle_id, None)
         self.ledger.energy_accounts.pop(organelle_id, None)
+
+    def _delete_backbone_adapter(self, adapter_name: str) -> None:
+        """Best-effort removal of a PEFT adapter from the shared backbone model.
+
+        Long runs can create and retire many organelles. When organelles share a single PEFT-wrapped
+        backbone, failing to delete retired adapters can lead to unbounded memory growth.
+        """
+        model = getattr(self.backbone, "model", None)
+        delete_adapter = getattr(model, "delete_adapter", None)
+        if not callable(delete_adapter):
+            return
+
+        fallback = next(iter(self.organelles.keys()), None)
+        set_adapter = getattr(model, "set_adapter", None)
+        if callable(set_adapter) and fallback:
+            try:
+                set_adapter(fallback)
+            except Exception:
+                pass
+
+        try:
+            delete_adapter(adapter_name)
+        except Exception:
+            pass
 
     def build_lora_soup_state(
         self,
