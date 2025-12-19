@@ -257,3 +257,45 @@ def test_export_organelle_adapter_rejects_non_string_keys(tmp_path: Path) -> Non
     host.organelles["bad"] = BadKeys()
     with pytest.raises(TypeError):
         host.export_organelle_adapter("bad", tmp_path / "bad.safetensors")
+
+
+def test_retire_organelle_deletes_backbone_adapter_when_supported() -> None:
+    cfg = EcologyConfig()
+    host = HostKernel(config=cfg, router=BanditRouter(), ledger=ATPLedger())
+
+    class FakePeftModel:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def set_adapter(self, name: str) -> None:
+            self.calls.append(("set_adapter", name))
+
+        def delete_adapter(self, name: str) -> None:
+            self.calls.append(("delete_adapter", name))
+
+    model = FakePeftModel()
+    host.backbone.model = model
+    host.organelles["keep"] = object()
+    host.organelles["drop"] = object()
+
+    host.retire_organelle("drop")
+    assert model.calls == [("set_adapter", "keep"), ("delete_adapter", "drop")]
+
+
+def test_retire_organelle_deletes_last_adapter_without_fallback() -> None:
+    cfg = EcologyConfig()
+    host = HostKernel(config=cfg, router=BanditRouter(), ledger=ATPLedger())
+
+    class FakePeftModel:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def delete_adapter(self, name: str) -> None:
+            self.calls.append(("delete_adapter", name))
+
+    model = FakePeftModel()
+    host.backbone.model = model
+    host.organelles["only"] = object()
+
+    host.retire_organelle("only")
+    assert model.calls == [("delete_adapter", "only")]
