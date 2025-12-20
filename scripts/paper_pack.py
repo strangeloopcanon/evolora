@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import pickle
 import re
 import subprocess
 from pathlib import Path
@@ -47,13 +48,59 @@ def _git_commit(repo_root: Path) -> str | None:
         return None
 
 
+def _load_checkpoint_generation(run_dir: Path) -> int | None:
+    checkpoint_path = run_dir / "checkpoint.pt"
+    if not checkpoint_path.exists():
+        return None
+    try:
+        state = pickle.loads(checkpoint_path.read_bytes())
+    except Exception:
+        return None
+    if not isinstance(state, dict):
+        return None
+    generation = state.get("generation")
+    try:
+        value = int(generation)
+    except Exception:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _count_jsonl_lines(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    try:
+        with path.open("rb") as handle:
+            return sum(1 for _ in handle)
+    except Exception:
+        return None
+
+
 def _summarize_run(run_dir: Path) -> dict[str, object]:
     records = _load_jsonl(run_dir / "gen_summaries.jsonl")
-    roi_series = [float(rec.get("avg_roi", 0.0) or 0.0) for rec in records]
-    merges_series = [int(rec.get("merges", 0) or 0) for rec in records]
-    colonies_series = [int(rec.get("colonies", 0) or 0) for rec in records]
-    qd_series = [float(rec.get("qd_archive_coverage", 0.0) or 0.0) for rec in records]
-    episodes_total = int(sum(int(rec.get("episodes", 0) or 0) for rec in records))
+    records_sorted = sorted(records, key=lambda rec: int(rec.get("generation", 0) or 0))
+    record_generations = [int(rec.get("generation", 0) or 0) for rec in records_sorted]
+    max_record_generation = max(record_generations) if record_generations else 0
+    checkpoint_generation = _load_checkpoint_generation(run_dir)
+    generations_total = checkpoint_generation or max_record_generation or len(records_sorted)
+    records_count = len(records_sorted)
+
+    roi_points = [
+        (int(rec.get("generation", 0) or 0), float(rec.get("avg_roi", 0.0) or 0.0))
+        for rec in records_sorted
+        if int(rec.get("generation", 0) or 0) > 0
+    ]
+    roi_generations = [gen for gen, _ in roi_points]
+    roi_series = [roi for _, roi in roi_points]
+    merges_series = [int(rec.get("merges", 0) or 0) for rec in records_sorted]
+    colonies_series = [int(rec.get("colonies", 0) or 0) for rec in records_sorted]
+    qd_series = [float(rec.get("qd_archive_coverage", 0.0) or 0.0) for rec in records_sorted]
+
+    episodes_total = _count_jsonl_lines(run_dir / "episodes.jsonl")
+    if episodes_total is None:
+        episodes_total = int(sum(int(rec.get("episodes", 0) or 0) for rec in records_sorted))
     holdout: dict[str, object] | None = None
     holdout_path = run_dir / "final_holdout.json"
     if holdout_path.exists():
@@ -61,16 +108,22 @@ def _summarize_run(run_dir: Path) -> dict[str, object]:
             holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
         except Exception:
             holdout = None
+    sparse_records = bool(
+        generations_total and records_count and records_count != generations_total
+    )
     return {
-        "generations": len(records),
+        "generations": int(generations_total),
+        "records": int(records_count),
+        "sparse_records": sparse_records,
         "episodes_total": episodes_total,
-        "avg_roi_mean": float(mean(roi_series)) if roi_series else 0.0,
-        "avg_roi_min": float(min(roi_series)) if roi_series else 0.0,
-        "avg_roi_max": float(max(roi_series)) if roi_series else 0.0,
-        "merges_total": int(sum(merges_series)),
-        "colonies_max": int(max(colonies_series)) if colonies_series else 0,
-        "qd_coverage_last": float(qd_series[-1]) if qd_series else 0.0,
-        "qd_coverage_max": float(max(qd_series)) if qd_series else 0.0,
+        "avg_roi_mean_recorded": float(mean(roi_series)) if roi_series else 0.0,
+        "avg_roi_last_recorded": float(roi_series[-1]) if roi_series else 0.0,
+        "avg_roi_min_recorded": float(min(roi_series)) if roi_series else 0.0,
+        "avg_roi_max_recorded": float(max(roi_series)) if roi_series else 0.0,
+        "merges_total_recorded": int(sum(merges_series)),
+        "colonies_max_recorded": int(max(colonies_series)) if colonies_series else 0,
+        "qd_coverage_last_recorded": float(qd_series[-1]) if qd_series else 0.0,
+        "qd_coverage_max_recorded": float(max(qd_series)) if qd_series else 0.0,
         "holdout_accuracy": (
             float(holdout.get("accuracy", 0.0)) if isinstance(holdout, dict) else None
         ),
@@ -83,6 +136,7 @@ def _summarize_run(run_dir: Path) -> dict[str, object]:
         "holdout_sample_size": (
             int(holdout.get("sample_size", 0)) if isinstance(holdout, dict) else None
         ),
+        "roi_generations": roi_generations,
         "roi_series": roi_series,
     }
 
@@ -143,9 +197,9 @@ def _write_readme(
     lines.append("## Summary Table")
     lines.append("")
     lines.append(
-        "| condition | gens | episodes | avg_roi (mean) | merges_total | colonies_max | qd_cov_max | holdout_acc | holdout_avg_cost |"
+        "| condition | gens | records | episodes | avg_roi_last | merges_total* | colonies_max* | qd_cov_last* | holdout_acc | holdout_avg_cost |"
     )
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for name in ["frozen", "single", "ecology"]:
         s = summaries[name]
         lines.append(
@@ -154,17 +208,47 @@ def _write_readme(
                 [
                     name,
                     str(s["generations"]),
+                    str(s.get("records", "-")),
                     str(s["episodes_total"]),
-                    f"{float(s['avg_roi_mean']):.3f}",
-                    str(s["merges_total"]),
-                    str(s["colonies_max"]),
-                    _format_pct(float(s["qd_coverage_max"])),
+                    f"{float(s.get('avg_roi_last_recorded', 0.0)):.3f}",
+                    str(s.get("merges_total_recorded", "-")),
+                    str(s.get("colonies_max_recorded", "-")),
+                    _format_pct(float(s.get("qd_coverage_last_recorded", 0.0))),
                     _format_optional(s.get("holdout_accuracy"), ".3f"),
                     _format_optional(s.get("holdout_avg_cost"), ".3f"),
                 ]
             )
             + " |"
         )
+    lines.append("")
+    if any(bool(s.get("sparse_records")) for s in summaries.values()):
+        lines.append(
+            "*Runs with `records < gens` were resumed after interruption; metrics marked `*` are derived from recorded generations only."
+        )
+        lines.append("")
+
+    lines.append("## Takeaways")
+    lines.append("")
+    try:
+        ecology_acc = float(summaries["ecology"].get("holdout_accuracy") or 0.0)
+        ecology_cost = float(summaries["ecology"].get("holdout_avg_cost") or 0.0)
+        baseline_acc = max(
+            float(summaries["frozen"].get("holdout_accuracy") or 0.0),
+            float(summaries["single"].get("holdout_accuracy") or 0.0),
+        )
+        baseline_cost = min(
+            float(summaries["frozen"].get("holdout_avg_cost") or 0.0),
+            float(summaries["single"].get("holdout_avg_cost") or 0.0),
+        )
+        lines.append(
+            f"- holdout_acc: ecology {ecology_acc:.3f} vs best baseline {baseline_acc:.3f} (Δ {ecology_acc - baseline_acc:+.3f})"
+        )
+        if baseline_cost > 0.0:
+            lines.append(
+                f"- holdout_avg_cost: ecology {ecology_cost:.3f} vs best baseline {baseline_cost:.3f} (×{ecology_cost / baseline_cost:.2f})"
+            )
+    except Exception:
+        lines.append("- (could not compute holdout deltas)")
     lines.append("")
     if comparison_plot is not None and comparison_plot.exists():
         rel = comparison_plot.relative_to(out_dir)
@@ -214,11 +298,12 @@ def _make_roi_comparison_plot(
     colors = {"frozen": "#6b7280", "single": "#ef4444", "ecology": "#22c55e"}
     for name in ["frozen", "single", "ecology"]:
         series = summaries[name].get("roi_series") or []
-        if not isinstance(series, list) or not series:
+        xs = summaries[name].get("roi_generations") or []
+        if not isinstance(series, list) or not series or not isinstance(xs, list) or not xs:
             continue
-        xs = list(range(1, len(series) + 1))
+        xs = [int(v) for v in xs]
         ys = [float(v) for v in series]
-        plt.plot(xs, ys, label=name, linewidth=2, color=colors.get(name))
+        plt.plot(xs, ys, label=name, linewidth=2, color=colors.get(name), marker="o")
     plt.axhline(1.0, linestyle="--", linewidth=1, color="#111827", alpha=0.5)
     plt.xlabel("Generation")
     plt.ylabel("avg_roi")
@@ -294,7 +379,8 @@ def main() -> None:
         "git_commit": (commit[:7] if commit else None),
         "runs": {name: str(path) for name, path in runs.items()},
         "summaries": {
-            name: {k: v for k, v in s.items() if k != "roi_series"} for name, s in summaries.items()
+            name: {k: v for k, v in s.items() if k not in {"roi_series", "roi_generations"}}
+            for name, s in summaries.items()
         },
     }
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -45,6 +45,10 @@ PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv311/bin/pyth
 
 If a chunk is killed mid-run (e.g., macOS memory pressure), rerun the same resume command; it will pick up from the last checkpoint.
 
+Notes:
+- `gen_summaries.jsonl` is appended per generation, so summaries survive hard kills.
+- On resume, telemetry files are truncated back to the last checkpoint to avoid duplicate episodes when `--checkpoint-every > 1`.
+
 ## Calibration → resume helper
 
 This runs a short calibration segment first, then resumes the same run directory to the full length:

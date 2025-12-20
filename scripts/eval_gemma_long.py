@@ -524,6 +524,7 @@ def _save_checkpoint(
     ledger: ATPLedger,
     loop: EcologyLoop,
     random_state: tuple,
+    telemetry_bytes: dict[str, int] | None = None,
 ) -> None:
     adapter_states: dict[str, object] = {}
     for oid, org in host.organelles.items():
@@ -546,9 +547,34 @@ def _save_checkpoint(
         "random_state": random_state,
         "assimilation_cooldown": loop.assimilation_cooldown,
         "tau_relief": getattr(loop, "_tau_relief", {}),
+        "telemetry_bytes": dict(telemetry_bytes or {}),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(pickle.dumps(state))
+
+
+def _truncate_file_to_bytes(path: Path, size_bytes: int | None) -> None:
+    if size_bytes is None:
+        return
+    try:
+        expected = int(size_bytes)
+    except Exception:
+        return
+    if expected < 0:
+        return
+    if not path.exists():
+        return
+    try:
+        current = path.stat().st_size
+    except Exception:
+        return
+    if current <= expected:
+        return
+    try:
+        with path.open("r+b") as handle:
+            handle.truncate(expected)
+    except Exception:
+        return
 
 
 def _make_assimilation_tester(config) -> AssimilationTester:
@@ -606,11 +632,21 @@ def main() -> None:
     start_generation = 0
     prev_n = 0
     gen_summaries: list[dict[str, object]] = []
+    gen_summaries_path = config.metrics.root / "gen_summaries.jsonl"
+    episodes_path = config.metrics.root / config.metrics.episodes_file
+    assimilation_path = config.metrics.root / config.metrics.assimilation_file
+    if resume_root is None and gen_summaries_path.exists():
+        gen_summaries_path.write_text("", encoding="utf-8")
 
     checkpoint_path = config.metrics.root / "checkpoint.pt"
     if resume_root is not None and checkpoint_path.exists():
         state = _load_checkpoint(checkpoint_path)
         start_generation = int(state.get("generation", 0))
+        telemetry_bytes = state.get("telemetry_bytes") if isinstance(state, dict) else None
+        if isinstance(telemetry_bytes, dict):
+            _truncate_file_to_bytes(episodes_path, telemetry_bytes.get("episodes"))
+            _truncate_file_to_bytes(assimilation_path, telemetry_bytes.get("assimilation"))
+            _truncate_file_to_bytes(gen_summaries_path, telemetry_bytes.get("gen_summaries"))
         # restore population
         population = state.get("population", population)
         # respawn organelles with saved IDs and adapter states
@@ -688,15 +724,13 @@ def main() -> None:
         except Exception:
             pass
         # bootstrap existing gen summaries
-        gs_path = config.metrics.root / "gen_summaries.jsonl"
-        if gs_path.exists():
-            with gs_path.open() as handle:
+        if gen_summaries_path.exists():
+            with gen_summaries_path.open() as handle:
                 for line in handle:
                     line = line.strip()
                     if not line:
                         continue
                     gen_summaries.append(json.loads(line))
-        episodes_path = config.metrics.root / config.metrics.episodes_file
         if episodes_path.exists():
             with episodes_path.open() as f:
                 prev_n = sum(1 for _ in f)
@@ -794,6 +828,11 @@ def main() -> None:
         generation_record.update(summary)
         generation_record.update(episode_slice)
         gen_summaries.append(generation_record)
+        try:
+            with gen_summaries_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(generation_record) + "\n")
+        except Exception:
+            pass
         prev_n = curr_n
         tuning = summary.get("assimilation_energy_tuning") or {}
         gating = summary.get("assimilation_gating") or {}
@@ -822,6 +861,16 @@ def main() -> None:
         print(message, flush=True)
 
         if args.checkpoint_every and (gen + 1) % args.checkpoint_every == 0:
+            telemetry = {}
+            try:
+                if episodes_path.exists():
+                    telemetry["episodes"] = int(episodes_path.stat().st_size)
+                if assimilation_path.exists():
+                    telemetry["assimilation"] = int(assimilation_path.stat().st_size)
+                if gen_summaries_path.exists():
+                    telemetry["gen_summaries"] = int(gen_summaries_path.stat().st_size)
+            except Exception:
+                telemetry = {}
             _save_checkpoint(
                 checkpoint_path,
                 gen + 1,
@@ -831,6 +880,7 @@ def main() -> None:
                 ledger,
                 loop,
                 random.getstate(),
+                telemetry,
             )
 
     if args.final_holdout is not None:
@@ -867,6 +917,16 @@ def main() -> None:
     print("Telemetry root:", config.metrics.root)
 
     # Save final checkpoint
+    telemetry = {}
+    try:
+        if episodes_path.exists():
+            telemetry["episodes"] = int(episodes_path.stat().st_size)
+        if assimilation_path.exists():
+            telemetry["assimilation"] = int(assimilation_path.stat().st_size)
+        if json_path.exists():
+            telemetry["gen_summaries"] = int(json_path.stat().st_size)
+    except Exception:
+        telemetry = {}
     _save_checkpoint(
         checkpoint_path,
         total_generations,
@@ -876,6 +936,7 @@ def main() -> None:
         ledger,
         loop,
         random.getstate(),
+        telemetry,
     )
 
 
