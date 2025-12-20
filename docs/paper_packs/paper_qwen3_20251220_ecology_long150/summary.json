@@ -1,0 +1,64 @@
+{
+  "git_commit": "c80aaa7",
+  "runs": {
+    "ecology": "artifacts_paper_qwen3_ecology_long_20251216_222921",
+    "frozen": "artifacts_paper_qwen3_frozen_20251215_094901",
+    "single": "artifacts_paper_qwen3_single_20251216_115655"
+  },
+  "summaries": {
+    "ecology": {
+      "avg_roi_last_recorded": 1.390669982523745,
+      "avg_roi_max_recorded": 1.838202908465297,
+      "avg_roi_mean_recorded": 1.2370478796913975,
+      "avg_roi_min_recorded": 0.0,
+      "colonies_max_recorded": 1,
+      "episodes_total": 7413,
+      "generations": 150,
+      "holdout_accuracy": 0.14166666666666666,
+      "holdout_avg_cost": 1.1375950319432844,
+      "holdout_cost_per_correct": 8.030082578423183,
+      "holdout_sample_size": 120,
+      "merges_total_recorded": 52,
+      "qd_coverage_last_recorded": 0.16666666666666666,
+      "qd_coverage_max_recorded": 0.16666666666666666,
+      "records": 35,
+      "sparse_records": true
+    },
+    "frozen": {
+      "avg_roi_last_recorded": 0.9432692695530832,
+      "avg_roi_max_recorded": 1.6049896531773413,
+      "avg_roi_mean_recorded": 0.9960282048520184,
+      "avg_roi_min_recorded": 0.3036013282607374,
+      "colonies_max_recorded": 0,
+      "episodes_total": 1727,
+      "generations": 50,
+      "holdout_accuracy": 0.13333333333333333,
+      "holdout_avg_cost": 1.9102328710579393,
+      "holdout_cost_per_correct": 14.326746532934544,
+      "holdout_sample_size": 120,
+      "merges_total_recorded": 0,
+      "qd_coverage_last_recorded": 0.0,
+      "qd_coverage_max_recorded": 0.0,
+      "records": 50,
+      "sparse_records": false
+    },
+    "single": {
+      "avg_roi_last_recorded": -0.06033100731354144,
+      "avg_roi_max_recorded": 0.7090890924691652,
+      "avg_roi_mean_recorded": 0.076096283353541,
+      "avg_roi_min_recorded": -0.07823311478572346,
+      "colonies_max_recorded": 0,
+      "episodes_total": 63,
+      "generations": 50,
+      "holdout_accuracy": 0.13333333333333333,
+      "holdout_avg_cost": 1.9345074699312048,
+      "holdout_cost_per_correct": 14.508806024484036,
+      "holdout_sample_size": 120,
+      "merges_total_recorded": 0,
+      "qd_coverage_last_recorded": 0.0,
+      "qd_coverage_max_recorded": 0.0,
+      "records": 50,
+      "sparse_records": false
+    }
+  }
+}

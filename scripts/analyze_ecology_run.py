@@ -51,7 +51,14 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                 continue
             acc = evaluation_family_totals.setdefault(
                 family,
-                {"correct": 0.0, "total": 0.0, "roi_sum": 0.0, "delta_sum": 0.0, "cost_sum": 0.0, "count": 0.0},
+                {
+                    "correct": 0.0,
+                    "total": 0.0,
+                    "roi_sum": 0.0,
+                    "delta_sum": 0.0,
+                    "cost_sum": 0.0,
+                    "count": 0.0,
+                },
             )
             correct = float(stats.get("correct", 0.0) or 0.0)
             total = float(stats.get("total", 0.0) or 0.0)
@@ -69,7 +76,9 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     eval_correct = sum(rec.get("correct", 0) for rec in eval_records)
     eval_total = sum(rec.get("total", 0) for rec in eval_records)
     qd_archive_size_series = [int(rec.get("qd_archive_size", 0) or 0) for rec in records]
-    qd_archive_coverage_series = [float(rec.get("qd_archive_coverage", 0.0) or 0.0) for rec in records]
+    qd_archive_coverage_series = [
+        float(rec.get("qd_archive_coverage", 0.0) or 0.0) for rec in records
+    ]
     qd_archive_top_latest = records[-1].get("qd_archive_top") if records else []
 
     gating_totals: Dict[str, int] = {}
@@ -80,7 +89,11 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         for key, value in gating.items():
             gating_totals[key] = gating_totals.get(key, 0) + int(value)
 
-    tuning_records = [rec.get("assimilation_energy_tuning") for rec in records if rec.get("assimilation_energy_tuning")]
+    tuning_records = [
+        rec.get("assimilation_energy_tuning")
+        for rec in records
+        if rec.get("assimilation_energy_tuning")
+    ]
     energy_floor_mean = 0.0
     energy_floor_latest: Dict[str, Any] | None = None
     if tuning_records:
@@ -135,8 +148,12 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                 continue
     latest_team_gate_counts = latest_record.get("team_gate_counts") or {}
     latest_team_gate_samples = latest_record.get("team_gate_samples") or []
-    population_refresh_events = [rec.get("population_refresh") for rec in records if rec.get("population_refresh")]
-    population_refresh_total = sum(int(evt.get("count", 0)) for evt in population_refresh_events if isinstance(evt, dict))
+    population_refresh_events = [
+        rec.get("population_refresh") for rec in records if rec.get("population_refresh")
+    ]
+    population_refresh_total = sum(
+        int(evt.get("count", 0)) for evt in population_refresh_events if isinstance(evt, dict)
+    )
     population_refresh_latest = population_refresh_events[-1] if population_refresh_events else None
     # Colonies timeline
     colonies_count_series = [int(rec.get("colonies", 0) or 0) for rec in records]
@@ -188,7 +205,6 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     mutation_rank_noise_series: List[int] = []
     mutation_dropout_series: List[int] = []
     mutation_duplication_series: List[int] = []
-    assimilation_family_aggregate: Dict[str, Dict[str, float]] = {}
     merge_audit_records: List[Dict[str, Any]] = []
     merge_audit_count_series: List[int] = []
     merge_audit_delta_series: List[float | None] = []
@@ -237,9 +253,15 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         selection_block = rec.get("colony_selection") or {}
         if isinstance(selection_block, dict) and selection_block:
             colony_selection_dissolved_series.append(int(selection_block.get("dissolved", 0) or 0))
-            colony_selection_replicated_series.append(int(selection_block.get("replicated", 0) or 0))
-            colony_selection_pool_members_series.append(int(selection_block.get("pool_members", 0) or 0))
-            colony_selection_pool_pot_series.append(float(selection_block.get("pool_pot", 0.0) or 0.0))
+            colony_selection_replicated_series.append(
+                int(selection_block.get("replicated", 0) or 0)
+            )
+            colony_selection_pool_members_series.append(
+                int(selection_block.get("pool_members", 0) or 0)
+            )
+            colony_selection_pool_pot_series.append(
+                float(selection_block.get("pool_pot", 0.0) or 0.0)
+            )
         else:
             colony_selection_dissolved_series.append(0)
             colony_selection_replicated_series.append(0)
@@ -297,7 +319,9 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             if episodes > 0:
                 power_episodes_total += episodes
                 power_need_weighted += float(econ.get("avg_power_need", 0.0) or 0.0) * episodes
-                price_multiplier_weighted += float(econ.get("avg_price_multiplier", 0.0) or 0.0) * episodes
+                price_multiplier_weighted += (
+                    float(econ.get("avg_price_multiplier", 0.0) or 0.0) * episodes
+                )
             tokens_minted_total += int(econ.get("tokens_minted", 0) or 0)
             tokens_used_total += int(econ.get("tokens_used", 0) or 0)
             info_topups_total += int(econ.get("info_topups", 0) or 0)
@@ -375,7 +399,9 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             merge_audit_delta_series.append(None)
         budget_block = rec.get("budget") or {}
         if isinstance(budget_block, dict) and budget_block:
-            final_total = int(budget_block.get("final_total", budget_block.get("capped_total", 0)) or 0)
+            final_total = int(
+                budget_block.get("final_total", budget_block.get("capped_total", 0)) or 0
+            )
             raw_total = int(budget_block.get("raw_total", 0) or 0)
             budget_total_series.append(final_total)
             budget_raw_series.append(raw_total)
@@ -436,7 +462,9 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         tier_mean = 0.0
         tier_counts_map: Dict[str, int] = {}
         if colony_metrics:
-            total_bandwidth = sum(float(info.get("bandwidth_budget", 0.0)) for info in colony_metrics.values())
+            total_bandwidth = sum(
+                float(info.get("bandwidth_budget", 0.0)) for info in colony_metrics.values()
+            )
             total_size = sum(int(info.get("size", 0) or 0) for info in colony_metrics.values())
             avg_delta = sum(
                 float(info.get("last_delta", 0.0)) for info in colony_metrics.values()
@@ -444,12 +472,14 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             avg_variance_ratio = sum(
                 float(info.get("variance_ratio", 1.0)) for info in colony_metrics.values()
             ) / max(len(colony_metrics), 1)
-            hazard_total = sum(int(info.get("hazard_members", 0) or 0) for info in colony_metrics.values())
+            hazard_total = sum(
+                int(info.get("hazard_members", 0) or 0) for info in colony_metrics.values()
+            )
             reserve_count = sum(1 for info in colony_metrics.values() if info.get("reserve_active"))
             winter_count = sum(1 for info in colony_metrics.values() if info.get("winter_mode"))
-            hazard_z_mean = sum(float(info.get("hazard_z", 0.0)) for info in colony_metrics.values()) / max(
-                len(colony_metrics), 1
-            )
+            hazard_z_mean = sum(
+                float(info.get("hazard_z", 0.0)) for info in colony_metrics.values()
+            ) / max(len(colony_metrics), 1)
             tiers = [int(info.get("tier", 0) or 0) for info in colony_metrics.values()]
             if tiers:
                 tier_mean = sum(tiers) / len(tiers)
@@ -596,9 +626,13 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     budget_trait_mean = mean(budget_trait_samples) if budget_trait_samples else 0.0
     budget_policy_mean = mean(budget_policy_samples) if budget_policy_samples else 0.0
     budget_final_last = budget_total_series[-1] if budget_total_series else 0
+
     def _mean_filtered(values: List[float | None]) -> float:
-        filtered = [float(v) for v in values if isinstance(v, (int, float)) and not math.isnan(float(v))]
+        filtered = [
+            float(v) for v in values if isinstance(v, (int, float)) and not math.isnan(float(v))
+        ]
         return mean(filtered) if filtered else 0.0
+
     foraging_beta_mean = _mean_filtered(foraging_beta_series)
     foraging_decay_mean = _mean_filtered(foraging_decay_series)
     foraging_ucb_mean = _mean_filtered(foraging_ucb_series)
@@ -620,9 +654,7 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "duplication": sum(mutation_duplication_series),
     }
     audit_delta_filtered = [
-        float(val)
-        for val in merge_audit_delta_series
-        if isinstance(val, (int, float))
+        float(val) for val in merge_audit_delta_series if isinstance(val, (int, float))
     ]
     merge_audit_delta_mean = mean(audit_delta_filtered) if audit_delta_filtered else 0.0
     merge_audit_total = sum(merge_audit_count_series)
@@ -636,9 +668,13 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         delta = record.get("delta")
         if isinstance(delta, (int, float)):
             stats["delta_sum"] += float(delta)
-            stats["delta_min"] = float(delta) if stats["delta_min"] is None else min(stats["delta_min"], float(delta))
+            stats["delta_min"] = (
+                float(delta)
+                if stats["delta_min"] is None
+                else min(stats["delta_min"], float(delta))
+            )
         stats["count"] += 1
-    for family, stats in merge_audit_family.items():
+    for _family, stats in merge_audit_family.items():
         count = max(1, stats["count"])
         stats["delta_mean"] = stats["delta_sum"] / count
         if stats["delta_min"] is None:
@@ -681,7 +717,7 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         if isinstance(audit_delta, (int, float)):
             stats["audit_delta_sum"] += float(audit_delta)
             stats["audit_delta_count"] += 1.0
-    for family, stats in assimilation_family_summary.items():
+    for _family, stats in assimilation_family_summary.items():
         attempts = max(1, stats["attempts"])
         stats["pass_rate"] = stats["passes"] / attempts
         stats["uplift_mean"] = (
@@ -711,8 +747,24 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             "avg_cost": totals["cost_sum"] / count if count else 0.0,
         }
 
+    generation_numbers = [
+        int(rec.get("generation", 0) or 0) for rec in records if rec.get("generation") is not None
+    ]
+    generation_numbers = [g for g in generation_numbers if g > 0]
+    generation_max = max(generation_numbers) if generation_numbers else len(records)
+    generation_set = set(generation_numbers)
+    missing_generations = 0
+    if generation_set and generation_max > 0:
+        missing_generations = sum(
+            1 for g in range(1, generation_max + 1) if g not in generation_set
+        )
+    sparse_records = bool(missing_generations or len(records) != generation_max)
+
     return {
-        "generations": len(records),
+        "generations": generation_max,
+        "records": len(records),
+        "missing_generations": missing_generations,
+        "sparse_records": sparse_records,
         "avg_roi_mean": mean(roi),
         "avg_roi_median": median(roi),
         "avg_roi_min": min(roi),
@@ -756,7 +808,9 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "qd_archive_size_series": qd_archive_size_series,
         "qd_archive_size_mean": mean(qd_archive_size_series) if qd_archive_size_series else 0.0,
         "qd_archive_coverage_series": qd_archive_coverage_series,
-        "qd_archive_coverage_mean": mean(qd_archive_coverage_series) if qd_archive_coverage_series else 0.0,
+        "qd_archive_coverage_mean": (
+            mean(qd_archive_coverage_series) if qd_archive_coverage_series else 0.0
+        ),
         "qd_archive_top_latest": qd_archive_top_latest or [],
         "roi_volatility": roi_volatility,
         "trials_total": total_trials,
@@ -777,12 +831,20 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "foraging_traits_latest": (latest_record.get("foraging") or {}).get("traits", {}),
         "foraging_top_cells_latest": (latest_record.get("foraging") or {}).get("top_cells", {}),
         "team_probe_hits_total": team_probe_hits_total,
-        "team_probe_pairs": dict(sorted(team_probe_pairs.items(), key=lambda kv: kv[1], reverse=True)[:10]),
+        "team_probe_pairs": dict(
+            sorted(team_probe_pairs.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        ),
         "team_probe_candidates_latest": team_probe_latest,
-        "co_routing_totals": dict(sorted(co_routing_totals.items(), key=lambda kv: kv[1], reverse=True)[:10]),
+        "co_routing_totals": dict(
+            sorted(co_routing_totals.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        ),
         "colonies_meta": colonies_meta,
         "colonies_count_series": colonies_count_series,
-        "colonies_avg_size_mean": (sum(colonies_avg_size_series) / max(1, len(colonies_avg_size_series))) if colonies_avg_size_series else 0.0,
+        "colonies_avg_size_mean": (
+            (sum(colonies_avg_size_series) / max(1, len(colonies_avg_size_series)))
+            if colonies_avg_size_series
+            else 0.0
+        ),
         "colony_events": colony_events,
         "colony_event_counts": dict(colony_event_counter),
         "colony_selection_dissolved_series": colony_selection_dissolved_series,
@@ -791,8 +853,14 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "colony_selection_pool_pot_series": colony_selection_pool_pot_series,
         "colony_selection_dissolved_total": sum(colony_selection_dissolved_series),
         "colony_selection_replicated_total": sum(colony_selection_replicated_series),
-        "colony_selection_pool_members_mean": mean(colony_selection_pool_members_series) if colony_selection_pool_members_series else 0.0,
-        "colony_selection_pool_pot_mean": mean(colony_selection_pool_pot_series) if colony_selection_pool_pot_series else 0.0,
+        "colony_selection_pool_members_mean": (
+            mean(colony_selection_pool_members_series)
+            if colony_selection_pool_members_series
+            else 0.0
+        ),
+        "colony_selection_pool_pot_mean": (
+            mean(colony_selection_pool_pot_series) if colony_selection_pool_pot_series else 0.0
+        ),
         "colony_selection_events": colony_selection_events,
         "survival_reserve_counts": survival_reserve_counts,
         "survival_hazard_counts": survival_hazard_counts,
@@ -807,7 +875,9 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "comms_event_counts": dict(comms_event_counter),
         "comms_board_latest": comms_board_latest,
         "knowledge_totals": {k: int(v) for k, v in knowledge_totals.items()},
-        "knowledge_entries_mean": mean(knowledge_entries_series) if knowledge_entries_series else 0.0,
+        "knowledge_entries_mean": (
+            mean(knowledge_entries_series) if knowledge_entries_series else 0.0
+        ),
         "knowledge_entries_latest": knowledge_entries_series[-1] if knowledge_entries_series else 0,
         "policy_failures_total": int(policy_failures_total),
         "policy_failure_latest": policy_failure_latest,
@@ -837,14 +907,22 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "colony_size_total_series": colony_size_total_series,
         "colony_size_mean": mean(colony_size_total_series) if colony_size_total_series else 0.0,
         "colony_delta_mean_series": colony_delta_mean_series,
-        "colony_delta_overall_mean": mean(colony_delta_mean_series) if colony_delta_mean_series else 0.0,
+        "colony_delta_overall_mean": (
+            mean(colony_delta_mean_series) if colony_delta_mean_series else 0.0
+        ),
         "colony_variance_ratio_series": colony_variance_ratio_series,
-        "colony_variance_ratio_mean": mean(colony_variance_ratio_series) if colony_variance_ratio_series else 0.0,
+        "colony_variance_ratio_mean": (
+            mean(colony_variance_ratio_series) if colony_variance_ratio_series else 0.0
+        ),
         "colony_hazard_members_series": colony_hazard_members_series,
         "colony_reserve_active_series": colony_reserve_active_series,
-        "colony_reserve_active_mean": mean(colony_reserve_active_series) if colony_reserve_active_series else 0.0,
+        "colony_reserve_active_mean": (
+            mean(colony_reserve_active_series) if colony_reserve_active_series else 0.0
+        ),
         "colony_winter_active_series": colony_winter_active_series,
-        "colony_winter_active_mean": mean(colony_winter_active_series) if colony_winter_active_series else 0.0,
+        "colony_winter_active_mean": (
+            mean(colony_winter_active_series) if colony_winter_active_series else 0.0
+        ),
         "colony_hazard_z_series": colony_hazard_z_series,
         "colony_hazard_z_mean": mean(colony_hazard_z_series) if colony_hazard_z_series else 0.0,
         "colony_tier_mean_series": colony_tier_mean_series,
@@ -882,11 +960,21 @@ def summarise_generations(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "policy_applied_total": policy_applied,
         "policy_parse_attempts_total": int(policy_attempts_total),
         "policy_parse_parsed_total": int(policy_parsed_total),
-        "policy_roi_mean_when_applied": (sum(roi_when_policy) / max(1, len(roi_when_policy))) if roi_when_policy else 0.0,
-        "policy_roi_mean_when_not": (sum(roi_when_no_policy) / max(1, len(roi_when_no_policy))) if roi_when_no_policy else 0.0,
+        "policy_roi_mean_when_applied": (
+            (sum(roi_when_policy) / max(1, len(roi_when_policy))) if roi_when_policy else 0.0
+        ),
+        "policy_roi_mean_when_not": (
+            (sum(roi_when_no_policy) / max(1, len(roi_when_no_policy)))
+            if roi_when_no_policy
+            else 0.0
+        ),
         "policy_fields_used_total": fields_agg,
-        "policy_budget_frac_mean": (sum(budget_vals) / max(1, len(budget_vals))) if budget_vals else 0.0,
-        "policy_reserve_ratio_mean": (sum(reserve_vals) / max(1, len(reserve_vals))) if reserve_vals else 0.0,
+        "policy_budget_frac_mean": (
+            (sum(budget_vals) / max(1, len(budget_vals))) if budget_vals else 0.0
+        ),
+        "policy_reserve_ratio_mean": (
+            (sum(reserve_vals) / max(1, len(reserve_vals))) if reserve_vals else 0.0
+        ),
     }
 
 
@@ -1015,15 +1103,25 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         values = [int(rec.get("policy_parsed", 0) or 0) for rec in records]
         plt.figure(figsize=(8, 4))
         plt.plot(generations, values, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Policy parsed count"); plt.title("Policy parsed per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "policy_parsed.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Policy parsed count")
+        plt.title("Policy parsed per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "policy_parsed.png")
+        plt.close()
 
     # Colonies plots
     colonies = [int(rec.get("colonies", 0) or 0) for rec in records]
     plt.figure(figsize=(8, 4))
     plt.plot(generations, colonies, marker="o", linewidth=1)
-    plt.xlabel("Generation"); plt.ylabel("Colonies count"); plt.title("Colonies over generations")
-    plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_count.png"); plt.close()
+    plt.xlabel("Generation")
+    plt.ylabel("Colonies count")
+    plt.title("Colonies over generations")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / "colonies_count.png")
+    plt.close()
 
     avg_sizes: List[float] = []
     for rec in records:
@@ -1040,8 +1138,13 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
             avg_sizes.append(0.0)
     plt.figure(figsize=(8, 4))
     plt.plot(generations, avg_sizes, marker="o", linewidth=1)
-    plt.xlabel("Generation"); plt.ylabel("Avg colony size"); plt.title("Colony size over generations")
-    plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_avg_size.png"); plt.close()
+    plt.xlabel("Generation")
+    plt.ylabel("Avg colony size")
+    plt.title("Colony size over generations")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / "colonies_avg_size.png")
+    plt.close()
 
     # Colony pots over time (total and per top colonies)
     # Collect all colony ids
@@ -1073,25 +1176,41 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         total_pot = [sum(pot_series[cid][i] for cid in all_ids) for i in range(len(records))]
         plt.figure(figsize=(8, 4))
         plt.plot(generations, total_pot, linewidth=1.5)
-        plt.xlabel("Generation"); plt.ylabel("Total pot"); plt.title("Colony pot (total)")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_pot_total.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Total pot")
+        plt.title("Colony pot (total)")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colonies_pot_total.png")
+        plt.close()
         # Per-colony (top 5 by max pot)
-        top_ids = sorted(all_ids, key=lambda cid: max(pot_series[cid]) if pot_series[cid] else 0.0, reverse=True)[:5]
+        top_ids = sorted(
+            all_ids, key=lambda cid: max(pot_series[cid]) if pot_series[cid] else 0.0, reverse=True
+        )[:5]
         if top_ids:
             plt.figure(figsize=(10, 5))
             for cid in top_ids:
                 plt.plot(generations, pot_series[cid], label=cid, linewidth=1)
-            plt.xlabel("Generation"); plt.ylabel("Pot"); plt.title("Colony pot by colony (top 5)")
+            plt.xlabel("Generation")
+            plt.ylabel("Pot")
+            plt.title("Colony pot by colony (top 5)")
             plt.legend(fontsize=8)
-            plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colonies_pot_per_colony.png"); plt.close()
+            plt.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(output_dir / "colonies_pot_per_colony.png")
+            plt.close()
             # Membership stacked area for top 5
             try:
                 plt.figure(figsize=(10, 5))
                 ys = [mem_series[cid] for cid in top_ids]
                 plt.stackplot(generations, *ys, labels=top_ids)
-                plt.xlabel("Generation"); plt.ylabel("Members"); plt.title("Colony membership (stacked, top 5)")
+                plt.xlabel("Generation")
+                plt.ylabel("Members")
+                plt.title("Colony membership (stacked, top 5)")
                 plt.legend(fontsize=8, loc="upper left")
-                plt.tight_layout(); plt.savefig(output_dir / "colonies_membership_stack.png"); plt.close()
+                plt.tight_layout()
+                plt.savefig(output_dir / "colonies_membership_stack.png")
+                plt.close()
             except Exception:
                 pass
 
@@ -1105,20 +1224,30 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
             labels = list(counts.keys())
             values = [counts[label] for label in labels]
             plt.bar(labels, values, color="#5b8def")
-            plt.xlabel("Event type"); plt.ylabel("Count"); plt.title("Colony event counts")
-            plt.tight_layout(); plt.savefig(output_dir / "colony_events.png"); plt.close()
+            plt.xlabel("Event type")
+            plt.ylabel("Count")
+            plt.title("Colony event counts")
+            plt.tight_layout()
+            plt.savefig(output_dir / "colony_events.png")
+            plt.close()
     selection_events = summary.get("colony_selection_events") or []
     if selection_events:
         events_path = output_dir / "colony_selection_events.jsonl"
         events_path.write_text("\n".join(json.dumps(ev) for ev in selection_events))
-        counts = Counter(ev.get("type") for ev in selection_events if isinstance(ev.get("type"), str))
+        counts = Counter(
+            ev.get("type") for ev in selection_events if isinstance(ev.get("type"), str)
+        )
         if counts:
             plt.figure(figsize=(6, 3))
             labels = list(counts.keys())
             values = [counts[label] for label in labels]
             plt.bar(labels, values, color="#ff7f0e")
-            plt.xlabel("Event type"); plt.ylabel("Count"); plt.title("Colony selection events")
-            plt.tight_layout(); plt.savefig(output_dir / "colony_selection_events.png"); plt.close()
+            plt.xlabel("Event type")
+            plt.ylabel("Count")
+            plt.title("Colony selection events")
+            plt.tight_layout()
+            plt.savefig(output_dir / "colony_selection_events.png")
+            plt.close()
 
     beta_series = summary.get("foraging_beta_series") or []
     decay_series = summary.get("foraging_decay_series") or []
@@ -1128,6 +1257,7 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         count = min(len(generations), len(beta_series))
         if count > 0:
             xs = generations[:count]
+
             def _cast(series: List[Any]) -> List[float]:
                 values: List[float] = []
                 for idx in range(count):
@@ -1137,6 +1267,7 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
                     else:
                         values.append(float("nan"))
                 return values
+
             plt.figure(figsize=(8, 4))
             plt.plot(xs, _cast(beta_series), label="beta", linewidth=1.2)
             if decay_series:
@@ -1145,20 +1276,36 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
                 plt.plot(xs, _cast(ucb_series), label="ucb", linewidth=1.0)
             if budget_series:
                 plt.plot(xs, _cast(budget_series), label="budget", linewidth=1.0)
-            plt.xlabel("Generation"); plt.ylabel("Value"); plt.title("Foraging traits (mean per gen)")
-            plt.legend(); plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "foraging_traits.png"); plt.close()
+            plt.xlabel("Generation")
+            plt.ylabel("Value")
+            plt.title("Foraging traits (mean per gen)")
+            plt.legend()
+            plt.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(output_dir / "foraging_traits.png")
+            plt.close()
     reserve_counts = summary.get("survival_reserve_counts") or []
     if reserve_counts:
         plt.figure(figsize=(8, 4))
         plt.plot(generations, reserve_counts, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Reserve guards"); plt.title("Reserve-active organelles")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "survival_reserve.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Reserve guards")
+        plt.title("Reserve-active organelles")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "survival_reserve.png")
+        plt.close()
     hazard_counts = summary.get("survival_hazard_counts") or []
     if hazard_counts:
         plt.figure(figsize=(8, 4))
         plt.plot(generations, hazard_counts, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Hazard-active"); plt.title("Hazard states")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "survival_hazard.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Hazard-active")
+        plt.title("Hazard states")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "survival_hazard.png")
+        plt.close()
     winter_price_series = summary.get("winter_price_series") or []
     winter_ticket_series = summary.get("winter_ticket_series") or []
     winter_active_series = summary.get("winter_active_series") or []
@@ -1169,7 +1316,8 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
             price_vals = [float(winter_price_series[i]) for i in range(count)]
             ticket_vals = [float(winter_ticket_series[i]) for i in range(count)]
             active_vals = [
-                int(winter_active_series[i]) if i < len(winter_active_series) else 0 for i in range(count)
+                int(winter_active_series[i]) if i < len(winter_active_series) else 0
+                for i in range(count)
             ]
             fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(8, 5))
             ax1.plot(xs, price_vals, label="price multiplier", color="#ff7f0e", linewidth=1.5)
@@ -1197,26 +1345,41 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         labels = list(winter_event_counts.keys())
         values = [winter_event_counts[label] for label in labels]
         plt.bar(labels, values, color="#9467bd")
-        plt.xlabel("Event type"); plt.ylabel("Count"); plt.title("Winter events")
-        plt.tight_layout(); plt.savefig(output_dir / "winter_events.png"); plt.close()
+        plt.xlabel("Event type")
+        plt.ylabel("Count")
+        plt.title("Winter events")
+        plt.tight_layout()
+        plt.savefig(output_dir / "winter_events.png")
+        plt.close()
     price_bias_counts = summary.get("survival_price_bias_counts") or []
     if price_bias_counts:
         plt.figure(figsize=(8, 4))
         plt.plot(generations, price_bias_counts, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Price-bias active"); plt.title("Price-aware routing guards")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "survival_price_bias.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Price-bias active")
+        plt.title("Price-aware routing guards")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "survival_price_bias.png")
+        plt.close()
     survival_events = summary.get("survival_events") or []
     if survival_events:
         events_path = output_dir / "survival_events.jsonl"
         events_path.write_text("\n".join(json.dumps(ev) for ev in survival_events))
-        counts = Counter(ev.get("type") for ev in survival_events if isinstance(ev.get("type"), str))
+        counts = Counter(
+            ev.get("type") for ev in survival_events if isinstance(ev.get("type"), str)
+        )
         if counts:
             plt.figure(figsize=(6, 3))
             labels = list(counts.keys())
             values = [counts[label] for label in labels]
             plt.bar(labels, values, color="#c96dfd")
-            plt.xlabel("Event type"); plt.ylabel("Count"); plt.title("Survival events")
-            plt.tight_layout(); plt.savefig(output_dir / "survival_events.png"); plt.close()
+            plt.xlabel("Event type")
+            plt.ylabel("Count")
+            plt.title("Survival events")
+            plt.tight_layout()
+            plt.savefig(output_dir / "survival_events.png")
+            plt.close()
 
     comms_posts = summary.get("comms_posts_series") or []
     comms_reads = summary.get("comms_reads_series") or []
@@ -1224,18 +1387,33 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
     if comms_posts:
         plt.figure(figsize=(8, 4))
         plt.plot(generations, comms_posts, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Posts"); plt.title("Comms posts per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "comms_posts.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Posts")
+        plt.title("Comms posts per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "comms_posts.png")
+        plt.close()
     if comms_reads:
         plt.figure(figsize=(8, 4))
         plt.plot(generations, comms_reads, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Reads"); plt.title("Comms reads per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "comms_reads.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Reads")
+        plt.title("Comms reads per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "comms_reads.png")
+        plt.close()
     if comms_credits:
         plt.figure(figsize=(8, 4))
         plt.plot(generations, comms_credits, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Credits"); plt.title("Comms credits per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "comms_credits.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Credits")
+        plt.title("Comms credits per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "comms_credits.png")
+        plt.close()
     mutation_rank = summary.get("mutation_rank_noise_series") or []
     mutation_dropout = summary.get("mutation_dropout_series") or []
     mutation_duplication = summary.get("mutation_duplication_series") or []
@@ -1246,24 +1424,41 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         if mutation_dropout:
             plt.plot(generations, mutation_dropout, marker="o", linewidth=1, label="dropout")
         if mutation_duplication:
-            plt.plot(generations, mutation_duplication, marker="o", linewidth=1, label="duplication")
-        plt.xlabel("Generation"); plt.ylabel("Count"); plt.title("Mutation operators per generation")
-        plt.legend(); plt.grid(alpha=0.3); plt.tight_layout()
-        plt.savefig(output_dir / "mutation_operators.png"); plt.close()
+            plt.plot(
+                generations, mutation_duplication, marker="o", linewidth=1, label="duplication"
+            )
+        plt.xlabel("Generation")
+        plt.ylabel("Count")
+        plt.title("Mutation operators per generation")
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "mutation_operators.png")
+        plt.close()
     audit_counts = summary.get("merge_audit_count_series") or []
     audit_deltas = summary.get("merge_audit_delta_series") or []
     if audit_counts and any(audit_counts):
         plt.figure(figsize=(8, 4))
         plt.plot(generations, audit_counts, marker="o", linewidth=1, color="#ff7f0e")
-        plt.xlabel("Generation"); plt.ylabel("Audits"); plt.title("Merge audits per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "merge_audits_counts.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Audits")
+        plt.title("Merge audits per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "merge_audits_counts.png")
+        plt.close()
     if audit_deltas and any(isinstance(val, (int, float)) for val in audit_deltas):
         plt.figure(figsize=(8, 4))
         deltas_numeric = [val if isinstance(val, (int, float)) else None for val in audit_deltas]
         plt.plot(generations, deltas_numeric, marker="o", linewidth=1, color="#2ca02c")
-        plt.xlabel("Generation"); plt.ylabel("ΔROI post-pre"); plt.title("Merge audit ΔROI (mean per gen)")
+        plt.xlabel("Generation")
+        plt.ylabel("ΔROI post-pre")
+        plt.title("Merge audit ΔROI (mean per gen)")
         plt.axhline(0.0, color="#444", linewidth=0.8, linestyle="--")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "merge_audits_delta.png"); plt.close()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "merge_audits_delta.png")
+        plt.close()
     comms_events = summary.get("comms_events") or []
     if comms_events:
         events_path = output_dir / "comms_events.jsonl"
@@ -1274,43 +1469,76 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
             labels = list(counts.keys())
             values = [counts[label] for label in labels]
             plt.bar(labels, values, color="#2d96ff")
-            plt.xlabel("Event type"); plt.ylabel("Count"); plt.title("Comms events")
-            plt.tight_layout(); plt.savefig(output_dir / "comms_events.png"); plt.close()
+            plt.xlabel("Event type")
+            plt.ylabel("Count")
+            plt.title("Comms events")
+            plt.tight_layout()
+            plt.savefig(output_dir / "comms_events.png")
+            plt.close()
     colony_band_series = summary.get("colony_bandwidth_series") or []
     if colony_band_series:
         plt.figure(figsize=(8, 4))
-        plt.plot(generations[: len(colony_band_series)], colony_band_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Bandwidth (energy)"); plt.title("Colony bandwidth per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_bandwidth.png"); plt.close()
+        plt.plot(
+            generations[: len(colony_band_series)], colony_band_series, marker="o", linewidth=1
+        )
+        plt.xlabel("Generation")
+        plt.ylabel("Bandwidth (energy)")
+        plt.title("Colony bandwidth per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colony_bandwidth.png")
+        plt.close()
     colony_size_series = summary.get("colony_size_total_series") or []
     if colony_size_series:
         plt.figure(figsize=(8, 4))
-        plt.plot(generations[: len(colony_size_series)], colony_size_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Total members"); plt.title("Colony size (total members)")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_size_total.png"); plt.close()
+        plt.plot(
+            generations[: len(colony_size_series)], colony_size_series, marker="o", linewidth=1
+        )
+        plt.xlabel("Generation")
+        plt.ylabel("Total members")
+        plt.title("Colony size (total members)")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colony_size_total.png")
+        plt.close()
     colony_delta_series = summary.get("colony_delta_mean_series") or []
     if colony_delta_series:
         plt.figure(figsize=(8, 4))
-        plt.plot(generations[: len(colony_delta_series)], colony_delta_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("ΔROI (mean)"); plt.title("Colony holdout ΔROI")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_delta_mean.png"); plt.close()
+        plt.plot(
+            generations[: len(colony_delta_series)], colony_delta_series, marker="o", linewidth=1
+        )
+        plt.xlabel("Generation")
+        plt.ylabel("ΔROI (mean)")
+        plt.title("Colony holdout ΔROI")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colony_delta_mean.png")
+        plt.close()
     colony_var_series = summary.get("colony_variance_ratio_series") or []
     if colony_var_series:
         plt.figure(figsize=(8, 4))
         plt.plot(generations[: len(colony_var_series)], colony_var_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Variance ratio"); plt.title("Colony variance ratio")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_variance_ratio.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Variance ratio")
+        plt.title("Colony variance ratio")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colony_variance_ratio.png")
+        plt.close()
     tier_mean_series = summary.get("colony_tier_mean_series") or []
     if tier_mean_series:
         plt.figure(figsize=(8, 4))
         plt.plot(generations[: len(tier_mean_series)], tier_mean_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Tier mean"); plt.title("Colony tier mean")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_tier_mean.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Tier mean")
+        plt.title("Colony tier mean")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colony_tier_mean.png")
+        plt.close()
     tier_counts_series = summary.get("colony_tier_counts_series") or []
     if tier_counts_series:
-        tier_keys = sorted(
-            {int(k) for counts in tier_counts_series for k in counts.keys()}
-        )
+        tier_keys = sorted({int(k) for counts in tier_counts_series for k in counts.keys()})
         if tier_keys:
             xs = generations[: len(tier_counts_series)]
             ys = []
@@ -1318,37 +1546,67 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
                 ys.append([int(counts.get(str(key), 0)) for counts in tier_counts_series])
             plt.figure(figsize=(8, 4))
             plt.stackplot(xs, *ys, labels=[str(key) for key in tier_keys])
-            plt.xlabel("Generation"); plt.ylabel("Colonies"); plt.title("Colony tier counts")
+            plt.xlabel("Generation")
+            plt.ylabel("Colonies")
+            plt.title("Colony tier counts")
             plt.legend(loc="upper left", fontsize=8)
-            plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_tier_counts.png"); plt.close()
+            plt.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(output_dir / "colony_tier_counts.png")
+            plt.close()
     selection_pot_series = summary.get("colony_selection_pool_pot_series") or []
     if selection_pot_series:
         plt.figure(figsize=(8, 4))
-        plt.plot(generations[: len(selection_pot_series)], selection_pot_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Pool pot")
+        plt.plot(
+            generations[: len(selection_pot_series)], selection_pot_series, marker="o", linewidth=1
+        )
+        plt.xlabel("Generation")
+        plt.ylabel("Pool pot")
         plt.title("Colony selection pool (pot)")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_selection_pool_pot.png"); plt.close()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colony_selection_pool_pot.png")
+        plt.close()
     selection_members_series = summary.get("colony_selection_pool_members_series") or []
     if selection_members_series:
         plt.figure(figsize=(8, 4))
-        plt.plot(generations[: len(selection_members_series)], selection_members_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Pool members")
+        plt.plot(
+            generations[: len(selection_members_series)],
+            selection_members_series,
+            marker="o",
+            linewidth=1,
+        )
+        plt.xlabel("Generation")
+        plt.ylabel("Pool members")
         plt.title("Colony selection pool (members)")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_selection_pool_members.png"); plt.close()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colony_selection_pool_members.png")
+        plt.close()
     selection_rep_series = summary.get("colony_selection_replicated_series") or []
     if selection_rep_series:
         plt.figure(figsize=(8, 4))
-        plt.plot(generations[: len(selection_rep_series)], selection_rep_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Replications")
+        plt.plot(
+            generations[: len(selection_rep_series)], selection_rep_series, marker="o", linewidth=1
+        )
+        plt.xlabel("Generation")
+        plt.ylabel("Replications")
         plt.title("Colony selection replications")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "colony_selection_replications.png"); plt.close()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "colony_selection_replications.png")
+        plt.close()
     qd_size_series = summary.get("qd_archive_size_series") or []
     if qd_size_series:
         plt.figure(figsize=(8, 4))
         plt.plot(generations[: len(qd_size_series)], qd_size_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Archive size")
+        plt.xlabel("Generation")
+        plt.ylabel("Archive size")
         plt.title("QD archive size")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "qd_archive_size.png"); plt.close()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "qd_archive_size.png")
+        plt.close()
     qd_cov_series = summary.get("qd_archive_coverage_series") or []
     if qd_cov_series:
         plt.figure(figsize=(8, 4))
@@ -1358,29 +1616,48 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
             marker="o",
             linewidth=1,
         )
-        plt.xlabel("Generation"); plt.ylabel("Coverage (%)")
+        plt.xlabel("Generation")
+        plt.ylabel("Coverage (%)")
         plt.title("QD archive coverage")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "qd_archive_coverage.png"); plt.close()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "qd_archive_coverage.png")
+        plt.close()
     budget_series = summary.get("budget_totals_series") or []
     if budget_series:
         plt.figure(figsize=(8, 4))
         plt.plot(generations[: len(budget_series)], budget_series, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Episodes"); plt.title("Budgeted episodes per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "budget_totals.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Episodes")
+        plt.title("Budgeted episodes per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "budget_totals.png")
+        plt.close()
 
     # Team routes/promotions per generation
     if any("team_routes" in rec for rec in records):
         values = [int(rec.get("team_routes", 0) or 0) for rec in records]
         plt.figure(figsize=(8, 4))
         plt.plot(generations, values, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Team routes"); plt.title("Team routes per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "team_routes.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Team routes")
+        plt.title("Team routes per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "team_routes.png")
+        plt.close()
     if any("team_promotions" in rec for rec in records):
         values = [int(rec.get("team_promotions", 0) or 0) for rec in records]
         plt.figure(figsize=(8, 4))
         plt.plot(generations, values, marker="o", linewidth=1)
-        plt.xlabel("Generation"); plt.ylabel("Team promotions"); plt.title("Team promotions per generation")
-        plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "team_promotions.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("Team promotions")
+        plt.title("Team promotions per generation")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "team_promotions.png")
+        plt.close()
 
     # Promotion controller thresholds over generations (if present)
     if any("promotion_controller" in rec for rec in records):
@@ -1402,8 +1679,14 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         plt.figure(figsize=(8, 4))
         plt.plot(generations, margin_vals, label="team_holdout_margin", color="#1f77b4")
         plt.plot(generations, power_vals, label="team_min_power", color="#2ca02c")
-        plt.xlabel("Generation"); plt.ylabel("value"); plt.title("Promotion controller thresholds")
-        plt.legend(); plt.grid(alpha=0.3); plt.tight_layout(); plt.savefig(output_dir / "promotion_controller.png"); plt.close()
+        plt.xlabel("Generation")
+        plt.ylabel("value")
+        plt.title("Promotion controller thresholds")
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "promotion_controller.png")
+        plt.close()
 
     # Co-routing heatmap for top pairs across the run
     pairs_set = set()
@@ -1428,8 +1711,12 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
         plt.colorbar(label="Co-route count")
         plt.yticks(range(len(records)), generations)
         plt.xticks(range(len(pairs)), pairs, rotation=45, ha="right")
-        plt.xlabel("Pair"); plt.ylabel("Generation"); plt.title("Co-routing (top pairs)")
-        plt.tight_layout(); plt.savefig(output_dir / "co_routing_heatmap.png"); plt.close()
+        plt.xlabel("Pair")
+        plt.ylabel("Generation")
+        plt.title("Co-routing (top pairs)")
+        plt.tight_layout()
+        plt.savefig(output_dir / "co_routing_heatmap.png")
+        plt.close()
 
     # Heatmaps for per-cell metrics if available
     if records[0].get("cells"):
@@ -1480,7 +1767,19 @@ def ensure_plots(records: List[Dict[str, Any]], output_dir: Path) -> None:
 
 def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_path: Path) -> None:
     lines = ["# Ecology Run Analysis", ""]
-    lines.append(f"- Generations: {summary['generations']}")
+    generation_line = f"- Generations: {summary['generations']}"
+    records_count = summary.get("records")
+    missing = summary.get("missing_generations")
+    if isinstance(records_count, int):
+        generation_line += f" (records: {records_count}"
+        if isinstance(missing, int) and missing:
+            generation_line += f", missing: {missing}"
+        generation_line += ")"
+    lines.append(generation_line)
+    if summary.get("sparse_records"):
+        lines.append(
+            "- NOTE: `gen_summaries.jsonl` is sparse; aggregates below use recorded generations only."
+        )
     lines.append(f"- Total episodes: {summary['episodes_total']}")
     lines.append(
         f"- Average ROI: {summary['avg_roi_mean']:.3f} (median {summary['avg_roi_median']:.3f}, range {summary['avg_roi_min']:.3f} – {summary['avg_roi_max']:.3f}, σ {summary['avg_roi_std']:.3f})"
@@ -1498,7 +1797,9 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
     lines.append(
         f"- Active organelles per generation: {summary['active_min']} – {summary['active_max']} (bankrupt: {summary['bankrupt_min']} – {summary['bankrupt_max']})"
     )
-    lines.append(f"- Bankruptcy culls: total {summary['culled_total']} (max per generation {summary['culled_max']})")
+    lines.append(
+        f"- Bankruptcy culls: total {summary['culled_total']} (max per generation {summary['culled_max']})"
+    )
     lines.append(f"- Assimilation merges (per summary): {summary['total_merges']}")
     if summary.get("team_routes_total") is not None:
         lines.append(
@@ -1507,8 +1808,7 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         latest = summary.get("team_probe_candidates_latest") or []
         if summary.get("team_probe_hits_total") and latest:
             formatted = ", ".join(
-                f"{tuple(cand.get('pair', []))}:S{cand.get('sustain', 0)}"
-                for cand in latest[:5]
+                f"{tuple(cand.get('pair', []))}:S{cand.get('sustain', 0)}" for cand in latest[:5]
             )
             lines.append(
                 f"  - Team probe sustained hits: {summary['team_probe_hits_total']} (latest: {formatted})"
@@ -1538,7 +1838,9 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         scaffold_items = ", ".join(f"{fam}:{cnt}" for fam, cnt in prompt_scaffolds.items())
         lines.append(f"- Prompt scaffolds applied (latest generation): {scaffold_items}")
     if summary.get("assimilation_attempt_total"):
-        lines.append(f"- Assimilation attempts (all stages): {summary['assimilation_attempt_total']}")
+        lines.append(
+            f"- Assimilation attempts (all stages): {summary['assimilation_attempt_total']}"
+        )
     if summary["assimilation_gating_total"]:
         lines.append("- Assimilation gating totals:")
         for key, value in summary["assimilation_gating_total"].items():
@@ -1550,7 +1852,7 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         )
     if summary.get("policy_applied_total"):
         lines.append(
-            f"- Policy usage: {summary['policy_applied_total']}/{summary['generations']} generations"
+            f"- Policy usage: {summary['policy_applied_total']}/{summary.get('records', summary['generations'])} records"
         )
         lines.append(
             f"  - ROI when policy on/off: {summary['policy_roi_mean_when_applied']:.3f} / {summary['policy_roi_mean_when_not']:.3f}"
@@ -1597,7 +1899,9 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         if "merge_weight_mean" in assimilation:
             lines.append(f"  - Merge weight mean: {assimilation['merge_weight_mean']:.3f}")
         if "methods" in assimilation:
-            method_items = ", ".join(f"{name}: {count}" for name, count in assimilation["methods"].items())
+            method_items = ", ".join(
+                f"{name}: {count}" for name, count in assimilation["methods"].items()
+            )
             lines.append(f"  - Methods: {method_items}")
         if assimilation.get("dr_used"):
             lines.append(f"  - DR uplift applied in {assimilation['dr_used']} events")
@@ -1608,7 +1912,9 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
             uplift = record.get("uplift")
             gen = record.get("generation")
             lines.append(
-                f"  - {key}: gen {gen}, uplift {uplift:+.3f}" if isinstance(uplift, (int, float)) else f"  - {key}: gen {gen}"
+                f"  - {key}: gen {gen}, uplift {uplift:+.3f}"
+                if isinstance(uplift, (int, float))
+                else f"  - {key}: gen {gen}"
             )
     knowledge_totals = summary.get("knowledge_totals") or {}
     if knowledge_totals:
@@ -1675,7 +1981,9 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
             f"- Colony winter mode (mean active colonies): {summary.get('colony_winter_active_mean', 0.0):.2f}"
         )
     if summary.get("colony_hazard_z_mean") is not None:
-        lines.append(f"- Colony hazard z-score (mean): {summary.get('colony_hazard_z_mean', 0.0):.3f}")
+        lines.append(
+            f"- Colony hazard z-score (mean): {summary.get('colony_hazard_z_mean', 0.0):.3f}"
+        )
     if summary.get("foraging_traits_latest"):
         lines.append(
             "- Foraging traits (mean): "
@@ -1688,7 +1996,9 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
         if isinstance(top_cells, dict) and top_cells:
             sample_org, cells = next(iter(top_cells.items()))
             if cells:
-                headline = ", ".join(f"{c['family']}:{c['depth']} ({c['q']:.2f})" for c in cells[:3])
+                headline = ", ".join(
+                    f"{c['family']}:{c['depth']} ({c['q']:.2f})" for c in cells[:3]
+                )
                 lines.append(f"  - {sample_org} top cells: {headline}")
     winter_counts = summary.get("winter_event_counts") or {}
     if winter_counts:
@@ -1879,14 +2189,15 @@ def write_report(summary: Dict[str, Any], assimilation: Dict[str, int], output_p
             top_bins = summary.get("qd_archive_top_latest") or []
             if top_bins:
                 formatted = ", ".join(
-                    f"{entry['cell']}[b{entry['bin']}]:{entry['roi']:.3f}"
-                    for entry in top_bins
+                    f"{entry['cell']}[b{entry['bin']}]:{entry['roi']:.3f}" for entry in top_bins
                 )
                 lines.append(f"  top bins: {formatted}")
     if summary.get("roi_volatility") is not None:
         lines.append(f"- ROI volatility (std across organelles): {summary['roi_volatility']:.3f}")
     if summary.get("trials_total") or summary.get("promotions_total"):
-        lines.append(f"- Trials/promotions: {summary.get('trials_total', 0)} / {summary.get('promotions_total', 0)}")
+        lines.append(
+            f"- Trials/promotions: {summary.get('trials_total', 0)} / {summary.get('promotions_total', 0)}"
+        )
     if summary["eval_events"]:
         accuracy_pct = summary["eval_accuracy_mean"] * 100
         lines.append(
@@ -1918,7 +2229,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Analyse an ecology run directory")
     parser.add_argument("run_dir", type=Path, help="Directory containing gen_summaries.jsonl")
     parser.add_argument(
-        "--plots", action="store_true", help="Generate plots (saved under <run_dir>/visuals)", default=False
+        "--plots",
+        action="store_true",
+        help="Generate plots (saved under <run_dir>/visuals)",
+        default=False,
     )
     parser.add_argument(
         "--report", action="store_true", help="Write report.md in the run directory", default=False
@@ -1930,7 +2244,21 @@ def main() -> None:
     summary = summarise_generations(gen_records)
     assimilation_summary = summarise_assimilation(run_dir / "assimilation.jsonl")
 
-    print("Generations:", summary["generations"])
+    episodes_path = run_dir / "episodes.jsonl"
+    if episodes_path.exists():
+        try:
+            with episodes_path.open("rb") as handle:
+                summary["episodes_total"] = sum(1 for _ in handle)
+        except Exception:
+            pass
+
+    gen_line = f"{summary['generations']}"
+    if isinstance(summary.get("records"), int):
+        gen_line += f" (records {summary['records']}"
+        if int(summary.get("missing_generations", 0) or 0):
+            gen_line += f", missing {summary['missing_generations']}"
+        gen_line += ")"
+    print("Generations:", gen_line)
     print("Total episodes:", summary["episodes_total"])
     print(
         "Average ROI (mean/median/min/max):",
@@ -1959,8 +2287,14 @@ def main() -> None:
         f"{summary['lp_mix_active_last']:.3f}",
     )
     print(
-        "Active organelles range:", summary["active_min"], "-", summary["active_max"],
-        ", bankrupt:", summary["bankrupt_min"], "-", summary["bankrupt_max"],
+        "Active organelles range:",
+        summary["active_min"],
+        "-",
+        summary["active_max"],
+        ", bankrupt:",
+        summary["bankrupt_min"],
+        "-",
+        summary["bankrupt_max"],
     )
     print("Total merges:", summary["total_merges"])
     print("Bankruptcy culls (total/max):", summary["culled_total"], summary["culled_max"])
@@ -2005,8 +2339,7 @@ def main() -> None:
         top_bins = summary.get("qd_archive_top_latest") or []
         if top_bins:
             top_fmt = ", ".join(
-                f"{entry['cell']}[b{entry['bin']}]:{entry['roi']:.3f}"
-                for entry in top_bins
+                f"{entry['cell']}[b{entry['bin']}]:{entry['roi']:.3f}" for entry in top_bins
             )
             print("QD archive top bins:", top_fmt)
     if summary.get("colony_selection_dissolved_series"):
@@ -2156,7 +2489,12 @@ def main() -> None:
         )
         print("Comms board (latest):", formatted)
     if summary.get("policy_applied_total"):
-        print("Policy usage: gens with policy:", summary["policy_applied_total"], "/", summary["generations"])
+        print(
+            "Policy usage: gens with policy:",
+            summary["policy_applied_total"],
+            "/",
+            summary.get("records", summary["generations"]),
+        )
         print(
             "ROI when policy on/off:",
             f"{summary['policy_roi_mean_when_applied']:.3f}",
@@ -2185,12 +2523,16 @@ def main() -> None:
         print("Policy parse failures:", summary["policy_failures_total"], preview)
     # Team totals to console
     if summary.get("team_routes_total") is not None:
-        print("Team routes / promotions:", summary.get("team_routes_total", 0), "/", summary.get("team_promotions_total", 0))
+        print(
+            "Team routes / promotions:",
+            summary.get("team_routes_total", 0),
+            "/",
+            summary.get("team_promotions_total", 0),
+        )
         latest = summary.get("team_probe_candidates_latest") or []
         if summary.get("team_probe_hits_total") and latest:
             formatted = ", ".join(
-                f"{tuple(cand.get('pair', []))}:S{cand.get('sustain', 0)}"
-                for cand in latest[:5]
+                f"{tuple(cand.get('pair', []))}:S{cand.get('sustain', 0)}" for cand in latest[:5]
             )
             print(
                 "Team probe sustained hits:",
@@ -2222,7 +2564,7 @@ def main() -> None:
         print(
             "Evaluation accuracy (avg | total):",
             f"{accuracy_pct:.2f}%",
-            f"{summary['eval_correct']}/{summary['eval_total']}"
+            f"{summary['eval_correct']}/{summary['eval_total']}",
         )
     else:
         print("Evaluation accuracy: n/a")
@@ -2230,13 +2572,20 @@ def main() -> None:
         print(
             "Assimilation events:",
             assimilation_summary["events"],
-            "passes:", assimilation_summary["passes"],
-            "failures:", assimilation_summary["failures"],
+            "passes:",
+            assimilation_summary["passes"],
+            "failures:",
+            assimilation_summary["failures"],
         )
         if "sample_size_mean" in assimilation_summary:
-            print("Assimilation mean sample size:", f"{assimilation_summary['sample_size_mean']:.1f}")
+            print(
+                "Assimilation mean sample size:", f"{assimilation_summary['sample_size_mean']:.1f}"
+            )
         if "ci_excludes_zero_rate" in assimilation_summary:
-            print("Uplift CI excludes zero (rate):", f"{assimilation_summary['ci_excludes_zero_rate']*100:.1f}%")
+            print(
+                "Uplift CI excludes zero (rate):",
+                f"{assimilation_summary['ci_excludes_zero_rate']*100:.1f}%",
+            )
         if "power_mean" in assimilation_summary:
             print("Power (proxy) mean:", f"{assimilation_summary['power_mean']:.2f}")
         if "fisher_importance_mean" in assimilation_summary:
@@ -2249,7 +2598,9 @@ def main() -> None:
         if "merge_weight_mean" in assimilation_summary:
             print("Merge weight mean:", f"{assimilation_summary['merge_weight_mean']:.3f}")
         if "methods" in assimilation_summary:
-            method_items = ", ".join(f"{name}: {count}" for name, count in assimilation_summary["methods"].items())
+            method_items = ", ".join(
+                f"{name}: {count}" for name, count in assimilation_summary["methods"].items()
+            )
             print("Methods:", method_items)
         if assimilation_summary.get("dr_used"):
             print("DR uplift events:", assimilation_summary["dr_used"])
@@ -2274,17 +2625,24 @@ def main() -> None:
     if knowledge_totals:
         print(
             "Knowledge cache:",
-            "writes", knowledge_totals.get("writes", 0),
-            "| reads", knowledge_totals.get("reads", 0),
-            "| hits", knowledge_totals.get("hits", 0),
-            "| entries latest", summary.get("knowledge_entries_latest", 0),
+            "writes",
+            knowledge_totals.get("writes", 0),
+            "| reads",
+            knowledge_totals.get("reads", 0),
+            "| hits",
+            knowledge_totals.get("hits", 0),
+            "| entries latest",
+            summary.get("knowledge_entries_latest", 0),
         )
     if summary.get("power_episodes_total"):
         print(
             "Power economics:",
-            "episodes", summary["power_episodes_total"],
-            "| avg need", f"{summary['power_need_mean']:.2f}",
-            "| avg price x", f"{summary['power_price_multiplier_mean']:.2f}",
+            "episodes",
+            summary["power_episodes_total"],
+            "| avg need",
+            f"{summary['power_need_mean']:.2f}",
+            "| avg price x",
+            f"{summary['power_price_multiplier_mean']:.2f}",
         )
         print(
             "  Evidence tokens minted/used:",
@@ -2295,7 +2653,12 @@ def main() -> None:
             summary.get("power_info_topups_total", 0),
         )
     if summary.get("trials_total") or summary.get("promotions_total"):
-        print("Trials created:", summary.get("trials_total", 0), "Promotions:", summary.get("promotions_total", 0))
+        print(
+            "Trials created:",
+            summary.get("trials_total", 0),
+            "Promotions:",
+            summary.get("promotions_total", 0),
+        )
     if summary.get("assimilation_attempt_total"):
         print("Assimilation attempts (all stages):", summary["assimilation_attempt_total"])
     if summary.get("tau_relief_active"):
