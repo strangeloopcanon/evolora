@@ -1,7 +1,84 @@
 # Evolora — Symbiotic LLM Ecology
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/strangeloopcanon/evolora)
 
-Evolora is a research prototype where a frozen small LLM (e.g. Gemma‑270M or Qwen3‑0.6B) hosts a population of tiny LoRA adapters (“organelles”). Organelles compete for energy by solving tasks; the ecology tracks reward‑on‑cost (ROI), retires bankrupt organelles, and occasionally merges adapters when uplift + holdout checks pass.
+**What if we started *evolving* language models?**
+
+Evolora treats a small LLM as a computational substrate—like the "physics" of a world—and evolves a population of tiny LoRA adapters ("organelles") that compete, learn, merge, and die based on their performance. It's artificial life meets language models: adapters pay energy to attempt tasks, earn rewards when they succeed, go bankrupt when they fail, and occasionally merge into new offspring when they prove their worth.
+
+---
+
+## Core Idea
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     FROZEN HOST (Qwen3-0.6B)                    │
+│                    (weights never change)                       │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐       ┌──────────┐   │
+│  │Organelle │  │Organelle │  │Organelle │  ...  │Organelle │   │
+│  │  (LoRA)  │  │  (LoRA)  │  │  (LoRA)  │       │  (LoRA)  │   │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘       └────┬─────┘   │
+│       │             │             │                  │         │
+│       └─────────────┴──────┬──────┴──────────────────┘         │
+│                            ▼                                    │
+│              ┌─────────────────────────┐                       │
+│              │    ENERGY ECONOMY       │                       │
+│              │  • Pay to participate   │                       │
+│              │  • Earn via rewards     │                       │
+│              │  • Bankrupt → retire    │                       │
+│              │  • Merge on uplift      │                       │
+│              └─────────────────────────┘                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Three things are being optimised simultaneously:
+1. **Per-call competence** — each organelle tries to maximise reward on tasks
+2. **Energy efficiency** — ROI = reward − cost; cheap *and* good wins
+3. **Population diversity** — a quality-diversity archive nudges the ecology toward covering different niches
+
+---
+
+## Key Results (Qwen3-0.6B, 150 generations)
+
+| Condition | Episodes | Mean ROI | Merges | QD Coverage | Holdout Acc | Holdout Cost |
+|-----------|----------|----------|--------|-------------|-------------|--------------|
+| Frozen base | 1,727 | 0.94 | 0 | 0% | 13.3% | 1.91 |
+| Single adapter | 63 | −0.06 | 0 | 0% | 13.3% | 1.94 |
+| **Full ecology** | 7,413 | **1.39** | 52 | 16.7% | **14.2%** | **1.14** |
+
+The ecology achieves **higher ROI**, **better holdout accuracy**, and **40% lower inference cost** compared to baselines—while the frozen host and single-adapter setups remain structurally inert.
+
+See `docs/paper_packs/` for detailed run reports and plots.
+
+---
+
+## Project Structure
+
+```
+src/symbiont_ecology/
+├── host/           # Frozen backbone wrapper, LoRA slot management
+├── organelles/     # Hebbian-PEFT adapters with eligibility traces
+├── routing/        # Bandit router for adapter selection
+├── evolution/      # Population manager, model merger, morphogenesis
+├── environment/    # Task factory, ecology loop, grid controller
+├── economics/      # ATP ledger, energy settlement
+├── metrics/        # Telemetry sink, QD archive
+└── config.py       # Pydantic config models
+
+config/
+├── experiments/    # YAML configs: frozen, single, ecology variants
+├── evaluation/     # Holdout task sets
+└── ecology.yaml    # Base ecology parameters
+
+scripts/
+├── eval_gemma_long.py      # Main experiment runner (resumable)
+├── analyze_ecology_run.py  # Generate reports + plots from a run
+├── evoscope.py             # Interactive run visualisation
+├── paper_pack.py           # Bundle runs into tracked summaries
+└── benchmark_suite.py      # CI-safe benchmark harness
+```
+
+---
 
 ## What you get
 - YAML-configured experiments under `config/experiments/`
