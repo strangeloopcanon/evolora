@@ -7,11 +7,18 @@ set -euo pipefail
 # - Calibration validates the config + model load + basic dynamics in minutes.
 # - Resume continues from checkpoint.pt in the same run_id directory (no restart).
 
-VENV_BIN="${VENV_BIN:-.venv311/bin}"
+VENV_BIN="${VENV_BIN:-}"
+if [ -z "$VENV_BIN" ]; then
+  if [ -x ".venv/bin/python" ]; then
+    VENV_BIN=".venv/bin"
+  else
+    VENV_BIN=".venv311/bin"
+  fi
+fi
 PY="${PY:-$VENV_BIN/python}"
 
 if [ ! -x "$PY" ]; then
-  echo "Expected $PY – set VENV_BIN or create/refresh .venv311 and install deps first." >&2
+  echo "Expected $PY – run `make setup` (creates .venv), or set VENV_BIN/PY to your venv." >&2
   exit 1
 fi
 
