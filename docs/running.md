@@ -9,10 +9,11 @@ CI-style setup (creates `.venv`):
 make setup
 ```
 
-On macOS for longer runs, a dedicated Python 3.11 venv is often more stable:
+On macOS for longer runs, Python 3.11 is often more stable. To force 3.11, recreate `.venv` with it:
 ```bash
-python3.11 -m venv .venv311
-source .venv311/bin/activate
+rm -rf .venv
+python3.11 -m venv .venv
+source .venv/bin/activate
 pip install -U pip
 pip install -r requirements-dev.txt
 ```
@@ -23,7 +24,7 @@ Use `scripts/eval_gemma_long.py` for resumable runs via `checkpoint.pt`.
 
 Fresh run:
 ```bash
-PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py \
+PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/eval_gemma_long.py \
   --config config/experiments/paper_qwen3_ecology.yaml \
   --generations 50 \
   --checkpoint-every 5 \
@@ -34,7 +35,7 @@ PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv311/bin/pyth
 
 Resume an existing run directory (continues from `<run_dir>/checkpoint.pt`):
 ```bash
-PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py \
+PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/eval_gemma_long.py \
   --config config/experiments/paper_qwen3_ecology.yaml \
   --resume-from <run_dir> \
   --generations 50 \
@@ -67,7 +68,7 @@ scripts/run_calibration_then_resume.sh \
 
 After the run completes, you can optionally score a fixed holdout and write `final_holdout.json` / `final_holdout.md` into the run directory:
 ```bash
-PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py \
+PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/eval_gemma_long.py \
   --config config/experiments/paper_qwen3_ecology.yaml \
   --resume-from <run_dir> \
   --generations 0 \
@@ -78,8 +79,8 @@ PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv311/bin/pyth
 
 ## Analyze a run
 ```bash
-MPLCONFIGDIR="$(mktemp -d)" .venv311/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report
-MPLCONFIGDIR="$(mktemp -d)" .venv311/bin/python scripts/evoscope.py <run_dir>
+MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report
+MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/evoscope.py <run_dir>
 ```
 
 ## macOS stability notes

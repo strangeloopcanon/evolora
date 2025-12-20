@@ -2,13 +2,20 @@
 set -euo pipefail
 
 # Small helper to reproduce the three main Qwen3‑0.6B baselines used in the ecology writeup.
-# It assumes you've already created and populated .venv311 and are running this from repo root.
+# It assumes you're running this from repo root and have a local venv ready (`make setup` creates `.venv`).
 
-VENV_BIN=".venv311/bin"
-PY="$VENV_BIN/python"
+VENV_BIN="${VENV_BIN:-}"
+if [ -z "$VENV_BIN" ]; then
+  if [ -x ".venv/bin/python" ]; then
+    VENV_BIN=".venv/bin"
+  else
+    VENV_BIN=".venv311/bin"
+  fi
+fi
+PY="${PY:-$VENV_BIN/python}"
 
 if [ ! -x "$PY" ]; then
-  echo "Expected $PY – please create/refresh .venv311 and install deps first." >&2
+  echo "Expected $PY – run `make setup` (creates .venv), or set VENV_BIN/PY to your venv." >&2
   exit 1
 fi
 
