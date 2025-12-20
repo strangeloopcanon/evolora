@@ -46,6 +46,8 @@ Three things are being optimised simultaneously:
 | Single adapter | 63 | −0.06 | 0 | 0% | 13.3% | 1.94 |
 | **Full ecology** | 7,413 | **1.39** | 52 | 16.7% | **14.2%** | **1.14** |
 
+![ROI comparison across conditions](docs/paper_packs/paper_qwen3_20251220_ecology_long150/plots/roi_comparison.png)
+
 The ecology achieves **higher ROI**, **better holdout accuracy**, and **40% lower inference cost** compared to baselines—while the frozen host and single-adapter setups remain structurally inert.
 
 See `docs/paper_packs/` for detailed run reports and plots.
