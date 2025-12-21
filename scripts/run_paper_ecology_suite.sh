@@ -43,7 +43,7 @@ run_frozen() {
     --generations 50 \
     --output "$run_id" \
     --checkpoint-every 5 \
-    "${EXTRA_EVAL_ARGS[@]}"
+    ${EXTRA_EVAL_ARGS[@]+"${EXTRA_EVAL_ARGS[@]}"}
   MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
 }
 
@@ -55,7 +55,7 @@ run_single() {
     --generations 50 \
     --output "$run_id" \
     --checkpoint-every 5 \
-    "${EXTRA_EVAL_ARGS[@]}"
+    ${EXTRA_EVAL_ARGS[@]+"${EXTRA_EVAL_ARGS[@]}"}
   MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
 }
 
@@ -67,7 +67,7 @@ run_ecology() {
     --generations 50 \
     --output "$run_id" \
     --checkpoint-every 5 \
-    "${EXTRA_EVAL_ARGS[@]}"
+    ${EXTRA_EVAL_ARGS[@]+"${EXTRA_EVAL_ARGS[@]}"}
   MPLCONFIGDIR=$(mktemp -d) "$PY" scripts/analyze_ecology_run.py "$run_id" --plots --report
 }
 
