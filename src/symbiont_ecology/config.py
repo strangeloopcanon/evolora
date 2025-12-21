@@ -16,6 +16,7 @@ class HebbianConfig(BaseModel):
 
 
 class HostConfig(BaseModel):
+    backbone_type: str = Field("gemma")
     backbone_model: str = Field("google/gemma-3-270m-it")
     tokenizer: Optional[str] = None
     revision: Optional[str] = None
