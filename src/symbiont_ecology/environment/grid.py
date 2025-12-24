@@ -145,6 +145,61 @@ class GridTask:
             success = normalized == str(self.target)
             task_reward = 1.0 if success else 0.0
 
+        elif self.family == "regex":
+            # Extract the regex pattern from the response
+            import re as regex_module
+
+            # Clean up the response - remove markdown, quotes, etc.
+            pattern_text = clean.strip()
+            if pattern_text.startswith("```"):
+                stripped = pattern_text.strip("`")
+                lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+                if lines and lines[0].lower() in ["regex", "regexp", "re"]:
+                    lines = lines[1:]
+                pattern_text = lines[0] if lines else ""
+
+            # Remove common delimiters if present
+            pattern_text = pattern_text.strip("'\"` /")
+
+            # The target is a dict containing the correct pattern and test strings
+            if isinstance(self.target, dict):
+                correct_pattern = self.target.get("pattern", "")
+                test_strings = self.target.get("test_strings", [])
+            else:
+                # Fallback: treat target as the pattern string directly
+                correct_pattern = str(self.target)
+                test_strings = []
+
+            # Evaluate by testing if the pattern works correctly on test cases
+            success = False
+            try:
+                # Compile the user's pattern
+                user_regex = regex_module.compile(pattern_text)
+
+                # If we have test strings, check if pattern behaves correctly
+                if test_strings:
+                    all_correct = True
+                    for test_case in test_strings:
+                        test_str = test_case.get("string", "")
+                        should_match = test_case.get("should_match", False)
+                        does_match = bool(user_regex.search(test_str))
+
+                        if does_match != should_match:
+                            all_correct = False
+                            break
+
+                    success = all_correct
+                else:
+                    # No test strings - just check if patterns are equivalent
+                    # This is a simplified check
+                    success = pattern_text == correct_pattern
+
+            except (regex_module.error, Exception):
+                # Invalid regex pattern
+                success = False
+
+            task_reward = 1.0 if success else 0.0
+
         novelty = min(0.1, self.difficulty * 0.1)
         competence = 0.05 if success else 0.0
         helper = 0.0
@@ -749,6 +804,27 @@ class GridEnvironment:
                 failure_cost_scale=self.failure_cost_multiplier,
             )
 
+        if family == "regex":
+            prompt_regex, target_pattern, test_strings = self._make_regex_task(depth)
+            # Store both pattern and test strings in target for evaluation
+            target_dict = {
+                "pattern": target_pattern,
+                "test_strings": test_strings,
+            }
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_regex,
+                price=price,
+                target=target_dict,
+                family="regex",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
         # fallback: math task
         return self._make_task(("math", depth), canary)
 
@@ -905,6 +981,118 @@ class GridEnvironment:
             "Convert the variable name `{}` to snake_case. Respond with the new name only."
         ).format(camel)
         return prompt, snake
+
+    def _make_regex_task(self, depth: str) -> tuple[str, str, list[dict[str, object]]]:
+        """Generate a regex pattern task with matching and non-matching examples."""
+        if depth == "short":
+            # Simple patterns: exact strings, character classes, basic quantifiers
+            templates = [
+                {
+                    "desc": "match emails starting with 'admin'",
+                    "pattern": r"admin\w*@\w+\.\w+",
+                    "matches": ["admin@example.com", "admin123@test.org"],
+                    "non_matches": ["user@example.com", "admin@"],
+                },
+                {
+                    "desc": "match 3-digit numbers",
+                    "pattern": r"\b\d{3}\b",
+                    "matches": ["123", "456", "789"],
+                    "non_matches": ["12", "1234", "abc"],
+                },
+                {
+                    "desc": "match words starting with 'test'",
+                    "pattern": r"\btest\w*",
+                    "matches": ["test", "testing", "tester"],
+                    "non_matches": ["contest", "attest", "rest"],
+                },
+                {
+                    "desc": "match hex colors",
+                    "pattern": r"#[0-9a-fA-F]{6}",
+                    "matches": ["#FF5733", "#00ff00", "#123ABC"],
+                    "non_matches": ["#FFF", "#GGGGGG", "FF5733"],
+                },
+            ]
+        elif depth == "medium":
+            # Medium patterns: alternation, groups, more complex quantifiers
+            templates = [
+                {
+                    "desc": "match phone numbers in format XXX-XXX-XXXX or (XXX) XXX-XXXX",
+                    "pattern": r"(\d{3}-\d{3}-\d{4}|\(\d{3}\) \d{3}-\d{4})",
+                    "matches": ["123-456-7890", "(123) 456-7890"],
+                    "non_matches": ["123.456.7890", "12-345-6789", "123-45-6789"],
+                },
+                {
+                    "desc": "match URLs starting with http:// or https://",
+                    "pattern": r"https?://[\w\.-]+\.\w+",
+                    "matches": ["http://example.com", "https://test.org"],
+                    "non_matches": ["ftp://example.com", "example.com", "http://"],
+                },
+                {
+                    "desc": "match variable names (letters, numbers, underscore, must start with letter)",
+                    "pattern": r"\b[a-zA-Z][a-zA-Z0-9_]*\b",
+                    "matches": ["var1", "test_var", "myVariable"],
+                    "non_matches": ["1var", "_test", "123"],
+                },
+                {
+                    "desc": "match dates in MM/DD/YYYY format",
+                    "pattern": r"\b(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])/\d{4}\b",
+                    "matches": ["01/15/2024", "12/31/2023"],
+                    "non_matches": ["13/01/2024", "1/5/2024", "01-15-2024"],
+                },
+            ]
+        else:  # long
+            # Complex patterns: lookaheads, nested groups, complex alternation
+            templates = [
+                {
+                    "desc": "match valid IPv4 addresses",
+                    "pattern": r"\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b",
+                    "matches": ["192.168.1.1", "10.0.0.255", "8.8.8.8"],
+                    "non_matches": ["256.1.1.1", "192.168.1", "192.168.1.1.1"],
+                },
+                {
+                    "desc": "match JSON-like key-value pairs with quoted strings",
+                    "pattern": r'"\w+"\s*:\s*"[^"]*"',
+                    "matches": ['"name": "John"', '"id": "123"'],
+                    "non_matches": ["name: John", '"name":"', 'name: "John"'],
+                },
+                {
+                    "desc": "match Python function definitions",
+                    "pattern": r"def\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*:",
+                    "matches": ["def foo():", "def bar(x, y):", "def _helper(data):"],
+                    "non_matches": ["def 123():", "def foo()", "function foo():"],
+                },
+                {
+                    "desc": "match email addresses with common TLDs",
+                    "pattern": r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|org|net|edu|gov)\b",
+                    "matches": ["user@example.com", "test.user@sub.domain.org"],
+                    "non_matches": ["user@example", "@example.com", "user@.com"],
+                },
+            ]
+
+        choice = self.rng.choice(templates)
+        desc = choice["desc"]
+        pattern = choice["pattern"]
+        matches = choice["matches"]
+        non_matches = choice["non_matches"]
+
+        # Create test examples string
+        test_examples = []
+        for s in matches[:2]:
+            test_examples.append(f'"{s}" (should match)')
+        for s in non_matches[:2]:
+            test_examples.append(f'"{s}" (should NOT match)')
+
+        prompt = (
+            f"Write a regex pattern to {desc}. "
+            f"Test cases: {', '.join(test_examples)}. "
+            "Respond with only the regex pattern, no delimiters or explanation."
+        )
+
+        test_strings = [{"string": s, "should_match": True} for s in matches] + [
+            {"string": s, "should_match": False} for s in non_matches
+        ]
+
+        return prompt, pattern, test_strings
 
     # ------------------------------------------------------------------
     def register_result(self, organelle_id: str, task: GridTask, success: bool) -> None:
