@@ -1,0 +1,89 @@
+# Qwen3-0.6B ecology with regex generation tasks (simplified - no holdout)
+model:
+  name: "Qwen/Qwen2.5-0.5B"
+  device: "auto"
+  dtype: "bfloat16"
+  torch_compile: false
+
+env:
+  grid:
+    families: ["regex", "math"]
+    depths: ["short", "medium"]
+
+teacher:
+  tau: 0.5
+  beta: 0.2
+  eta: 0.5
+
+pricing:
+  base: 1.0
+  k: 1.5
+  min: 0.3
+  max: 2.0
+
+energy:
+  Emax: 5.0
+  m: 1.0
+  alpha: 1.0e-14
+  beta: 0.02
+  gamma: 0.001
+  lambda_p: 1.0e-7
+  bankruptcy_grace: 3
+  cost_scale: 1.0
+
+canary:
+  q_min: 0.95
+
+population:
+  mu: 4
+  lambda: 12
+  max_population: 16
+
+evolution:
+  mutation_rate: 0.05
+  max_merges_per_gen: 3
+  min_episodes_before_merge: 10
+
+assimilation_tuning:
+  per_cell_interval: 5
+  max_merges_per_cell: 1
+  seed_scale: 0.5
+  soup_size: 3
+  holdout_margin: 0.0
+  min_power: 0.1
+  bootstrap_samples: 50
+  bootstrap_confidence: 0.80
+
+environment:
+  synthetic_batch_size: 8
+  human_bandit_batch_size: 4
+  max_episode_steps: 128
+  energy_budget: 50.0
+  lp_alpha: 0.5
+
+human_bandit:
+  enabled: false
+
+limits:
+  lora_budget_frac: 0.03
+  max_active_adapters_per_layer: 2
+
+meta:
+  enabled: false
+
+evaluation:
+  enabled: false
+
+comms:
+  enabled: false
+
+policy:
+  enabled: false
+
+organelle:
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
+  hebbian_lr: 0.001
+  trace_decay: 0.95
