@@ -5,14 +5,11 @@ This script evaluates the generalizability of regex skills in language models,
 comparing different training methods (e.g., SFT vs evolutionary LoRA).
 
 Usage:
-    # Generate evaluation tasks
-    python scripts/eval_regex_generalization.py generate --output config/evaluation/regex_gen.jsonl
-
     # Evaluate a model interactively (for testing)
-    python scripts/eval_regex_generalization.py eval --tasks config/evaluation/regex_gen.jsonl --interactive
+    python scripts/eval_regex_generalization.py eval --tasks config/evaluation/regex_generalization.jsonl --interactive
 
     # Evaluate with a HuggingFace model
-    python scripts/eval_regex_generalization.py eval --tasks config/evaluation/regex_gen.jsonl --model Qwen/Qwen3-0.6B
+    python scripts/eval_regex_generalization.py eval --tasks config/evaluation/regex_generalization.jsonl --model Qwen/Qwen3-0.6B
 
     # Compare two models
     python scripts/eval_regex_generalization.py compare \
@@ -20,8 +17,8 @@ Usage:
         --report-b results/evolved_report.json \
         --output comparison.json
 
-    # Run quick smoke test
-    python scripts/eval_regex_generalization.py smoke
+    # List tasks in an evaluation file
+    python scripts/eval_regex_generalization.py list --tasks config/evaluation/regex_generalization.jsonl
 
 See docs/regex_generalization.md for framework documentation.
 """
@@ -41,8 +38,6 @@ from symbiont_ecology.evaluation.regex_generalization import (
     EvalReport,
     RegexGeneralizationEvaluator,
     compare_reports,
-    generate_full_eval_suite,
-    save_tasks_to_jsonl,
 )
 
 
@@ -61,14 +56,9 @@ def print_section(text: str) -> None:
 
 
 def format_accuracy(accuracy: float) -> str:
-    """Format accuracy as percentage with color indicator."""
+    """Format accuracy as percentage."""
     pct = accuracy * 100
-    if pct >= 80:
-        return f"{pct:.1f}%"
-    elif pct >= 50:
-        return f"{pct:.1f}%"
-    else:
-        return f"{pct:.1f}%"
+    return f"{pct:.1f}%"
 
 
 def print_report(report: EvalReport) -> None:
@@ -243,42 +233,6 @@ def create_anthropic_runner(model: str = "claude-3-haiku-20240307", api_key: str
 # ---------------------------------------------------------------------------
 
 
-def cmd_generate(args: argparse.Namespace) -> None:
-    """Generate evaluation tasks."""
-    tasks = generate_full_eval_suite()
-
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    save_tasks_to_jsonl(tasks, output_path)
-
-    print(f"Generated {len(tasks)} evaluation tasks")
-    print(f"Saved to: {output_path}")
-
-    # Print summary
-    caps = {}
-    holdouts = {}
-    mutations = {}
-    for t in tasks:
-        caps[t.capability.value] = caps.get(t.capability.value, 0) + 1
-        if t.holdout_type:
-            holdouts[t.holdout_type.value] = holdouts.get(t.holdout_type.value, 0) + 1
-        if t.mutation_type:
-            mutations[t.mutation_type.value] = mutations.get(t.mutation_type.value, 0) + 1
-
-    print("\nBy capability:")
-    for cap, count in sorted(caps.items()):
-        print(f"  {cap}: {count}")
-
-    print("\nBy hold-out type:")
-    for ho, count in sorted(holdouts.items()):
-        print(f"  {ho}: {count}")
-
-    print("\nBy mutation type:")
-    for mt, count in sorted(mutations.items()):
-        print(f"  {mt}: {count}")
-
-
 def cmd_eval(args: argparse.Namespace) -> None:
     """Evaluate a model on regex generalization tasks."""
     tasks_path = Path(args.tasks)
@@ -372,46 +326,6 @@ def cmd_compare(args: argparse.Namespace) -> None:
         print(f"\nComparison saved to: {output_path}")
 
 
-def cmd_smoke(args: argparse.Namespace) -> None:
-    """Run a quick smoke test."""
-    print_header("REGEX GENERALIZATION SMOKE TEST")
-
-    # Generate tasks
-    tasks = generate_full_eval_suite()
-    print(f"Generated {len(tasks)} tasks")
-
-    # Create a simple "model" that gives reasonable responses
-    def dummy_runner(prompt: str) -> str:
-        # Return plausible responses based on task type
-        if "yes or no" in prompt.lower():
-            return "No, because the hour 24 is invalid."
-        elif "write a regex" in prompt.lower():
-            return r"\d+"
-        elif "explain" in prompt.lower():
-            return "This regex matches timestamps with year, month, day, hour, minute, second."
-        elif "fix" in prompt.lower() or "correct" in prompt.lower():
-            return r"^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$"
-        elif "simplify" in prompt.lower():
-            return (
-                r"^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]) (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$"
-            )
-        else:
-            return "42"
-
-    evaluator = RegexGeneralizationEvaluator(tasks)
-    report = evaluator.evaluate_all(dummy_runner, verbose=False)
-
-    print("\nSmoke test complete!")
-    print(f"Tasks evaluated: {report.total_tasks}")
-    print(f"Accuracy: {report.overall_accuracy:.1%}")
-    print("\nNote: Dummy model used - results are not meaningful.")
-
-    # Verify core functionality works
-    assert report.total_tasks > 0
-    assert 0 <= report.overall_accuracy <= 1
-    print("\nAll smoke tests passed!")
-
-
 def cmd_list(args: argparse.Namespace) -> None:
     """List all tasks in an evaluation file."""
     tasks_path = Path(args.tasks)
@@ -436,9 +350,7 @@ def cmd_list(args: argparse.Namespace) -> None:
 
 def cmd_report(args: argparse.Namespace) -> None:
     """Generate full report from evaluation results."""
-    from symbiont_ecology.evaluation.regex_reporting import (
-        save_full_report,
-    )
+    from symbiont_ecology.evaluation.regex_reporting import save_full_report
 
     report_path = Path(args.report)
     if not report_path.exists():
@@ -487,15 +399,6 @@ def main() -> None:
         epilog=__doc__,
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    # generate command
-    gen_parser = subparsers.add_parser("generate", help="Generate evaluation tasks")
-    gen_parser.add_argument(
-        "--output",
-        "-o",
-        default="config/evaluation/regex_generalization.jsonl",
-        help="Output JSONL file path",
-    )
 
     # eval command
     eval_parser = subparsers.add_parser("eval", help="Evaluate a model")
@@ -612,14 +515,10 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.command == "generate":
-        cmd_generate(args)
-    elif args.command == "eval":
+    if args.command == "eval":
         cmd_eval(args)
     elif args.command == "compare":
         cmd_compare(args)
-    elif args.command == "smoke":
-        cmd_smoke(args)
     elif args.command == "list":
         cmd_list(args)
     elif args.command == "report":

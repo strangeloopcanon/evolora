@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ import pytest
 from symbiont_ecology.evaluation.regex_generalization import (
     CapabilityAxis,
     HoldOutType,
-    MutationType,
     RegexGeneralizationEvaluator,
     RegexMetrics,
     RegexTask,
@@ -24,11 +22,6 @@ from symbiont_ecology.evaluation.regex_generalization import (
     evaluate_refactoring_task,
     evaluate_synthesis_task,
     extract_regex_from_response,
-    generate_full_eval_suite,
-    generate_holdout_tasks,
-    generate_mutation_tasks,
-    generate_timestamp_tasks,
-    save_tasks_to_jsonl,
 )
 
 # ---------------------------------------------------------------------------
@@ -269,49 +262,6 @@ class TestRefactoringEvaluator:
 
 
 # ---------------------------------------------------------------------------
-# Test Task Generation
-# ---------------------------------------------------------------------------
-
-
-class TestTaskGeneration:
-    def test_generate_timestamp_tasks(self):
-        tasks = generate_timestamp_tasks()
-        assert len(tasks) > 0
-
-        # Check we have different capabilities
-        caps = {t.capability for t in tasks}
-        assert CapabilityAxis.RECOGNITION in caps
-        assert CapabilityAxis.SYNTHESIS in caps
-        assert CapabilityAxis.EXPLANATION in caps
-        assert CapabilityAxis.DEBUGGING in caps
-        assert CapabilityAxis.REFACTORING in caps
-
-    def test_generate_holdout_tasks(self):
-        tasks = generate_holdout_tasks()
-        assert len(tasks) > 0
-
-        # Check we have different holdout types
-        holdouts = {t.holdout_type for t in tasks if t.holdout_type}
-        assert HoldOutType.OPERATOR in holdouts
-        assert HoldOutType.COMPOSITION in holdouts
-        assert HoldOutType.SEMANTIC_COUPLING in holdouts
-        assert HoldOutType.SURFACE_FORM in holdouts
-
-    def test_generate_mutation_tasks(self):
-        tasks = generate_mutation_tasks()
-        assert len(tasks) > 0
-
-        # Check we have different mutation types
-        mutations = {t.mutation_type for t in tasks if t.mutation_type}
-        assert MutationType.WIDEN_RANGE in mutations
-        assert MutationType.REMOVE_GROUPING in mutations
-
-    def test_generate_full_suite(self):
-        tasks = generate_full_eval_suite()
-        assert len(tasks) >= 15  # Should have a good number of tasks
-
-
-# ---------------------------------------------------------------------------
 # Test Serialization
 # ---------------------------------------------------------------------------
 
@@ -344,19 +294,16 @@ class TestSerialization:
         assert len(restored.test_cases) == len(task.test_cases)
         assert restored.metadata == task.metadata
 
-    def test_save_and_load_jsonl(self):
-        tasks = generate_full_eval_suite()[:5]
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-            path = Path(f.name)
-
-        try:
-            save_tasks_to_jsonl(tasks, path)
+    def test_load_from_jsonl(self):
+        # Load from the existing eval suite in the repo
+        path = Path(__file__).parent.parent / "config" / "evaluation" / "regex_generalization.jsonl"
+        if path.exists():
             evaluator = RegexGeneralizationEvaluator.from_jsonl(path)
-            assert len(evaluator.tasks) == 5
-            assert evaluator.tasks[0].task_id == tasks[0].task_id
-        finally:
-            path.unlink()
+            assert len(evaluator.tasks) > 0
+            # Verify tasks loaded correctly
+            for task in evaluator.tasks:
+                assert task.task_id is not None
+                assert task.capability is not None
 
 
 # ---------------------------------------------------------------------------
@@ -414,15 +361,31 @@ class TestRegexGeneralizationEvaluator:
         assert CapabilityAxis.RECOGNITION.value in report.capability_breakdown
 
     def test_evaluate_all_with_runner(self):
-        tasks = generate_full_eval_suite()[:3]
+        # Create a small set of tasks for testing
+        tasks = [
+            RegexTask(
+                task_id="runner_test_1",
+                prompt="Write a regex for digits",
+                capability=CapabilityAxis.SYNTHESIS,
+                test_cases=[RegexTestCase("123", True), RegexTestCase("abc", False)],
+            ),
+            RegexTask(
+                task_id="runner_test_2",
+                prompt="Does ^\\d+$ match '456'?",
+                capability=CapabilityAxis.RECOGNITION,
+                expected_answer="yes",
+            ),
+        ]
 
         def dummy_runner(prompt: str) -> str:
-            return r"\d+"  # Simple response for all
+            if "match" in prompt.lower():
+                return "Yes, it matches"
+            return r"^\d+$"
 
         evaluator = RegexGeneralizationEvaluator(tasks)
         report = evaluator.evaluate_all(dummy_runner, verbose=False)
 
-        assert report.total_tasks == 3
+        assert report.total_tasks == 2
         assert 0 <= report.overall_accuracy <= 1
 
 

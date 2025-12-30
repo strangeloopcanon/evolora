@@ -12,7 +12,6 @@ from .regex_generalization import (
     RegexTestCase,
     analyze_regex,
     compare_reports,
-    generate_full_eval_suite,
 )
 from .regex_reporting import (
     ReportConfig,
@@ -37,7 +36,6 @@ __all__ = [
     "RegexTestCase",
     "analyze_regex",
     "compare_reports",
-    "generate_full_eval_suite",
     # Regex reporting
     "ReportConfig",
     "generate_comparison_latex_table",
