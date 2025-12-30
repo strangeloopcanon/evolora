@@ -399,6 +399,16 @@ def generate_comparison_latex_table(
     return "\n".join(lines)
 
 
+# Import matplotlib if available (used for plotting)
+try:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
+
 def save_full_report(
     report: EvalReport,
     output_dir: Path,
@@ -461,16 +471,137 @@ def save_full_report(
             f.write("\n".join(latex_lines))
         saved_files["latex"] = latex_path
 
+    # Generate plot if matplotlib is available
+    if HAS_MATPLOTLIB:
+        plot_path = output_dir / "results.png"
+        plot_single_report(report, model_name, plot_path)
+        saved_files["plot"] = plot_path
+
     return saved_files
 
 
-try:
-    import matplotlib.pyplot as plt
-    import numpy as np
+def plot_single_report(
+    report: EvalReport,
+    model_name: str = "Model",
+    output_path: Path | None = None,
+) -> Any:
+    """Plot bar charts for a single model's evaluation results.
 
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
+    Args:
+        report: The evaluation report
+        model_name: Name of the model
+        output_path: Optional path to save the figure
+
+    Returns:
+        matplotlib Figure object (if matplotlib available)
+    """
+    if not HAS_MATPLOTLIB:
+        raise ImportError(
+            "matplotlib is required for plotting. Install with: pip install matplotlib"
+        )
+
+    # Count how many plots we need
+    n_plots = 1  # capability always
+    if report.holdout_breakdown:
+        n_plots += 1
+    if report.mutation_breakdown:
+        n_plots += 1
+
+    fig, axes = plt.subplots(1, n_plots, figsize=(5 * n_plots, 5))
+    if n_plots == 1:
+        axes = [axes]
+
+    plot_idx = 0
+
+    # Capability breakdown
+    if report.capability_breakdown:
+        ax = axes[plot_idx]
+        caps = sorted(report.capability_breakdown.keys())
+        scores = [report.capability_breakdown[c]["accuracy"] * 100 for c in caps]
+        colors = plt.cm.Blues(np.linspace(0.4, 0.8, len(caps)))
+
+        bars = ax.bar(range(len(caps)), scores, color=colors)
+        ax.set_xticks(range(len(caps)))
+        ax.set_xticklabels([c.replace("_", "\n") for c in caps], fontsize=9)
+        ax.set_ylabel("Accuracy (%)")
+        ax.set_title("By Capability")
+        ax.set_ylim(0, 100)
+        ax.axhline(
+            y=report.overall_accuracy * 100,
+            color="red",
+            linestyle="--",
+            alpha=0.7,
+            label=f"Overall: {report.overall_accuracy:.0%}",
+        )
+        ax.legend(fontsize=8)
+
+        for bar, score in zip(bars, scores):
+            ax.annotate(
+                f"{score:.0f}%",
+                xy=(bar.get_x() + bar.get_width() / 2, score),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+            )
+        plot_idx += 1
+
+    # Holdout breakdown
+    if report.holdout_breakdown:
+        ax = axes[plot_idx]
+        holdouts = sorted(report.holdout_breakdown.keys())
+        scores = [report.holdout_breakdown[h]["accuracy"] * 100 for h in holdouts]
+        colors = plt.cm.Greens(np.linspace(0.4, 0.8, len(holdouts)))
+
+        bars = ax.bar(range(len(holdouts)), scores, color=colors)
+        ax.set_xticks(range(len(holdouts)))
+        ax.set_xticklabels([h.replace("_", "\n") for h in holdouts], fontsize=9)
+        ax.set_ylabel("Accuracy (%)")
+        ax.set_title("By Hold-Out Type")
+        ax.set_ylim(0, 100)
+
+        for bar, score in zip(bars, scores):
+            ax.annotate(
+                f"{score:.0f}%",
+                xy=(bar.get_x() + bar.get_width() / 2, score),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+            )
+        plot_idx += 1
+
+    # Mutation breakdown
+    if report.mutation_breakdown:
+        ax = axes[plot_idx]
+        mutations = sorted(report.mutation_breakdown.keys())
+        scores = [report.mutation_breakdown[m]["accuracy"] * 100 for m in mutations]
+        colors = plt.cm.Oranges(np.linspace(0.4, 0.8, len(mutations)))
+
+        bars = ax.bar(range(len(mutations)), scores, color=colors)
+        ax.set_xticks(range(len(mutations)))
+        ax.set_xticklabels([m.replace("_", "\n") for m in mutations], fontsize=9)
+        ax.set_ylabel("Accuracy (%)")
+        ax.set_title("By Mutation Type")
+        ax.set_ylim(0, 100)
+
+        for bar, score in zip(bars, scores):
+            ax.annotate(
+                f"{score:.0f}%",
+                xy=(bar.get_x() + bar.get_width() / 2, score),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+            )
+
+    fig.suptitle(f"Regex Generalization: {model_name}", fontsize=12, fontweight="bold")
+    plt.tight_layout()
+
+    if output_path:
+        fig.savefig(output_path, dpi=150, bbox_inches="tight")
+
+    return fig
 
 
 def plot_capability_comparison(
