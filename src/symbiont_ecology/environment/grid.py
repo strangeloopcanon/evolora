@@ -182,7 +182,7 @@ class GridTask:
                     for test_case in test_strings:
                         test_str = test_case.get("string", "")
                         should_match = test_case.get("should_match", False)
-                        does_match = bool(user_regex.search(test_str))
+                        does_match = bool(user_regex.fullmatch(test_str))
 
                         if does_match != should_match:
                             all_correct = False
@@ -721,8 +721,7 @@ class GridEnvironment:
                     result_value = bool(result_value or actual)
             expression = " ".join(parts)
             prompt = (
-                "Evaluate the logical expression and respond with 'True' or 'False': "
-                f"{expression}"
+                f"Evaluate the logical expression and respond with 'True' or 'False': {expression}"
             )
             return GridTask(
                 task_id=task_id,
