@@ -38,7 +38,7 @@ timestamp() {
 run_frozen() {
   local run_id="artifacts_paper_qwen3_frozen_$(timestamp)"
   echo "[frozen] run_id=$run_id"
-  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
+  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
     --config config/experiments/paper_qwen3_frozen.yaml \
     --generations 50 \
     --output "$run_id" \
@@ -50,7 +50,7 @@ run_frozen() {
 run_single() {
   local run_id="artifacts_paper_qwen3_single_$(timestamp)"
   echo "[single] run_id=$run_id"
-  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
+  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
     --config config/experiments/paper_qwen3_single.yaml \
     --generations 50 \
     --output "$run_id" \
@@ -62,7 +62,7 @@ run_single() {
 run_ecology() {
   local run_id="artifacts_paper_qwen3_ecology_$(timestamp)"
   echo "[ecology] run_id=$run_id"
-  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
+  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
     --config config/experiments/paper_qwen3_ecology.yaml \
     --generations 50 \
     --output "$run_id" \

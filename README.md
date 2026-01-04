@@ -73,7 +73,7 @@ config/
 └── ecology.yaml    # Base ecology parameters
 
 scripts/
-├── eval_gemma_long.py      # Main experiment runner (resumable)
+├── run_evolution.py        # Main experiment runner (resumable)
 ├── analyze_ecology_run.py  # Generate reports + plots from a run
 ├── evoscope.py             # Interactive run visualisation
 ├── paper_pack.py           # Bundle runs into tracked summaries

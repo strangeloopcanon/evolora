@@ -20,11 +20,11 @@ pip install -r requirements-dev.txt
 
 ## Long runs (resumable)
 
-Use `scripts/eval_gemma_long.py` for resumable runs via `checkpoint.pt`.
+Use `scripts/run_evolution.py` for resumable runs via `checkpoint.pt`.
 
 Fresh run:
 ```bash
-PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/eval_gemma_long.py \
+PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/run_evolution.py \
   --config config/experiments/paper_qwen3_ecology.yaml \
   --generations 50 \
   --checkpoint-every 5 \
@@ -35,7 +35,7 @@ PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python 
 
 Resume an existing run directory (continues from `<run_dir>/checkpoint.pt`):
 ```bash
-PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/eval_gemma_long.py \
+PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/run_evolution.py \
   --config config/experiments/paper_qwen3_ecology.yaml \
   --resume-from <run_dir> \
   --generations 50 \
@@ -68,7 +68,7 @@ scripts/run_calibration_then_resume.sh \
 
 After the run completes, you can optionally score a fixed holdout and write `final_holdout.json` / `final_holdout.md` into the run directory:
 ```bash
-PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/eval_gemma_long.py \
+PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python scripts/run_evolution.py \
   --config config/experiments/paper_qwen3_ecology.yaml \
   --resume-from <run_dir> \
   --generations 0 \

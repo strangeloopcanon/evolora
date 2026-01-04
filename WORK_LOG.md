@@ -77,7 +77,7 @@
 ## 2025-10-05 — Gemma long runs + analysis tooling
 - **Context**: Execute baseline and low-cost Gemma 100-gen runs; build reusable analysis/report pipeline.
 - **Changes**:
-  - Ran `scripts/eval_gemma_long.py` (baseline config) to collect reference metrics (`artifacts_gemma_100gen/`): ROI ≈0.23, reward ≈–2.0, 0/5 assimilation passes.
+  - Ran `scripts/run_evolution.py` (baseline config) to collect reference metrics (`artifacts_gemma_100gen/`): ROI ≈0.23, reward ≈–2.0, 0/5 assimilation passes.
   - Tuned energy/assimilation/meta parameters (`config/experiments/gemma_mps_lowcost.yaml`) and reran 100 gens with improved ROI ≈0.38 and reward ≈–0.95 (`artifacts_gemma_lowcost_100gen/`), though merges remain 0/2.
   - Added `scripts/analyze_ecology_run.py` to generate Markdown reports and plots for any run; fixed CSV export to handle per-cell/meta fields.
   - Introduced evaluation infrastructure (config `evaluation`, holdout tasks, periodic reward injection) and wired summaries to capture accuracy.
@@ -95,7 +95,7 @@
 - **Notes**: README and supporting docs updated; next actions centre on Gemma validation runs and dashboard wiring.
 # Run 2025-10-18 – survival tweaks
 - Config: config/experiments/gemma_relaxed.yaml (energy.m=0.6, success_reward_bonus=0.75, cost_scale=0.7)
-- Command: AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed.yaml --generations 100 --batch-size 2 --output artifacts_gemma_relaxed_autotune_v5
+- Command: AGENT_MODE=baseline .venv311/bin/python scripts/run_evolution.py --config config/experiments/gemma_relaxed.yaml --generations 100 --batch-size 2 --output artifacts_gemma_relaxed_autotune_v5
 - Outcome: ROI mean 0.66 (max 2.99), merges=0, assimilation attempts 14 (failures: uplift 286, insufficient 67, holdout 1)
 
 # Run 2025-10-19 – assimilation tuning pre-run
@@ -110,6 +110,6 @@
 
 # Run 2025-10-20 – first successful assimilations
 - Config: `config/experiments/gemma_relaxed.yaml` (mutation_rate 0.32, per-cell interval 2, holdout sample 4 with margin 0.05).
-- Command: `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/eval_gemma_long.py --config config/experiments/gemma_relaxed.yaml --generations 100 --batch-size 2 --output artifacts_gemma_relaxed_autotune_v8`
+- Command: `MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline .venv311/bin/python scripts/run_evolution.py --config config/experiments/gemma_relaxed.yaml --generations 100 --batch-size 2 --output artifacts_gemma_relaxed_autotune_v8`
 - Outcome: ROI mean 3.49 (max 7.49), 3 assimilation passes on `word.count:medium` cells (sample_size 2–4, uplift 0.18–0.60) with HF probes clean; 86 attempts total, rest failed on sub-threshold uplift. Evaluation accuracy still 0/60.
 - Notes: Energy floor decayed to 0.65 with 133 top-ups and no bankruptcies. Next up—harder word-count curricula and broader mutations to push uplift onto external holdouts.

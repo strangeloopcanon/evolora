@@ -145,7 +145,7 @@ if [ -n "$FINAL_HOLDOUT" ]; then
 fi
 
 echo "[calibration] config=$CONFIG output=$OUTPUT gens=$CALIB_GENS seed=$SEED checkpoint_every=$CHECKPOINT_EVERY"
-MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
+MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
   --config "$CONFIG" \
   --generations "$CALIB_GENS" \
   --output "$OUTPUT" \
@@ -154,7 +154,7 @@ MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
   "${EXTRA_ARGS[@]}"
 
 echo "[resume] resume_from=$OUTPUT gens=$RESUME_GENS seed=$SEED checkpoint_every=$CHECKPOINT_EVERY"
-MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/eval_gemma_long.py \
+MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
   --config "$CONFIG" \
   --resume-from "$OUTPUT" \
   --generations "$RESUME_GENS" \
