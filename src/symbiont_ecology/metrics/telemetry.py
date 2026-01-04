@@ -110,8 +110,47 @@ class EpisodeLog(BaseModel):
     observations: dict[str, Any]
 
 
+class ComputeBudget(BaseModel):
+    """Tracks cumulative compute for fair comparison with SFT."""
+
+    total_tokens: int = 0
+    total_forward_passes: int = 0
+    total_hebbian_updates: int = 0
+    total_flops: float = 0.0
+    total_generated_tokens: int = 0
+    wall_clock_seconds: float = 0.0
+
+    def record_forward(self, prompt_tokens: int, generated_tokens: int, flops: float) -> None:
+        """Record a forward pass through the model."""
+        self.total_tokens += prompt_tokens + generated_tokens
+        self.total_generated_tokens += generated_tokens
+        self.total_forward_passes += 1
+        self.total_flops += flops
+
+    def record_hebbian_update(self, estimated_flops: float = 0.0) -> None:
+        """Record a Hebbian weight update (analogous to a gradient step)."""
+        self.total_hebbian_updates += 1
+        self.total_flops += estimated_flops
+
+    def add_wall_clock(self, seconds: float) -> None:
+        """Accumulate wall-clock training time."""
+        self.wall_clock_seconds += seconds
+
+    def summary(self) -> dict[str, object]:
+        """Return a dict suitable for logging/checkpointing."""
+        return {
+            "total_tokens": self.total_tokens,
+            "total_forward_passes": self.total_forward_passes,
+            "total_hebbian_updates": self.total_hebbian_updates,
+            "total_flops": self.total_flops,
+            "total_generated_tokens": self.total_generated_tokens,
+            "wall_clock_seconds": self.wall_clock_seconds,
+        }
+
+
 __all__ = [
     "AssimilationEvent",
+    "ComputeBudget",
     "EpisodeLog",
     "EnergyTopUpEvent",
     "LedgerSnapshot",
