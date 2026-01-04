@@ -74,6 +74,7 @@ config/
 
 scripts/
 ├── run_evolution.py        # Main experiment runner (resumable)
+├── run_sft.py              # SFT baseline trainer (compute-matched)
 ├── analyze_ecology_run.py  # Generate reports + plots from a run
 ├── evoscope.py             # Interactive run visualisation
 ├── paper_pack.py           # Bundle runs into tracked summaries

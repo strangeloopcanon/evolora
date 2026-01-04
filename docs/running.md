@@ -77,6 +77,34 @@ PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python 
   --final-holdout-sample-size 120
 ```
 
+## SFT baseline (compute-matched)
+
+Train a standard SFT LoRA with the same token budget as an evolution run for fair comparison:
+
+```bash
+# Match compute to an evolution checkpoint
+.venv/bin/python scripts/run_sft.py \
+  --checkpoint <run_dir>/checkpoint.pt \
+  --data training_data.jsonl \
+  --output sft_baseline_matched
+
+# Or specify token budget directly
+.venv/bin/python scripts/run_sft.py \
+  --token-budget 100000 \
+  --data training_data.jsonl \
+  --output sft_baseline_100k
+```
+
+The training data JSONL should have lines like:
+```json
+{"prompt": "What is 2+2?", "completion": "4"}
+```
+
+Output includes:
+- `lora_adapter.safetensors` - compatible with `HostKernel.load_organelle_adapter()`
+- `peft_adapter/` - HuggingFace PEFT format
+- `sft_metadata.json` - training stats and token counts
+
 ## Analyze a run
 ```bash
 MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report
