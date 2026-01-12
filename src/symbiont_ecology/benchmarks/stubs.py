@@ -118,7 +118,7 @@ def solve_prompt(prompt: str) -> str:
     text = prompt.strip()
     lower = text.lower()
 
-    if lower.startswith("add") or " respond with the number only" in lower and "add" in lower:
+    if lower.startswith("add") or (" respond with the number only" in lower and "add" in lower):
         nums = _parse_ints(text)
         if len(nums) >= 2:
             return str(nums[0] + nums[1])

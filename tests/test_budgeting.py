@@ -108,3 +108,17 @@ def test_budget_requires_policy_parse_uses_floor():
     loop._active_policies["org"] = {"budget_frac": 1.2}
     budgets_after, _ = loop._compute_budget_map(["org"], base_bs=4)
     assert budgets_after["org"] > budgets["org"]
+
+
+def test_budget_disabled_returns_base_for_each_org():
+    loop = _make_loop({"a": 1.0, "b": 2.0})
+    loop.config.environment.budget_enabled = False
+    loop.population.register(
+        Genome(organelle_id="a", drive_weights={}, gate_bias=0.0, rank=2, explore_rate=0.25)
+    )
+
+    budgets, meta = loop._compute_budget_map(["a", "b"], base_bs=3)
+    assert budgets == {"a": 3, "b": 3}
+    assert meta["cap_hit"] is False
+    assert meta["per_org"]["a"]["trait"] == 0.25
+    assert meta["per_org"]["b"]["trait"] == 0.0

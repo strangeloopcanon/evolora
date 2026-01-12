@@ -110,3 +110,36 @@ def test_evaluation_manager_zero_cost_branch():
     out = mgr.evaluate(host, env)
     assert out["total"] == 1 and out["evaluated_routes"] >= 1
     assert out["family_breakdown"]["word.count"]["total"] == 1
+
+
+class _ZeroCostWrongAnswerHost(_FakeHost):
+    def step(self, prompt: str, intent: str, max_routes: int, allowed_organelle_ids=None):
+        envelope = SimpleNamespace(observation=SimpleNamespace(state={"answer": "0"}))
+        routes = [SimpleNamespace(organelle_id="org_a")]
+        metrics = SimpleNamespace(
+            flops_estimate=0.0, memory_gb=0.0, latency_ms=0.0, trainable_params=0, tokens=2
+        )
+        responses = {"org_a": metrics}
+        return SimpleNamespace(
+            envelope=envelope, routes=routes, responses=responses, latency_ms=0.1
+        )
+
+
+def test_evaluation_manager_zero_cost_no_revenue_branch():
+    grid_cfg = GridConfig(families=["word.count"], depths=["short"])
+    ctrl_cfg = ControllerConfig(tau=0.5, beta=0.2, eta=0.1)
+    price_cfg = PricingConfig(base=1.0, k=1.0, min=0.3, max=2.0)
+    canary_cfg = CanaryConfig(q_min=0.8)
+    env = GridEnvironment(grid_cfg, ctrl_cfg, price_cfg, canary_cfg, seed=321)
+    tasks = [
+        EvaluationTask(
+            prompt="Count words in 'one two'", target=2, family="word.count", depth="short"
+        )
+    ]
+    runtime = EvaluationConfigRuntime(
+        enabled=True, cadence=5, tasks=tasks, sample_size=1, reward_weight=0.5
+    )
+    mgr = EvaluationManager(runtime)
+    host = _ZeroCostWrongAnswerHost()
+    out = mgr.evaluate(host, env)
+    assert out["total"] == 1 and out["correct"] == 0
