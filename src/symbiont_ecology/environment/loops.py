@@ -1306,7 +1306,12 @@ class EcologyLoop:
         config = self.config.energy
         revenue = price * reward.total
         cost = compute_route_cost(config, metrics, price_multiplier=price_multiplier).total_cost
-        roi = revenue / max(cost, 1e-6) if cost > 0 else (float("inf") if revenue > 0 else 0.0)
+        if cost > 0:
+            roi = revenue / max(cost, 1e-6)
+        elif revenue > 0:
+            roi = float("inf")
+        else:
+            roi = 0.0
         if not math.isfinite(roi):
             roi = 0.0
         else:
