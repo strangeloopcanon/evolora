@@ -127,7 +127,7 @@ class EvaluationManager:
                 max_routes=len(organelle_ids),
             )
             answer = result.envelope.observation.state.get("answer", "")
-            success, _reward = grid_task.evaluate(answer)
+            success, _task_reward = grid_task.evaluate(answer)
             total += 1
             if success:
                 correct += 1
@@ -160,7 +160,10 @@ class EvaluationManager:
                     + energy_cfg.lambda_p * metrics.trainable_params
                 )
                 if cost <= 0.0:
-                    roi_value = roi_cap if revenue > 0 else 0.0
+                    if revenue > 0:
+                        roi_value = roi_cap
+                    else:
+                        roi_value = 0.0
                 else:
                     roi_value = revenue / cost
                 roi_factor = min(roi_value, roi_cap)

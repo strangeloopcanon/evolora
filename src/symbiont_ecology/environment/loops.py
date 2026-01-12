@@ -1868,29 +1868,25 @@ class EcologyLoop:
     ) -> tuple[dict[str, int], dict[str, object]]:
         env_cfg = self.config.environment
         if not getattr(env_cfg, "budget_enabled", True):
-            budgets = {oid: max(0, base_bs) for oid in active_ids}
+            budgets = {organelle_id: max(0, base_bs) for organelle_id in active_ids}
+            population_by_id = self.population.population
+            per_org = {}
+            for organelle_id in active_ids:
+                genome = population_by_id.get(organelle_id)
+                trait = float(getattr(genome, "explore_rate", 0.0)) if genome is not None else 0.0
+                per_org[organelle_id] = {
+                    "energy": 0.0,
+                    "trait": trait,
+                    "policy": 1.0,
+                    "raw": budgets[organelle_id],
+                }
+            raw_total = int(sum(budgets.values()))
             meta = {
                 "base": base_bs,
                 "global_cap": int(getattr(env_cfg, "global_episode_cap", 0)),
-                "per_org": {
-                    oid: {
-                        "energy": 0.0,
-                        "trait": (
-                            float(
-                                getattr(
-                                    self.population.population.get(oid, None), "explore_rate", 0.0
-                                )
-                            )
-                            if oid in self.population.population
-                            else 0.0
-                        ),
-                        "policy": 1.0,
-                        "raw": budgets[oid],
-                    }
-                    for oid in active_ids
-                },
-                "raw_total": int(sum(budgets.values())),
-                "capped_total": int(sum(budgets.values())),
+                "per_org": per_org,
+                "raw_total": raw_total,
+                "capped_total": raw_total,
                 "cap_hit": False,
             }
             return budgets, meta
@@ -1901,6 +1897,7 @@ class EcologyLoop:
         policy_floor = max(0.0, float(getattr(env_cfg, "budget_policy_floor", 0.3)))
         policy_ceiling = max(policy_floor, float(getattr(env_cfg, "budget_policy_ceiling", 2.0)))
         global_cap = int(max(0, getattr(env_cfg, "global_episode_cap", 0)))
+        active_policies = getattr(self, "_active_policies", None)
         budgets: dict[str, int] = {}
         per_org_meta: dict[str, dict[str, float]] = {}
         raw_total = 0
@@ -1920,11 +1917,7 @@ class EcologyLoop:
                 trait = 0.5
             trait_factor = max(0.1, 1.0 + trait_bonus * (trait - 0.5))
             policy_frac = 1.0
-            pol = (
-                self._active_policies.get(organelle_id)
-                if hasattr(self, "_active_policies")
-                else None
-            )
+            pol = active_policies.get(organelle_id) if isinstance(active_policies, dict) else None
             if isinstance(pol, dict) and isinstance(pol.get("budget_frac"), (int, float)):
                 policy_frac = float(pol["budget_frac"])
             elif require_policy:
