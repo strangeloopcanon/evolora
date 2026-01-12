@@ -8,7 +8,10 @@ __pycache__/
 .env.*
 
 # Local tooling
-.beads/
+.beads/*
+!.beads/config.yaml
+!.beads/README.md
+!.beads/.gitignore
 .codex/
 
 
