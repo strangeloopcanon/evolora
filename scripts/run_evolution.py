@@ -437,7 +437,11 @@ def summarize_slice(episodes_jsonl: Path, start_idx: int, end_idx: int) -> dict:
             costs.append(rb["cost_penalty"])
             # Extract compute metrics from observations
             obs = obj.get("observations", {})
-            tokens = obs.get("tokens", 0) or obs.get("prompt_tokens", 0) or 0
+            metrics = obs.get("metrics", {})
+            # Tokens can be in metrics.tokens or directly in observations
+            tokens = (
+                metrics.get("tokens", 0) or obs.get("tokens", 0) or obs.get("prompt_tokens", 0) or 0
+            )
             slice_tokens += int(tokens)
             # Each episode = 1 forward pass + 1 hebbian update per organelle
             num_organelles = len(obj.get("organelles", []))

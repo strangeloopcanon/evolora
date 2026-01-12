@@ -201,6 +201,8 @@ def export_lora_to_safetensors(model, output_path: Path) -> None:
 
     Compatible with HostKernel.load_organelle_adapter().
     """
+    from torch import nn
+
     state: dict[str, torch.Tensor] = {}
 
     for name, module in model.named_modules():
@@ -211,7 +213,16 @@ def export_lora_to_safetensors(model, output_path: Path) -> None:
         lora_a = module.lora_A
         lora_b = module.lora_B
 
-        if isinstance(lora_a, dict):
+        # Handle nn.ModuleDict (modern PEFT)
+        if isinstance(lora_a, nn.ModuleDict):
+            for adapter_name in lora_a.keys():
+                if adapter_name in lora_b:
+                    key_a = f"{name}.lora_A"
+                    key_b = f"{name}.lora_B"
+                    state[key_a] = lora_a[adapter_name].weight.detach().cpu().contiguous()
+                    state[key_b] = lora_b[adapter_name].weight.detach().cpu().contiguous()
+                    break  # Just export the first/default adapter
+        elif isinstance(lora_a, dict):
             for adapter_name in lora_a.keys():
                 if adapter_name in lora_b:
                     key_a = f"{name}.lora_A"
@@ -225,7 +236,11 @@ def export_lora_to_safetensors(model, output_path: Path) -> None:
             state[f"{name}.lora_B"] = lora_b.weight.detach().cpu().contiguous()
 
     if not state:
-        raise ValueError("No LoRA weights found to export")
+        # Fallback: use PEFT's built-in save method
+        adapter_dir = output_path.parent / "adapter"
+        model.save_pretrained(adapter_dir)
+        print(f"[sft] Exported LoRA via PEFT to {adapter_dir}")
+        return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     save_file(state, str(output_path))
