@@ -1816,9 +1816,7 @@ class EcologyLoop:
         if per_gen <= 0 or len(active_ids) < 2:
             return
         # Ensure counter exists
-        try:
-            _ = self._co_routing_counts
-        except Exception:
+        if not hasattr(self, "_co_routing_counts"):
             self._co_routing_counts = {}
         for _ in range(per_gen):
             try:
