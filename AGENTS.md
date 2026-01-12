@@ -1,279 +1,197 @@
-AGENTS.md
-
-Drop‑In Rules for Autonomous Coding Agents
-> Constitution + lean appendices. Modes: set `AGENT_MODE=baseline` for speed or `AGENT_MODE=production` for rigor. Agents must obey the selected mode.
-
+---
+name: workspace-agent
+description: Operating manual for autonomous coding agents across this monolith workspace. Default to AGENT_MODE=baseline; escalate per Appendix E triggers.
+mode: baseline
 ---
 
-## TL;DR (operator card)
-1) Set `AGENT_MODE`.
-2) Run the interface targets (Appendix A): `setup` → `all`.  
-3) On failure, apply the **triage in Appendix B** (do not loop blindly).  
-4) Open PR with tests (LLM live if applicable).
-5) For any piece of work you start doing, create issues using bd (see below) and that's your bible of things to do, in order.
+# Drop‑In Rules for Autonomous Coding Agents
+> Constitution + lean appendices; ship minimal, correct, succinct code.
 
----
-
-## 0) Core Principles
-- Ship minimal, correct, succinct code.
-- All changes via PR. No direct pushes to `main` unless explicitly requested.
-- Record context, plan, risks, tests, and failures via 'bd' tool, mentioned at the bottom. Always bd init to start.
-- Handle failures using Appendix B (retries, cost ceilings, infrastructure vs. code).
-
-- All the code that’s part of our architecture goes into the one monolith we have.
-- The monolith is composed of separate modules (modules which all run together in the same process).
-- Modules cannot call each other, except through specific interfaces (for our Python monolith, we put those in a file called some_module/api.py, so other modules can do from some_module.api import some_function, SomeClass and call things that way.
-- All of these interfaces are statically typed. What the functions accept and what they return are statically typed, with types usually being Pydantic classes (no passing a bunch of opaque dicts!).
-- The above is enforced via automated checks on CI and in the git pre-commit stage. More on this later in the doc.
----
-
-## 1) Development Cycle
-1. Plan and record assumptions.  
-2. Implement the smallest viable slice.  
-3. Run the interface contract (Appendix A).  
-4. Open PR: “simplest that works,” test evidence (incl. LLM live if relevant), risks, rollback.  
-5. If blocked, split scope. Log deferrals as issues.
-6. When user requests to update github, create a PR, use the CLI to merge it, sync ev'thing, get back to main and then confirm to the user. Do not stop in the middle, do the WHOLE THING.
-7. Treat backend-specific caveats as part of Interface Contract notes and LLM live test goldens.
-
----
-
-## 2) Tiered Quality Gates
-
-| Topic | **Baseline** (default) | **Production** (real users + longevity) |
-|---|---|---|
-| Format | Black (Py); Prettier (JS/TS) | Same |
-| Lint | Ruff defaults (Py); ESLint v9 flat (JS/TS) | Expanded rules; exceptions documented |
-| Types | mypy (Py) / `tsc` (TS) not strict | `mypy --strict`; TS `strict`; no lingering ignores |
-| Coverage | Global ≥80%; PRs don’t reduce coverage | Global ≥90%; changed lines ≥90%; mutation tests on critical modules (scheduled) |
-| LLM live tests | **Mandatory if any LLM logic exists**; golden scenarios in CI (staging keys) | Add faithfulness/relevance evals, OWASP LLM Top‑10 probes, and SLO gates |
-| SAST | Bandit (advisory); minimal Semgrep (advisory) | Bandit + Semgrep blocking on high severity |
-| Supply chain | `pip‑audit` report (non‑blocking) | `pip‑audit` blocking; SBOM artifact |
-| Releases | Conventional Commits; manual version bump | Semantic release + changelog from commits |
-
-- Style: PEP 8, 4-space indents, type hints where practical.
-- Names: modules/functions `snake_case`; classes `CapWords`.
-- Lint: if present, run `flake8`/`pylint`; format with Black.
-
----
-
-## 3) Environments
-- **Python:** Always `venv`. If missing, create one, install `requirements*.txt`, and log the action. Never rely on global Python.  
-- **Node/TS (if present):** `npm ci` or `pnpm i --frozen-lockfile`.  
-- **OS:** Linux runner/container by default. Log any OS‑specific choice.
-
----
-
-## 4) Tooling (names only)
-- **Format/Lint:** Black, Ruff (Py). ESLint v9 + Prettier (JS/TS).  
-- **Types:** mypy (Py), `tsc` (TS).  
-- **Tests:** pytest + pytest‑cov. Property‑based tests where logic is stateful, numeric, or parser‑like.  
-- **Secrets:** detect‑secrets (pre‑commit).  
-- **Security:** Bandit, Semgrep.  
-- **Deps audit:** pip‑audit.  
-- **Repo ops:** platform CLI (`gh` for GitHub, `glab` for GitLab) or direct API.  
-- **Commit format enforcement:** commitlint or equivalent hook.
-
-> The **Interface Contract** standardizes commands. See **Appendix A**.
-
----
-
-## 5) LLM‑Specific Rules (if any LLM use exists)
-- **Live tests are non‑negotiable.** Treat as integration tests. Run in CI with **staging credentials**.  
-- **Output shape:** choose **JSON vs free‑text** for the product surface. If structured, define JSON Schema or Pydantic and validate. If free‑text, assert minimal invariants to reduce brittleness.  
-- **Safety:** add prompt‑injection and insecure‑output probes. Production aligns with **OWASP LLM Top‑10**.  
-- **Faithfulness:** for RAG/tool‑use, add citation checks and hallucination guards; gate deploys on eval SLOs in production.  
-- **Providers (illustrative; verify availability at run time):** OpenAI **current flagship** (e.g., GPT‑5 when available), Anthropic **Claude Sonnet 4.5 / latest**, Google **Gemini 2.5 Pro / latest**, xAI **Grok‑4 / latest** (e.g., via OpenRouter). Optional glue: Simon Willison’s **`llm`** library.  
-- **Determinism:** lock provider+model+version for goldens; swapping models requires re‑baselining (Appendix B).
-
----
-
-## 6) Local vs CI
-- **Local:** fast gates only (format, lint, types, quick secrets/security).  
-- **CI:** lint, types, tests with coverage, **LLM live tests**, SAST, dep audit (+ SBOM in production). Annotate PRs.
-
----
-
-## 7) Git and Release Hygiene
-- Branches: `feat/*`, `fix/*`, `chore/*` off `main`.  
-- Commits: **Conventional Commits**; use `BREAKING CHANGE:` footer when needed; enforce via commitlint/hook.  
-- Versioning: **SemVer**. Production automates versioning and changelogs from commits.
-- Messages: short, imperative. 
-- PRs: include summary, rationale, exact commands to reproduce if useful.
-- Link related issues. Keep diffs focused. Update README or docstrings when behaviour changes.
-
----
-
-## 8) Observability and Runtime Safety
-- Structured logs (JSON Lines). Include timestamp, level, logger, message, and context. No f‑strings in log calls; pass fields.  
-- Feature flags for risky changes; default off.  
-- No PII in logs. Redact model I/O when user data may appear.
-
----
-
-## 9) PR Checklist
-- [ ] Format/lint clean.  
-- [ ] Types pass at tier strictness.  
-- [ ] Tests added/updated; coverage meets thresholds.  
-- [ ] **LLM live tests present and green** (or N/A with reason).  
-- [ ] Secrets/SAST clean; dep audit reviewed (blocking in production).  
-- [ ] Conventional Commits enforced.  
-- [ ] Docs updated if behaviour or API changed.  
-- [ ] If rollback plan claimed, **include a `@pytest.mark.rollback` test**.
-
----
-
-## 10) What’s intentionally excluded
-- No giant config dumps. Agents synthesise only what’s necessary and prefer org templates when available.  
-- No repository boilerplate here; cold‑start rules are in **Appendix F**.
-
----
-
-## 11) Minimal human inputs
-- Set `AGENT_MODE`.  
-- Provide staging keys and allowed model providers.  
-- Indicate if JS/TS is in scope; default to Python‑only.
-
----
-
-# Appendices
-
-## Appendix A — Interface Contract (required)
-Expose a standard command surface (Makefile/justfile or package.json scripts). Targets are **mutually independent**; `all` orchestrates and **halts on first failure**. Do not rerun passing subsystems. Cache artifacts where possible.
-
-Required targets:
-- `setup` / `bootstrap`: create envs; install app deps and dev tooling; install/refresh hooks (pre‑commit, commitlint).  
-- `check`: format check, lint, types (mode‑appropriate), quick Bandit, detect‑secrets on staged changes.  
-- `test`: unit/integration tests; enforce coverage thresholds per mode; no live network unless explicitly marked.  
-- `llm-live` (if LLM code exists): run golden scenarios against staging keys; assert schema/invariants; output pass/fail counts, **cost**, and **p95 latency**.  
-- `deps-audit`: dependency audit; advisory in Baseline, blocking in Production; emit SBOM in Production.  
-- `all`: `check` → `test` (+ `llm-live` if applicable) → (`deps-audit` in Production). Stop at first failing step.  
-- `release` (Production): semantic release + changelog + tag.
-
-**Standard exit codes (used by CI):**  
-`0` pass; `1` test or gate failure; `2` **cost ceiling exceeded**; `3` **infrastructure failure** (provider outage/rate‑limit exhaustion); `4` **threshold/config missing**.
-
+## Quick start (read this first)
+- Set `AGENT_MODE` (baseline by default; see Appendix E for production triggers).
+- Run `bd init` before work; track plan/risks/tests/failures in bd (no Markdown checklists).
+- Prefer `uv` over `pip`.
+- Run Interface Contract commands (stop after first failure):
+  - `setup` / `bootstrap`: env + deps; install/refresh hooks (pre-commit, commitlint).
+  - `check`: format check, lint, types (mode-appropriate), quick Bandit, detect-secrets on staged changes.
+  - `test`: unit/integration; enforce coverage by mode; no live network unless explicitly marked.
+  - `llm-live` (if LLM code exists): goldens with cost + p95 latency.
+  - `deps-audit`: advisory in baseline; blocking in production; SBOM in production.
+  - `all`: `check` → `test` (+ `llm-live` if applicable) → (`deps-audit` in production).
+  - `release` (production): semantic release + changelog + tag.
+- Local vs CI: local runs fast gates; CI enforces full suite (strict types in production, LLM-live, SAST, dep audit).
 Agents MUST call these targets, not raw tools.
 
+## Stack & paths (project knowledge)
+- Monolith, single process; all architecture code lives here. Modules only call via `some_module/api.py` with statically typed interfaces (Pydantic preferred; no opaque dicts). CI/pre-commit enforce this.
+- Read from module code; write only through declared interfaces and allowed dirs for the task.
+- `.env` is the source of secrets; never commit secrets.
+- Do not touch vendor/prod configs, generated/binary assets, or `node_modules/`/`vendor/` unless asked.
+
+## Boundaries
+- **Always:** follow Interface Contract commands; prefer `uv`; update README/docstrings when behaviour changes (start with “so what”; make optional sections collapsible; avoid exhaustive technical lists); structured logs (JSONL, no f-strings in log calls; pass fields); stop and ask for help if blocked; find root cause (no band-aids).
+- **Ask first:** schema changes; new dependencies; CI/hook policy changes; module renames; prod/dev deploys; changing coverage/type thresholds.
+- **Never:** commit secrets/PII; edit prod configs or generated/vendor folders; add “improved/better/new” comments; push directly to `main`; skip tests because they fail; hard-reset user work.
+
+## Quality gates by mode
+| Topic | Baseline | Production |
+| --- | --- | --- |
+| Format | Prettier (JS/TS) | + Black (Py) |
+| Lint | Ruff defaults; ESLint v9 flat | Expanded rules; exceptions documented |
+| Types | Basic | `ty --strict`; TS `strict`; no lingering ignores |
+| Coverage | Global ≥80%; no regression | Global ≥90%; changed lines ≥90%; mutation tests on critical modules (scheduled) |
+| LLM live | Mandatory if LLM code exists | + faithfulness/relevance, OWASP LLM Top-10 probes, SLO gates |
+| SAST | Bandit advisory; Semgrep minimal advisory | Bandit + Semgrep blocking on high severity |
+| Deps | `pip-audit` advisory | `pip-audit` blocking; SBOM |
+| Releases | Conventional Commits | Semantic release + changelog |
+
+## Development cycle
+1) Plan and log assumptions (bd).
+2) Implement smallest viable slice with typed interfaces.
+3) Run Interface Contract (halt on first failure; triage via Appendix B).
+4) Open PR with tests (LLM live if relevant), risks, rollback.
+5) If blocked, split scope and log deferrals as issues.
+6) If asked to update GitHub: create PR, merge via CLI, sync, return to main, confirm.
+
+## Tooling and style
+- Format/Lint: Black, Ruff (Py); ESLint v9 + Prettier (JS/TS); flake8/pylint if present.
+- Types: ty; `tsc`.
+- Tests: pytest + pytest-cov; property-based where stateful/numeric/parser-like; no live network in unit tests; integration uses local fakes unless marked.
+- Secrets: detect-secrets (pre-commit) blocks new secrets.
+- Security: Bandit; Semgrep (advisory → blocking in production).
+- Deps audit: `pip-audit`.
+- Repo ops: `gh`/`glab`; commitlint.
+- Python env: use existing venv or create/log if needed; prefer `uv` installs.
+- OS: macOS (M4).
+
+## LLM-specific rules
+- Live tests are non-negotiable; staging credentials only.
+- Output shape: choose JSON vs free-text; validate (JSON Schema/Pydantic) or enforce invariants.
+- Providers: lock provider+model+version for goldens; default GPT-5 unless specified; see https://github.com/strangeloopcanon/llm-api-hub for latest docs.
+- Determinism: `temperature=0`, `top-p=1` for goldens.
+- Retries: transient (5xx/429/timeout) up to 3 attempts with jitter; deterministic errors fail fast. Max 9 total calls/job; if exhausted on transients, exit code 3.
+- Cost ceilings: Baseline ≤ $3, Production ≤ $10; exit code 2 if exceeded (advisory in baseline).
+- Logging: redact PII/secrets; no raw model I/O when user data may appear.
+
+## Git & PR workflow
+- Branches: `feat/*`, `fix/*`, `chore/*` off `main`.
+- Commits: Conventional Commits; use `BREAKING CHANGE:` footer when needed.
+- PRs: summary, rationale, reproduction commands; link issues; focused diffs.
+- Checklist: format/lint; types by mode; tests + coverage; LLM live (or N/A reason); secrets/SAST clean; dep audit reviewed; docs updated; if rollback claimed, add `@pytest.mark.rollback` test.
+
+## Observability & runtime safety
+- Structured JSONL logs with timestamp, level, logger, message, context; pass fields (no log f-strings).
+- Feature flags for risky changes, default off.
+- No PII in logs; redact model I/O when user data may appear.
+- Fixed seeds/timezones; stub clocks/network for determinism.
+- Use ephemeral resources; clean up on failure; do not re-run passing gates in the same job.
+
+## Security & data classes
+- Data classes: secrets (credentials/tokens/keys), PII (names/emails/phones/addresses/IDs), sensitive business context. Keep secrets in `.env`; never commit.
+- detect-secrets baseline blocks new secrets; least-privilege for tokens/CI; rotate on leaks.
+- Logging: ensure tests/fixtures assert no emails/SSNs/API keys appear in captured logs.
+- Dependency audits: `pip-audit`; Semgrep/Bandit per mode; SBOM in production.
+
+## Agent templates (spawn per task)
+Use this skeleton for task agents:
+```
 ---
-
-## Appendix B — LLM evaluations: determinism, retries, and cost
-
-To use the latest APIs when coding LLM based applications, you can look up https://github.com/strangeloopcanon/llm-api-hub to figure out where to find the latest documentation for each LLM, along with your other searches. Note that Responses API does not take temperature as a parameter.
-
-**Determinism**
-- Lock provider+model+version for goldens; treat swaps as breaking and re‑baseline.  
-- Freeze sampling for goldens (`temperature=0`, `top‑p=1`). Record model ID and provider version.
-
-**Retries and flakiness**
-- Classify failures:  
-  *Transient* (HTTP 5xx, 429 rate limits, timeouts) → retry with jittered backoff, up to **3 attempts**.  
-  *Deterministic/code* (schema mismatch, safety violation, eval rubric fail) → fail fast; no retries.  
-  If 429 persists across 3 attempts or appears with high concurrency, treat as code/config bug and fix call pacing.
-- **Retry budget:** max **9 total LLM calls per job** across retries. If exhausted only by transients, exit **code 3** and post “infrastructure failure”.
-
-**Cost governance**
-- CI cost ceilings per run: Baseline ≤ **$3**; Production ≤ **$10**.  
-- Instrument `llm-live` to track cumulative cost (provider API or token‑based estimate). If ceiling is hit mid‑run, exit **code 2** and log *cost budget exceeded*. CI treats code 2 as **advisory/non‑blocking in Baseline**, **blocking in Production**.
-
-**Eval size**
-- Baseline: goldens.  
-- Production: spanning success, safety, edge cases; refresh periodically.
-
-**Acceptance**
-- Single‑provider path: 100% of goldens pass.  
-- Multi‑provider path: maintain **separate** golden sets per provider; each must meet its pass target (≥90% if non‑deterministic evaluation). Model swaps require re‑baselining.
-
+name: <agent-name>
+description: <one-line>
 ---
+## Persona
+- You are <role>, focused on <scope>.
+## Project knowledge
+- Stack: <tech + versions>
+- Paths: read <dirs>; write <dirs>; never touch <dirs>.
+## Commands
+- setup/check/test/all [...]
+- Task-specific: <commands with flags>
+## Standards
+- Follow root AGENTS.md rules; naming/style per examples.
+## Boundaries
+- Always: ...
+- Ask first: ...
+- Never: ...
+```
 
-## Appendix C — Security, data classes, and supply chain
-**Data classes**
-- **Secrets:** credentials, tokens, keys. It will and should ALWAYS be in .env file locally, that is the source of truth. Use it, add to it, edit it, as needed. Never commit secrets. Use `.env` locally; keep out of VCS.
-- **PII:** identifiers (names, emails, phones, addresses, IDs).  
-- **Sensitive context:** business data not public.
+- **Docs agent:** reads `src/`, writes `docs/`; commands: `npm run docs:build`, `npx markdownlint docs/`; never modify `src/`.
+- **Test agent:** writes to `tests/`; commands: `pytest -v` (or `npm test`/`cargo test --coverage`); never delete failing tests; ask before schema changes.
+- **Lint agent:** commands: `npm run lint --fix` / `prettier --write` / `ruff --fix`; only style changes, never logic.
 
-**Enforcement**
-- Pre‑commit: detect‑secrets baseline; block on new secrets.  
-- Logging: redact PII and secrets; include a test/fixture asserting no emails/SSNs/API keys appear in captured logs.  
-- SAST: Bandit always; Semgrep advisory → blocking in Production.  
-- Deps: `pip‑audit` advisory → blocking in Production; SBOM artifact (Production).  
-- Least privilege for tokens and CI; rotate on leaks.
+## Style example (Python)
+```python
+# Good: descriptive, typed, structured logging fields
+from typing import List
+from my_module.api import Widget
+logger.info("listing_widgets", count=len(widgets), source="cache")
+def list_widgets(limit: int) -> List[Widget]:
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    return widgets[:limit]
 
-- Large model downloads happen on first run. Document cache locations and quotas.
-- Default backend should include MLX via mlx-genkit and PyTorch, to test on this computer. Guard changes behind flags to avoid breaking.
+# Bad: untyped, vague logging, f-string in log call
+logger.info(f"We have {len(widgets)} widgets")
+def run(widgets):
+    return widgets
+```
 
----
+## .agents.yml
+Keep thresholds/knobs in repo root; defaults: baseline mode, coverage 0.80, LLM ceilings per Quality gates. Missing keys inherit section defaults.
 
-## Appendix D — Determinism & flakiness (non‑LLM)
-- Pin dependency versions; record toolchain versions.  
-- Fixed seeds and timezone; stub clocks and network.  
-- No network in unit tests; integration tests use local fakes unless explicitly marked.  
-- Use ephemeral resources; clean up on failure.  
-- Do not re‑execute passing gates within the same job.
+## Cold start (empty repo)
+- Makefile/justfile with Interface Contract targets.
+- Python: `pyproject.toml` (Ruff, pytest, coverage), `requirements*.txt`, `.gitignore`, pre-commit + commitlint.
+- LLM: `tests_llm_live/` with schema validation.
 
----
+## Additional notes
+- Large model downloads happen on first run; document cache locations/quotas.
+- Default backend should include MLX via mlx-genkit and PyTorch; guard behind flags.
+- No giant config dumps; synthesise only what’s needed.
+- Prefer small models for smoke tests when applicable (e.g., `Qwen/Qwen3-0.6B`) with staging keys.
+- Pin dependencies; record toolchain versions when relevant.
 
-## Appendix E — Escalation triggers to `production`
-Switch to `AGENT_MODE=production` when any apply:
-- PII or regulated data handled.  
-- External users > **50** or paying users > **1**.  
-- Declared SLOs for uptime or correctness exist.  
-- Monthly LLM or infra spend > **$100**.  
-- Privileged third‑party integration (write access to user data) is enabled.
+## Appendix E — When to switch to production mode
+Switch to `AGENT_MODE=production` when any apply: PII/reg data handled; >50 external users or any paying users; uptime/correctness SLOs in place; monthly LLM/infra spend > $100; privileged third-party integration (write access to user data). Record decision (date, trigger, owner) and open tracking issue tagged `AGENT_MODE=production`.
 
-**Ceremony:** record the decision (date, triggering condition(s), owner name/email) and open a tracking issue tagged `AGENT_MODE=production`.
+## Appendix B — Triage on failure (LLM + infra)
+- Classify failure: transient infra (5xx/429/timeout → retry with jitter up to 3) vs deterministic (schema/safety/eval fail → fix).
+- If 429 persists after retries, treat as pacing/config bug.
+- Exit codes: `0` pass; `1` test/gate failure; `2` cost ceiling exceeded; `3` infrastructure failure; `4` threshold/config missing.
 
----
+## Work plan / issues
+All new work must be tracked in bd (not Markdown). Run `bd quickstart` / `bd init`; bd is the source of truth for steps.
 
-## Appendix F — Cold start (empty repo rules)
-- **Interface contract** (Appendix A) via a **Makefile** (preferred for Python). `justfile` is acceptable. For Node‑only repos, package.json scripts are acceptable.  
-- **Python:** `pyproject.toml` with Black, Ruff, mypy, pytest, coverage; `requirements*.txt`; `.gitignore`; pre‑commit + commitlint enabled.  
-- **LLM projects:** `tests_llm_live/` with goldens and schema validation.  
-- **CI:** a single workflow that runs `setup` → `all` (and `release` on tags in Production).  
+## Landing the Plane (Session Completion)
 
----
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
 
-## Appendix G — Repo config (`.agents.yml`)
-Keep thresholds and knobs in a single YAML at repo root:
+**MANDATORY WORKFLOW:**
 
-```yaml
-mode: baseline | production
-coverage:
-  global: 0.80  # 0.90 in production
-  changed_lines: 0.90  # production only
-llm:
-  cost_ceiling_usd: 3   # 10 in production
-  latency_p95_ms: 3000
-  provider: openai|anthropic|google|xai|openrouter
-  model: "<provider model id>"
-  temperature: 0
-  top_p: 1
-  retry_attempts: 3
-  max_calls_per_job: 9
-security:
-  sast_block_high: false  # true in production
-deps:
-  audit_block: false      # true in production
-mutation_tests:
-  schedule: weekly        # production only
-````
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   bd sync
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
 
-Agents must read this file to configure gates. Missing keys default to the values in Section 2 and Appendix B.
+**CRITICAL RULES:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- If push fails, resolve and retry until it succeeds
 
----
 
-## Work Plan/ Issues
-USE the bd tool instead of markdown for all new work. We only and always track work in Beads instead of Markdown. Run \`bd quickstart\` to see how. 'bd init' can help start things, and you can install it if needed - more information here https://github.com/steveyegge/beads
----
+## LEARNING LOOP IN EACH REPO
+* you can write a .codex/LEARNINGS.md file for yourself in all sessions. It should be gitignored.
+* Log Every Friction Point: If a build fails, a test hangs, or a logic error occurs, document the root cause and the specific fix before proceeding.
+* Mandatory Update on Intervention: If you stop to ask for guidance, or if I provide a correction, you must update LEARNINGS.md with the "Signpost" (the specific instruction or realisation) that prevented you from succeeding independently.
+* Iterate Toward Autonomy: Use the existing log to avoid repeating mistakes. Your goal is to reach a state where you can complete the objective without manual triggers.
 
-## Appendix H — Repo quickstart and conventions
-
-### Project structure
-- `<name>/`: core library.
-- `scripts/`: CLI utilities and demos.
-- `results/`: evaluation outputs and analysis.
-- `examples/`: sample inputs.
-- Keep runnable demos in `scripts/`.
-
-> Prefer small models for smoke tests (e.g., `Qwen/Qwen3-0.6B`), and use staging keys for LLM live tests per Section 5.
-
+To get a second opinion about anything you can run 'gemini --yolo' in a background terminal and use it/ ask anything.
