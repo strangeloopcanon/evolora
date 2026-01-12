@@ -15,7 +15,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Iterator, Literal, SupportsFloat, SupportsInt, cast
+from typing import TYPE_CHECKING, Iterator, Literal, SupportsFloat, SupportsInt, cast
 
 import torch
 from pydantic import BaseModel, Field
@@ -30,11 +30,17 @@ from symbiont_ecology import (
     load_ecology_config,
 )
 from symbiont_ecology.benchmarks.stubs import BenchmarkStubBackbone, BenchmarkStubOrganelle
+from symbiont_ecology.config import EcologyConfig
 from symbiont_ecology.environment.grid import GridEnvironment
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.population import Genome
 
 Backend = Literal["stub", "hf"]
+
+_DEFAULT_NOVELTY_WEIGHT = 0.4
+
+if TYPE_CHECKING:
+    from symbiont_ecology.environment.human import HumanBandit
 
 
 class BenchmarkCase(BaseModel):
@@ -464,6 +470,56 @@ def _configure_assimilation(assim: AssimilationTester, config: object) -> None:
         return
 
 
+def _prepare_benchmark_config(config: EcologyConfig, case: BenchmarkCase, run_dir: Path) -> None:
+    config.metrics.root = run_dir
+    config.metrics.root.mkdir(parents=True, exist_ok=True)
+    config.environment.synthetic_batch_size = int(case.batch_size)
+    if case.disable_human:
+        config.human_bandit.enabled = False
+    if case.device is not None:
+        config.host.device = case.device
+    elif case.backend == "stub":
+        config.host.device = "cpu"
+
+    # Prefer deterministic decoding unless an experiment explicitly opts out.
+    config.host.temperature = 0.0
+    config.host.top_p = 1.0
+    config.host.team_probe_temperature = 0.0
+    config.host.team_probe_top_p = 1.0
+
+
+def _seed_population(
+    host: HostKernel, population: PopulationManager, config: EcologyConfig
+) -> None:
+    initial_orgs = int(getattr(config.population_strategy, "initial_orgs", 4))
+    max_rank = config.host.max_lora_rank
+    for _ in range(max(1, initial_orgs)):
+        organelle_id = host.spawn_organelle(rank=max_rank)
+        population.register(
+            Genome(
+                organelle_id=organelle_id,
+                drive_weights={"novelty": _DEFAULT_NOVELTY_WEIGHT},
+                gate_bias=0.0,
+                rank=max_rank,
+            )
+        )
+
+
+def _maybe_create_human_bandit(case: BenchmarkCase, config: EcologyConfig) -> HumanBandit | None:
+    if case.disable_human:
+        return None
+    if not bool(getattr(config.human_bandit, "enabled", False)):
+        return None
+
+    from symbiont_ecology.environment.human import HumanBandit
+
+    return HumanBandit(
+        preference_weight=config.human_bandit.preference_weight,
+        helper_weight=config.human_bandit.helper_weight,
+        frequency=config.human_bandit.frequency,
+    )
+
+
 def run_benchmark_suite(suite: BenchmarkSuite, output_root: Path) -> BenchmarkReport:
     output_root.mkdir(parents=True, exist_ok=True)
     started = datetime.now(tz=timezone.utc)
@@ -485,21 +541,7 @@ def run_benchmark_suite(suite: BenchmarkSuite, output_root: Path) -> BenchmarkRe
             ctx = _patched_stub_backend() if case.backend == "stub" else nullcontext()
             with ctx:
                 config = load_ecology_config(case.config_path)
-                config.metrics.root = run_dir
-                config.metrics.root.mkdir(parents=True, exist_ok=True)
-                config.environment.synthetic_batch_size = int(case.batch_size)
-                if case.disable_human:
-                    config.human_bandit.enabled = False
-                if case.device is not None:
-                    config.host.device = case.device
-                elif case.backend == "stub":
-                    config.host.device = "cpu"
-
-                # Prefer deterministic decoding unless an experiment explicitly opts out.
-                config.host.temperature = 0.0
-                config.host.top_p = 1.0
-                config.host.team_probe_temperature = 0.0
-                config.host.team_probe_top_p = 1.0
+                _prepare_benchmark_config(config, case, run_dir)
 
                 ledger = ATPLedger()
                 router = BanditRouter()
@@ -507,17 +549,7 @@ def run_benchmark_suite(suite: BenchmarkSuite, output_root: Path) -> BenchmarkRe
                 host.freeze_host()
 
                 population = PopulationManager(config.evolution, config.foraging)
-                initial_orgs = int(getattr(config.population_strategy, "initial_orgs", 4))
-                for _ in range(max(1, initial_orgs)):
-                    oid = host.spawn_organelle(rank=config.host.max_lora_rank)
-                    population.register(
-                        Genome(
-                            organelle_id=oid,
-                            drive_weights={"novelty": 0.4},
-                            gate_bias=0.0,
-                            rank=config.host.max_lora_rank,
-                        )
-                    )
+                _seed_population(host, population, config)
 
                 assim = AssimilationTester(
                     uplift_threshold=config.evolution.assimilation_threshold,
@@ -541,15 +573,7 @@ def run_benchmark_suite(suite: BenchmarkSuite, output_root: Path) -> BenchmarkRe
                     failure_cost_multiplier=config.environment.failure_cost_multiplier,
                     lp_alpha=getattr(config.curriculum, "lp_alpha", 0.5),
                 )
-                human_bandit = None
-                if not case.disable_human and bool(getattr(config.human_bandit, "enabled", False)):
-                    from symbiont_ecology.environment.human import HumanBandit
-
-                    human_bandit = HumanBandit(
-                        preference_weight=config.human_bandit.preference_weight,
-                        helper_weight=config.human_bandit.helper_weight,
-                        frequency=config.human_bandit.frequency,
-                    )
+                human_bandit = _maybe_create_human_bandit(case, config)
                 loop = EcologyLoop(
                     config=config,
                     host=host,
