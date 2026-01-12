@@ -176,7 +176,12 @@ def generate_comparison_markdown(
     overall = comparison["overall"]
     delta = overall["delta"]
     delta_str = f"+{delta:.1%}" if delta >= 0 else f"{delta:.1%}"
-    winner = label_b if delta > 0 else label_a if delta < 0 else "Tie"
+    if delta > 0:
+        winner = label_b
+    elif delta < 0:
+        winner = label_a
+    else:
+        winner = "Tie"
 
     lines.append("| Model | Accuracy | Tasks |")
     lines.append("|-------|----------|-------|")
@@ -200,7 +205,12 @@ def generate_comparison_markdown(
         for cap, stats in sorted(comparison["capability_comparison"].items()):
             delta = stats["delta"]
             delta_str = f"+{delta:.1%}" if delta >= 0 else f"{delta:.1%}"
-            better = label_b if delta > 0 else label_a if delta < 0 else "="
+            if delta > 0:
+                better = label_b
+            elif delta < 0:
+                better = label_a
+            else:
+                better = "="
             lines.append(
                 f"| {cap} | {stats[label_a]:.1%} | {stats[label_b]:.1%} | {delta_str} | {better} |"
             )
@@ -215,7 +225,12 @@ def generate_comparison_markdown(
         for ho, stats in sorted(comparison["holdout_comparison"].items()):
             delta = stats["delta"]
             delta_str = f"+{delta:.1%}" if delta >= 0 else f"{delta:.1%}"
-            better = label_b if delta > 0 else label_a if delta < 0 else "="
+            if delta > 0:
+                better = label_b
+            elif delta < 0:
+                better = label_a
+            else:
+                better = "="
             lines.append(
                 f"| {ho} | {stats[label_a]:.1%} | {stats[label_b]:.1%} | {delta_str} | {better} |"
             )
@@ -230,7 +245,12 @@ def generate_comparison_markdown(
         for mt, stats in sorted(comparison["mutation_comparison"].items()):
             delta = stats["delta"]
             delta_str = f"+{delta:.1%}" if delta >= 0 else f"{delta:.1%}"
-            better = label_b if delta > 0 else label_a if delta < 0 else "="
+            if delta > 0:
+                better = label_b
+            elif delta < 0:
+                better = label_a
+            else:
+                better = "="
             lines.append(
                 f"| {mt} | {stats[label_a]:.1%} | {stats[label_b]:.1%} | {delta_str} | {better} |"
             )
@@ -243,7 +263,12 @@ def generate_comparison_markdown(
         sc = comparison["simplicity_comparison"]
         delta = sc.get("delta", 0)
         # Lower is better for complexity
-        better = label_a if delta > 0 else label_b if delta < 0 else "="
+        if delta > 0:
+            better = label_a
+        elif delta < 0:
+            better = label_b
+        else:
+            better = "="
         lines.append("*Note: Lower complexity score indicates simpler, more elegant solutions.*")
         lines.append("")
         lines.append("| Model | Mean Complexity |")
