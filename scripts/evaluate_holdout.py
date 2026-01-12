@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pickle
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +38,17 @@ from typing import Any
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+_CODE_BLOCK_RE = re.compile(r"```(?:regex)?\s*\n?(.*?)\n?```", re.DOTALL)
+_LORA_TARGET_MODULES = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
 
 
 @dataclass
@@ -142,7 +154,7 @@ def extract_regex_pattern(response: str) -> str | None:
     response = response.strip()
 
     # If response is in a code block, extract it
-    code_match = re.search(r"```(?:regex)?\s*\n?(.*?)\n?```", response, re.DOTALL)
+    code_match = _CODE_BLOCK_RE.search(response)
     if code_match:
         return code_match.group(1).strip()
 
@@ -243,9 +255,6 @@ def load_evo_model(base_model, checkpoint_path: Path, tokenizer, organelle_id: s
         (PEFT model with the selected organelle applied, organelle_id)
         Returns (base_model, None) if loading fails
     """
-    import json
-    import pickle
-
     from peft import LoraConfig, get_peft_model
 
     if not checkpoint_path.exists():
@@ -295,24 +304,14 @@ def load_evo_model(base_model, checkpoint_path: Path, tokenizer, organelle_id: s
     # Find all lora_A tensors to get the rank and target modules
     lora_rank = None
     target_modules = set()
-    ckpt_input_dims = {}
     for key, tensor in adapter_state.items():
         if "lora_A" in key:
             if lora_rank is None:
                 lora_rank = tensor.shape[0]  # rank is first dimension of lora_A
-            ckpt_input_dims[key] = tensor.shape[1]  # input dimension
             # Extract module name (e.g., "q_proj" from "...self_attn.q_proj.lora_A")
             parts = key.replace("base_model.model.model.", "").split(".")
             for part in parts:
-                if part in (
-                    "q_proj",
-                    "k_proj",
-                    "v_proj",
-                    "o_proj",
-                    "gate_proj",
-                    "up_proj",
-                    "down_proj",
-                ):
+                if part in _LORA_TARGET_MODULES:
                     target_modules.add(part)
 
     if lora_rank is None:
@@ -373,7 +372,7 @@ def load_evo_model(base_model, checkpoint_path: Path, tokenizer, organelle_id: s
         return base_model, None
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate models on holdout tasks for generalization comparison."
     )
