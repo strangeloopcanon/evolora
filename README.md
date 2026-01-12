@@ -36,6 +36,12 @@ Three things are being optimised simultaneously:
 2. **Energy efficiency** — ROI = reward − cost; cheap *and* good wins
 3. **Population diversity** — a quality-diversity archive nudges the ecology toward covering different niches
 
+### Three Levels of Learning
+
+1. **Local plasticity** — Hebbian reward-modulated updates within each organelle (per episode)
+2. **Population selection** — assimilation + merging of successful adapters (per generation)
+3. **Meta-evolution** — tuning ecology parameters (assimilation threshold, energy floor, etc.)
+
 ---
 
 ## Key Results (Qwen3-0.6B, 150 generations)
@@ -54,6 +60,89 @@ See `docs/paper_packs/` for detailed run reports and plots.
 
 ---
 
+## Comparing Evolution vs SFT (Compute-Matched)
+
+A key question: does evolutionary adaptation actually outperform standard supervised fine-tuning given the same compute budget? This section explains how to run a fair comparison.
+
+### Quick E2E Example
+
+```bash
+# 1. Run evolution (e.g., 10 generations with regex tasks)
+python scripts/run_evolution.py \
+    --config config/experiments/qwen3_regex_simple.yaml \
+    --generations 10 \
+    --output artifacts_evo_run \
+    --checkpoint-every 1 \
+    --disable-human
+
+# 2. Run SFT with matched token budget from the evolution checkpoint
+python scripts/run_sft.py \
+    --checkpoint artifacts_evo_run/checkpoint.pt \
+    --data config/training/regex_sft_data.jsonl \
+    --output artifacts_sft_run
+
+# 3. Evaluate both on holdout tasks
+python scripts/evaluate_holdout.py \
+    --holdout config/evaluation/regex_generalization.jsonl \
+    --sft-adapter artifacts_sft_run/peft_adapter \
+    --evo-checkpoint artifacts_evo_run/checkpoint.pt \
+    --output comparison_results.json \
+    --verbose
+```
+
+### How It Works
+
+1. **Run evolution** with compute tracking enabled:
+   - `ComputeBudget` tracks total tokens, forward passes, and Hebbian updates
+   - Metrics saved to checkpoint and `gen_summaries.jsonl`
+
+2. **Run SFT with matched budget**:
+   ```bash
+   # Match token budget from evolution checkpoint
+   python scripts/run_sft.py \
+       --checkpoint artifacts_evo/checkpoint.pt \
+       --data config/training/regex_sft_data.jsonl \
+       --output artifacts_sft
+
+   # Or specify explicit budget
+   python scripts/run_sft.py \
+       --token-budget 500000 \
+       --data config/training/regex_sft_data.jsonl \
+       --output artifacts_sft
+   ```
+   - `TokenBudgetCallback` stops training when budget exhausted
+   - Exports LoRA compatible with `HostKernel.load_organelle_adapter()`
+
+3. **Evaluate both** on the same holdout tasks:
+   ```bash
+   python scripts/evaluate_holdout.py \
+       --holdout config/evaluation/regex_generalization.jsonl \
+       --sft-adapter artifacts_sft/peft_adapter \
+       --evo-checkpoint artifacts_evo/checkpoint.pt \
+       --verbose
+   ```
+   - Compares base model, SFT, and best evolution organelle
+   - Auto-selects the best organelle by ROI from `gen_summaries.jsonl`
+   - Reports accuracy on held-out tasks
+
+### Key Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/run_evolution.py` | Run evolutionary LoRA with compute tracking |
+| `scripts/run_sft.py` | Train SFT baseline with matched token budget |
+| `scripts/evaluate_holdout.py` | Compare models on holdout tasks |
+
+### Important Notes
+
+- **Model compatibility**: The evolution checkpoint and evaluation must use the same base model (check tensor shapes match)
+- **Token tracking**: Tokens are tracked in `observations.metrics.tokens` in episodes.jsonl
+- **Best organelle selection**: `evaluate_holdout.py` automatically picks the organelle with highest ROI
+
+This enables fair comparison: evolutionary adaptation (many small adapters + population dynamics) vs traditional gradient-based fine-tuning (single adapter, supervised loss).
+
+---
+
 ## Project Structure
 
 ```
@@ -64,16 +153,19 @@ src/symbiont_ecology/
 ├── evolution/      # Population manager, model merger, morphogenesis
 ├── environment/    # Task factory, ecology loop, grid controller
 ├── economics/      # ATP ledger, energy settlement
-├── metrics/        # Telemetry sink, QD archive
+├── metrics/        # Telemetry sink, QD archive, ComputeBudget tracking
 └── config.py       # Pydantic config models
 
 config/
 ├── experiments/    # YAML configs: frozen, single, ecology variants
-├── evaluation/     # Holdout task sets
+├── evaluation/     # Holdout task sets (e.g., regex_generalization.jsonl)
+├── training/       # SFT training data (e.g., regex_sft_data.jsonl)
 └── ecology.yaml    # Base ecology parameters
 
 scripts/
-├── eval_gemma_long.py      # Main experiment runner (resumable)
+├── run_evolution.py        # Main experiment runner (resumable)
+├── run_sft.py              # SFT baseline trainer (compute-matched)
+├── evaluate_holdout.py     # Compare models on holdout tasks
 ├── analyze_ecology_run.py  # Generate reports + plots from a run
 ├── evoscope.py             # Interactive run visualisation
 ├── paper_pack.py           # Bundle runs into tracked summaries

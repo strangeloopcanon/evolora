@@ -33,6 +33,7 @@ from symbiont_ecology.economics.api import compute_route_cost
 from symbiont_ecology.environment.grid import GridEnvironment
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.population import Genome
+from symbiont_ecology.metrics.telemetry import ComputeBudget
 
 hf_logging.set_verbosity_error()
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -412,6 +413,9 @@ def _run_final_holdout(
 
 def summarize_slice(episodes_jsonl: Path, start_idx: int, end_idx: int) -> dict:
     totals, task_rewards, costs = [], [], []
+    slice_tokens = 0
+    slice_forward_passes = 0
+    slice_hebbian_updates = 0
     with episodes_jsonl.open() as f:
         for i, line in enumerate(f):
             if i < start_idx or i >= end_idx:
@@ -431,11 +435,26 @@ def summarize_slice(episodes_jsonl: Path, start_idx: int, end_idx: int) -> dict:
             totals.append(total)
             task_rewards.append(rb["task_reward"])
             costs.append(rb["cost_penalty"])
+            # Extract compute metrics from observations
+            obs = obj.get("observations", {})
+            metrics = obs.get("metrics", {})
+            # Tokens can be in metrics.tokens or directly in observations
+            tokens = (
+                metrics.get("tokens", 0) or obs.get("tokens", 0) or obs.get("prompt_tokens", 0) or 0
+            )
+            slice_tokens += int(tokens)
+            # Each episode = 1 forward pass + 1 hebbian update per organelle
+            num_organelles = len(obj.get("organelles", []))
+            slice_forward_passes += max(1, num_organelles)
+            slice_hebbian_updates += max(1, num_organelles)
     return {
         "episodes": end_idx - start_idx,
         "avg_total": float(mean(totals)) if totals else 0.0,
         "avg_task_reward": float(mean(task_rewards)) if task_rewards else 0.0,
         "avg_cost_penalty": float(mean(costs)) if costs else 0.0,
+        "slice_tokens": slice_tokens,
+        "slice_forward_passes": slice_forward_passes,
+        "slice_hebbian_updates": slice_hebbian_updates,
     }
 
 
@@ -525,6 +544,7 @@ def _save_checkpoint(
     loop: EcologyLoop,
     random_state: tuple,
     telemetry_bytes: dict[str, int] | None = None,
+    compute_budget: ComputeBudget | None = None,
 ) -> None:
     adapter_states: dict[str, object] = {}
     for oid, org in host.organelles.items():
@@ -548,6 +568,7 @@ def _save_checkpoint(
         "assimilation_cooldown": loop.assimilation_cooldown,
         "tau_relief": getattr(loop, "_tau_relief", {}),
         "telemetry_bytes": dict(telemetry_bytes or {}),
+        "compute_budget": compute_budget.model_dump() if compute_budget else None,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(pickle.dumps(state))
@@ -628,6 +649,7 @@ def main() -> None:
     host.freeze_host()
 
     population = PopulationManager(config.evolution, config.foraging)
+    compute_budget = ComputeBudget()
 
     start_generation = 0
     prev_n = 0
@@ -673,6 +695,10 @@ def main() -> None:
         ledger.accounts = saved_ledger.accounts
         ledger.energy_accounts = saved_ledger.energy_accounts
         ledger.energy_cap = saved_ledger.energy_cap
+        # restore compute budget
+        saved_compute = state.get("compute_budget")
+        if saved_compute is not None:
+            compute_budget = ComputeBudget(**saved_compute)
         # environment state
         env_state = state.get("environment_state", {})
         environment = GridEnvironment(
@@ -819,14 +845,27 @@ def main() -> None:
         episode_slice = (
             summarize_slice(episodes_path, prev_n, curr_n)
             if curr_n > prev_n
-            else {"episodes": 0, "avg_total": 0.0, "avg_task_reward": 0.0, "avg_cost_penalty": 0.0}
+            else {
+                "episodes": 0,
+                "avg_total": 0.0,
+                "avg_task_reward": 0.0,
+                "avg_cost_penalty": 0.0,
+                "slice_tokens": 0,
+                "slice_forward_passes": 0,
+                "slice_hebbian_updates": 0,
+            }
         )
+        # Update cumulative compute budget
+        compute_budget.total_tokens += episode_slice.get("slice_tokens", 0)
+        compute_budget.total_forward_passes += episode_slice.get("slice_forward_passes", 0)
+        compute_budget.total_hebbian_updates += episode_slice.get("slice_hebbian_updates", 0)
         generation_record: dict[str, object] = {
             "generation": gen + 1,
             "population": len(population.population),
         }
         generation_record.update(summary)
         generation_record.update(episode_slice)
+        generation_record["compute_budget"] = compute_budget.summary()
         gen_summaries.append(generation_record)
         try:
             with gen_summaries_path.open("a", encoding="utf-8") as handle:
@@ -881,6 +920,7 @@ def main() -> None:
                 loop,
                 random.getstate(),
                 telemetry,
+                compute_budget,
             )
 
     if args.final_holdout is not None:
@@ -937,7 +977,10 @@ def main() -> None:
         loop,
         random.getstate(),
         telemetry,
+        compute_budget,
     )
+    # Print final compute summary
+    print(f"Compute budget: {compute_budget.summary()}")
 
 
 if __name__ == "__main__":

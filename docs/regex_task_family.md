@@ -56,7 +56,7 @@ This ensures that evolved LoRAs produce **functionally correct** patterns, not j
 ### Quick Start (50 generations)
 
 ```bash
-MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/eval_gemma_long.py \
+MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/run_evolution.py \
   --config config/experiments/qwen3_regex.yaml \
   --gens 50 \
   --output artifacts_regex_experiment
@@ -67,7 +67,7 @@ MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/eval_gemma_long.py \
 ```bash
 FINAL_HOLDOUT_TASKS=config/evaluation/holdout_regex.jsonl \
 FINAL_HOLDOUT_SAMPLE_SIZE=12 \
-MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/eval_gemma_long.py \
+MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/run_evolution.py \
   --config config/experiments/qwen3_regex.yaml \
   --gens 150 \
   --output artifacts_regex_long

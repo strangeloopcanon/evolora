@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
         "--input",
         type=Path,
         required=True,
-        help="Path to gen_summaries.jsonl produced by eval_gemma_long.py.",
+        help="Path to gen_summaries.jsonl produced by run_evolution.py.",
     )
     parser.add_argument(
         "--output-dir",
