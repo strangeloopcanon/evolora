@@ -36,6 +36,12 @@ Three things are being optimised simultaneously:
 2. **Energy efficiency** — ROI = reward − cost; cheap *and* good wins
 3. **Population diversity** — a quality-diversity archive nudges the ecology toward covering different niches
 
+### Three Levels of Learning
+
+1. **Local plasticity** — Hebbian reward-modulated updates within each organelle (per episode)
+2. **Population selection** — assimilation + merging of successful adapters (per generation)
+3. **Meta-evolution** — tuning ecology parameters (assimilation threshold, energy floor, etc.)
+
 ---
 
 ## Key Results (Qwen3-0.6B, 150 generations)
@@ -54,6 +60,42 @@ See `docs/paper_packs/` for detailed run reports and plots.
 
 ---
 
+## Comparing Evolution vs SFT (Compute-Matched)
+
+A key question: does evolutionary adaptation actually outperform standard supervised fine-tuning given the same compute budget? The `track-compute-and-do-sft` branch sets up this comparison.
+
+### How It Works
+
+1. **Run evolution** with compute tracking enabled:
+   - `ComputeBudget` tracks total tokens, forward passes, and Hebbian updates
+   - Metrics saved to checkpoint and `gen_summaries.jsonl`
+
+2. **Run SFT with matched budget**:
+   ```bash
+   # Match token budget from evolution checkpoint
+   python scripts/run_sft.py \
+       --checkpoint artifacts_evo/checkpoint.pt \
+       --data config/training/regex_sft_data.jsonl \
+       --output artifacts_sft
+
+   # Or specify explicit budget
+   python scripts/run_sft.py \
+       --token-budget 500000 \
+       --data config/training/regex_sft_data.jsonl \
+       --output artifacts_sft
+   ```
+   - `TokenBudgetCallback` stops training when budget exhausted
+   - Exports LoRA compatible with `HostKernel.load_organelle_adapter()`
+
+3. **Evaluate both** on the same holdout tasks and compare:
+   - Accuracy, cost, latency
+   - Generalization (holdout vs training distribution)
+   - Compute efficiency (tokens per performance gain)
+
+This enables fair comparison: evolutionary adaptation (many small adapters + population dynamics) vs traditional gradient-based fine-tuning (single adapter, supervised loss).
+
+---
+
 ## Project Structure
 
 ```
@@ -64,7 +106,7 @@ src/symbiont_ecology/
 ├── evolution/      # Population manager, model merger, morphogenesis
 ├── environment/    # Task factory, ecology loop, grid controller
 ├── economics/      # ATP ledger, energy settlement
-├── metrics/        # Telemetry sink, QD archive
+├── metrics/        # Telemetry sink, QD archive, ComputeBudget tracking
 └── config.py       # Pydantic config models
 
 config/
