@@ -16,6 +16,8 @@ def parse_policy_json(text: str, allowed: list[str]) -> dict[str, object]:
     import json
     import re
 
+    allowed_set = set(allowed)
+
     def find_fenced(block: str) -> list[str]:
         candidates: list[str] = []
         # ```json ... ``` preferred
@@ -66,7 +68,7 @@ def parse_policy_json(text: str, allowed: list[str]) -> dict[str, object]:
                 return None
         if not isinstance(data, dict):
             return None
-        return {key: value for key, value in data.items() if key in allowed}
+        return {key: value for key, value in data.items() if key in allowed_set}
 
     def coerce_value(token: str) -> object:
         raw = token.strip()
@@ -98,7 +100,7 @@ def parse_policy_json(text: str, allowed: list[str]) -> dict[str, object]:
         equals_matches = re.findall(r"([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*([^\s;,]+)", block)
         colon_matches = re.findall(r"([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*([^\s;,{}]+)", block)
         for key, value in equals_matches + colon_matches:
-            if allowed and key not in allowed:
+            if allowed_set and key not in allowed_set:
                 continue
             kvs.setdefault(key, coerce_value(value))
         return kvs

@@ -60,6 +60,9 @@ class MutationType(str, Enum):
 # Data Classes
 # ---------------------------------------------------------------------------
 
+_RESPONSE_CODE_BLOCK_RE = re.compile(r"```(?:regex|re|regexp)?\s*\n?(.*?)\n?```", re.DOTALL)
+_RESPONSE_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+
 
 @dataclass
 class RegexTestCase:
@@ -297,12 +300,12 @@ def extract_regex_from_response(response: str) -> str:
     text = response.strip()
 
     # Check for code block
-    code_block_match = re.search(r"```(?:regex|re|regexp)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    code_block_match = _RESPONSE_CODE_BLOCK_RE.search(text)
     if code_block_match:
         return code_block_match.group(1).strip()
 
     # Check for backtick inline code
-    inline_match = re.search(r"`([^`]+)`", text)
+    inline_match = _RESPONSE_INLINE_CODE_RE.search(text)
     if inline_match:
         return inline_match.group(1).strip()
 
