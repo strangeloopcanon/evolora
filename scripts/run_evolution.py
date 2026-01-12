@@ -46,6 +46,33 @@ warnings.filterwarnings(
     message=r"Adapter .* was active which is now deleted. Setting active adapter to default.",
 )
 
+_LAST_NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+_LAST_INT_RE = re.compile(r"\b\d+\b")
+
+_WORD_TO_INT: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+}
+
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
@@ -74,7 +101,7 @@ def _git_commit_short() -> str | None:
 
 
 def _parse_last_number(text: str) -> float | None:
-    matches = list(re.finditer(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text))
+    matches = list(_LAST_NUMBER_RE.finditer(text))
     if not matches:
         return None
     try:
@@ -84,7 +111,7 @@ def _parse_last_number(text: str) -> float | None:
 
 
 def _parse_last_int(text: str) -> int | None:
-    matches = list(re.finditer(r"\b\d+\b", text))
+    matches = list(_LAST_INT_RE.finditer(text))
     if not matches:
         return None
     try:
@@ -138,32 +165,9 @@ def _holdout_success(family: str, target: Any, answer: str) -> bool:
         predicted = _parse_last_int(answer)
         if predicted is None:
             tokens = answer.strip().lower().split()
-            words_map = {
-                "zero": 0,
-                "one": 1,
-                "two": 2,
-                "three": 3,
-                "four": 4,
-                "five": 5,
-                "six": 6,
-                "seven": 7,
-                "eight": 8,
-                "nine": 9,
-                "ten": 10,
-                "eleven": 11,
-                "twelve": 12,
-                "thirteen": 13,
-                "fourteen": 14,
-                "fifteen": 15,
-                "sixteen": 16,
-                "seventeen": 17,
-                "eighteen": 18,
-                "nineteen": 19,
-                "twenty": 20,
-            }
             for tok in tokens[::-1]:
-                if tok in words_map:
-                    predicted = words_map[tok]
+                if tok in _WORD_TO_INT:
+                    predicted = _WORD_TO_INT[tok]
                     break
         if predicted is None:
             return False

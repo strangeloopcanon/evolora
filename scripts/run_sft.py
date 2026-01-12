@@ -57,8 +57,8 @@ def load_compute_budget_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]
     """Load compute budget from an evolution checkpoint."""
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    state = pickle.loads(checkpoint_path.read_bytes())
-    compute = state.get("compute_budget")
+    checkpoint_state = pickle.loads(checkpoint_path.read_bytes())
+    compute = checkpoint_state.get("compute_budget")
     if compute is None:
         raise ValueError(
             f"Checkpoint {checkpoint_path} does not contain compute_budget. "
@@ -130,7 +130,7 @@ def load_jsonl_data(path: Path) -> list[dict[str, str]]:
     or:
         {"text": "..."}  (full sequence, no separation)
     """
-    records = []
+    records: list[dict[str, str]] = []
     with path.open(encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()

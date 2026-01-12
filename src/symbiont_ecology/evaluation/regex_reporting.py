@@ -518,7 +518,7 @@ def plot_single_report(
         ax = axes[plot_idx]
         caps = sorted(report.capability_breakdown.keys())
         scores = [report.capability_breakdown[c]["accuracy"] * 100 for c in caps]
-        colors = plt.cm.Blues(np.linspace(0.4, 0.8, len(caps)))
+        colors = plt.get_cmap("Blues")(np.linspace(0.4, 0.8, len(caps)))
 
         bars = ax.bar(range(len(caps)), scores, color=colors)
         ax.set_xticks(range(len(caps)))
@@ -551,7 +551,7 @@ def plot_single_report(
         ax = axes[plot_idx]
         holdouts = sorted(report.holdout_breakdown.keys())
         scores = [report.holdout_breakdown[h]["accuracy"] * 100 for h in holdouts]
-        colors = plt.cm.Greens(np.linspace(0.4, 0.8, len(holdouts)))
+        colors = plt.get_cmap("Greens")(np.linspace(0.4, 0.8, len(holdouts)))
 
         bars = ax.bar(range(len(holdouts)), scores, color=colors)
         ax.set_xticks(range(len(holdouts)))
@@ -576,7 +576,7 @@ def plot_single_report(
         ax = axes[plot_idx]
         mutations = sorted(report.mutation_breakdown.keys())
         scores = [report.mutation_breakdown[m]["accuracy"] * 100 for m in mutations]
-        colors = plt.cm.Oranges(np.linspace(0.4, 0.8, len(mutations)))
+        colors = plt.get_cmap("Oranges")(np.linspace(0.4, 0.8, len(mutations)))
 
         bars = ax.bar(range(len(mutations)), scores, color=colors)
         ax.set_xticks(range(len(mutations)))

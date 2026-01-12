@@ -1,7 +1,11 @@
+import os
+
 import pytest
 import torch
 
 from symbiont_ecology.organelles.hebbian import HebbianLoRAOrganelle
+
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 
 @pytest.fixture(autouse=True)

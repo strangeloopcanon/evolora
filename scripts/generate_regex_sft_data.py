@@ -403,7 +403,7 @@ def generate_greedy_vs_lazy() -> list[dict]:
             },
             {
                 "prompt": "Write a regex to extract the first quoted string",
-                "completion": '"[^"]*?"' + " or " + '".+?"',
+                "completion": '"[^"]*?" or ".+?"',
             },
             {
                 "prompt": "Why would <.*> fail to match a single HTML tag in '<b>text</b>'?",
@@ -486,7 +486,7 @@ def generate_grouping() -> list[dict]:
             },
             {
                 "prompt": "Write a regex with a non-capturing group to match 'http' or 'https'",
-                "completion": "https?://" + " or " + "(?:https?)://",
+                "completion": "https?:// or (?:https?)://",
             },
             {
                 "prompt": "Write a regex to capture the protocol and domain from a URL",
@@ -876,7 +876,7 @@ def generate_extraction_tasks() -> list[dict]:
         },
         {
             "prompt": "Write a regex to extract quoted strings",
-            "completion": r'"([^"]*)"' + " or " + r"'([^']*)'",
+            "completion": "\"([^\"]*)\" or '([^']*)'",
         },
     ]
 
