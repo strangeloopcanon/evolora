@@ -258,10 +258,10 @@ winter:
   post_winter_bonus: 0.25
 environment:
   synthetic_batch_size: 3
-  auto_batch: true
+  auto_batch: false
   batch_min: 1
   batch_max: 4
-  budget_enabled: true
+  budget_enabled: false
   budget_energy_floor: 0.45
   budget_energy_ceiling: 2.5
   budget_trait_bonus: 1.2
