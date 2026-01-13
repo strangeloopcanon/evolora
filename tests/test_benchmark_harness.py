@@ -90,3 +90,23 @@ def test_benchmark_suite_smoke_run(tmp_path: Path):
     assert result.replicates[0].seed == 123
     assert result.open_endedness.merges_total >= 0
     assert (tmp_path / "smoke" / "episodes.jsonl").exists()
+
+
+def test_paper_qwen3_single_baseline_runs_fixed_episode_budget(tmp_path: Path):
+    generations = 10
+    batch_size = 4
+    suite = BenchmarkSuite(
+        cases=[
+            BenchmarkCase(
+                name="paper_single",
+                config_path=Path("config/experiments/paper_qwen3_single.yaml"),
+                generations=generations,
+                batch_size=batch_size,
+                seed=123,
+                backend="stub",
+                disable_human=True,
+            )
+        ]
+    )
+    report = run_benchmark_suite(suite=suite, output_root=tmp_path)
+    assert report.results[0].metrics.episodes == generations * batch_size
