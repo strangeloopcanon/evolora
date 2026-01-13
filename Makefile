@@ -58,3 +58,32 @@ clean:
 format: setup
 	$(BLACK) src tests
 	$(RUFF) check src tests --fix
+
+.PHONY: calibrate-resume
+calibrate-resume: setup
+	./scripts/run_calibration_then_resume.sh \
+	  --config $(CONFIG) \
+	  --output $(OUTPUT) \
+	  --calib-gens $(CALIB_GENS) \
+	  --full-gens $(FULL_GENS) \
+	  --checkpoint-every $(CHECKPOINT_EVERY) \
+	  --seed $(SEED) \
+	  $(if $(DEVICE),--device $(DEVICE),) \
+	  $(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE),) \
+	  $(if $(DISABLE_HUMAN),--disable-human,) \
+	  $(if $(FINAL_HOLDOUT),--final-holdout $(FINAL_HOLDOUT),) \
+	  $(if $(FINAL_HOLDOUT_SAMPLE_SIZE),--final-holdout-sample-size $(FINAL_HOLDOUT_SAMPLE_SIZE),) \
+	  $(if $(NO_ANALYZE),--no-analyze,)
+
+CONFIG ?= config/experiments/paper_qwen3_ecology.yaml
+OUTPUT ?= artifacts_calib_$(shell date +%Y%m%d_%H%M%S)
+CALIB_GENS ?= 10
+FULL_GENS ?= 50
+CHECKPOINT_EVERY ?= 5
+SEED ?= 777
+DEVICE ?=
+BATCH_SIZE ?=
+DISABLE_HUMAN ?= 1
+FINAL_HOLDOUT ?=
+FINAL_HOLDOUT_SAMPLE_SIZE ?=
+NO_ANALYZE ?=

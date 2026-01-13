@@ -57,11 +57,16 @@ This runs a short calibration segment first, then resumes the same run directory
 scripts/run_calibration_then_resume.sh \
   --config config/experiments/paper_qwen3_ecology.yaml \
   --calib-gens 10 \
-  --full-gens 150 \
+  --full-gens 50 \
   --checkpoint-every 5 \
   --seed 777 \
   --disable-human \
   --output artifacts_paper_qwen3_ecology_long_$(date +%Y%m%d_%H%M%S)
+```
+
+You can also run the same workflow via `make`:
+```bash
+make calibrate-resume CONFIG=config/experiments/paper_qwen3_ecology.yaml FULL_GENS=50
 ```
 
 ## Final holdout evaluation (measurement-only)
