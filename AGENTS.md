@@ -1,1 +1,1 @@
-/Users/rohit/Documents/Workspace/Coding/AGENTS.md
+../AGENTS.md
