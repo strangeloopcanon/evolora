@@ -69,6 +69,13 @@ You can also run the same workflow via `make`:
 make calibrate-resume CONFIG=config/experiments/paper_qwen3_ecology.yaml FULL_GENS=50
 ```
 
+## Package results (paper packs)
+
+To copy a small, tracked summary (tables + curated plots) out of gitignored `artifacts_*` run directories, use:
+```bash
+python scripts/paper_pack.py --help
+```
+
 ## Final holdout evaluation (measurement-only)
 
 After the run completes, you can optionally score a fixed holdout and write `final_holdout.json` / `final_holdout.md` into the run directory:
