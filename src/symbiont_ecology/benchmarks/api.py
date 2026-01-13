@@ -528,18 +528,21 @@ def run_benchmark_suite(suite: BenchmarkSuite, output_root: Path) -> BenchmarkRe
 
     for case in suite.cases:
         seeds = list(case.seeds) if case.seeds else [int(case.seed)]
+        seed_count = len(seeds)
+        generations = int(case.generations)
+        batch_size = int(case.batch_size)
         case_root = output_root / case.name
         case_root.mkdir(parents=True, exist_ok=True)
 
         replicate_results: list[BenchmarkReplicateResult] = []
         for seed in seeds:
-            run_dir = case_root if len(seeds) == 1 else case_root / f"seed_{seed}"
+            run_dir = case_root if seed_count == 1 else case_root / f"seed_{seed}"
             run_dir.mkdir(parents=True, exist_ok=True)
             _set_seeds(seed)
 
             generation_summaries: list[dict[str, object]] = []
-            ctx = _patched_stub_backend() if case.backend == "stub" else nullcontext()
-            with ctx:
+            backend_ctx = _patched_stub_backend() if case.backend == "stub" else nullcontext()
+            with backend_ctx:
                 config = load_ecology_config(case.config_path)
                 _prepare_benchmark_config(config, case, run_dir)
 
@@ -583,8 +586,8 @@ def run_benchmark_suite(suite: BenchmarkSuite, output_root: Path) -> BenchmarkRe
                     human_bandit=human_bandit,
                     sink=sink,
                 )
-                for _ in range(int(case.generations)):
-                    summary = loop.run_generation(batch_size=int(case.batch_size))
+                for _ in range(generations):
+                    summary = loop.run_generation(batch_size=batch_size)
                     if isinstance(summary, dict):
                         generation_summaries.append(summary)
 
@@ -597,7 +600,7 @@ def run_benchmark_suite(suite: BenchmarkSuite, output_root: Path) -> BenchmarkRe
                     metrics=_summarize_episodes(episodes_path),
                     assimilation=_summarize_assimilation(assim_path),
                     open_endedness=_summarize_open_endedness(
-                        generation_summaries, generations=int(case.generations)
+                        generation_summaries, generations=generations
                     ),
                     population_size_final=len(population.population),
                 )

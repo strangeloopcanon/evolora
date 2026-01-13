@@ -2008,7 +2008,9 @@ class EcologyLoop:
         reserve_active = bool(reserve_state.get("active"))
         hazard_active = bool(hazard_state.get("active"))
         price_bias = bool(getattr(cfg, "price_bias_low_energy", True))
-        if (not reserve_active and not hazard_active) or not price_bias:
+        if not price_bias:
+            return task
+        if not (reserve_active or hazard_active):
             return task
         try:
             quantile = max(0.0, min(1.0, float(cfg.cheap_cell_quantile)))
