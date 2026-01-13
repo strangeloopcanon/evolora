@@ -217,7 +217,7 @@ MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/evoscope.py <run_dir>
 - `docs/running.md` — how to run longer experiments (resume/holdout)
 - `docs/ecology_overview.md` — conceptual overview + baselines framing
 - `docs/architecture.md` — module-level architecture sketch
-- `docs/paper_packs/README.md` — paper packs + examples
+- `docs/paper_packs/README.md` — paper packs (tables + plots) + examples
 
 ## Notes
 - Full experiments download model weights from Hugging Face; use the CI benchmark mode above for a fast smoke test without downloads.
