@@ -63,6 +63,57 @@ def test_ecology_loop_runs_generation(tmp_path) -> None:
     assert summary["population"] == len(population.population)
 
 
+def test_ecology_loop_evaluation_runs(tmp_path) -> None:
+    config = EcologyConfig()
+    config.evaluation.enabled = True
+    config.evaluation.cadence = 1
+    config.evaluation.sample_size = 1
+    config.evaluation.reward_weight = 0.5
+
+    tasks_path = tmp_path / "evaluation_tasks.jsonl"
+    tasks_path.write_text(
+        '{"prompt":"Count words in \\"one two\\"","target":2,"family":"word.count","depth":"short"}\n'
+    )
+    config.evaluation.tasks_path = tasks_path
+
+    host = HostKernel(config=config, router=BanditRouter(), ledger=ATPLedger())
+    host.freeze_host()
+    population = PopulationManager(config.evolution, config.foraging)
+    organelle_id = host.spawn_organelle(rank=2)
+    population.register(
+        Genome(
+            organelle_id=organelle_id,
+            drive_weights={"novelty": 0.5},
+            gate_bias=0.0,
+            rank=2,
+        )
+    )
+    assimilation = AssimilationTester(
+        uplift_threshold=config.evolution.assimilation_threshold,
+        p_value_threshold=config.evolution.assimilation_p_value,
+        safety_budget=0,
+    )
+    environment = GridEnvironment(
+        grid_cfg=config.grid,
+        controller_cfg=config.controller,
+        pricing_cfg=config.pricing,
+        canary_cfg=config.canary,
+        seed=3,
+    )
+    loop = EcologyLoop(
+        config=config,
+        host=host,
+        environment=environment,
+        population=population,
+        assimilation=assimilation,
+        human_bandit=HumanBandit(),
+        sink=None,
+    )
+    summary = loop.run_generation(batch_size=1)
+    assert "evaluation" in summary
+    assert "reward_weight" in summary["evaluation"]
+
+
 def test_human_bandit_frequency_gating() -> None:
     config = EcologyConfig()
     config.human_bandit.frequency = 0.5

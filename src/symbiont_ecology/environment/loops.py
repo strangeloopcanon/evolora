@@ -211,6 +211,11 @@ class EcologyLoop:
         self._merge_audits_gen = []
 
     def run_generation(self, batch_size: int) -> dict[str, object]:
+        config = self.config
+        host = self.host
+        population = self.population
+        energy_cfg = config.energy
+
         self.generation_index += 1
         self.promotions_this_gen = 0
         self.trial_creations_this_gen = 0
@@ -258,37 +263,38 @@ class EcologyLoop:
             "events": [],
         }
         if self.morphogenesis is None:
-            self.morphogenesis = MorphogenesisController(config=self.config, host=self.host)
-        if self.config.evaluation.enabled and self.evaluation_manager is None:
+            self.morphogenesis = MorphogenesisController(config=config, host=host)
+        if config.evaluation.enabled and self.evaluation_manager is None:
             runtime = EvaluationManager.from_file(
-                enabled=self.config.evaluation.enabled,
-                cadence=self.config.evaluation.cadence,
-                tasks_path=self.config.evaluation.tasks_path,
-                sample_size=self.config.evaluation.sample_size,
-                reward_weight=self.config.evaluation.reward_weight,
+                enabled=config.evaluation.enabled,
+                cadence=config.evaluation.cadence,
+                tasks_path=config.evaluation.tasks_path,
+                sample_size=config.evaluation.sample_size,
+                reward_weight=config.evaluation.reward_weight,
             )
             self.evaluation_manager = EvaluationManager(runtime)
-        organelle_ids = self.host.list_organelle_ids()
+        organelle_ids = host.list_organelle_ids()
         if not organelle_ids:
             return {}
 
         self._update_winter_cycle()
-        ticket_base = self.config.energy.m
+        ticket_base = energy_cfg.m
         ticket = ticket_base * self._winter_ticket_multiplier
         active: list[str] = []
         bankrupt: list[str] = []
-        grace = max(1, self.config.energy.bankruptcy_grace)
+        grace = max(1, energy_cfg.bankruptcy_grace)
         for organelle_id in organelle_ids:
-            balance = self.host.ledger.energy_balance(organelle_id)
+            balance = host.ledger.energy_balance(organelle_id)
             if balance < ticket:
                 bankrupt.append(organelle_id)
                 continue
-            self.host.ledger.consume_energy(organelle_id, ticket)
+            host.ledger.consume_energy(organelle_id, ticket)
             active.append(organelle_id)
 
         culled_bankrupt: list[str] = []
+        bankrupt_set = set(bankrupt)
         for organelle_id in organelle_ids:
-            if organelle_id in bankrupt:
+            if organelle_id in bankrupt_set:
                 strikes = self.bankruptcy_strikes.get(organelle_id, 0) + 1
                 self.bankruptcy_strikes[organelle_id] = strikes
             else:
@@ -305,8 +311,8 @@ class EcologyLoop:
                 for key in list(self.assimilation_cooldown.keys()):
                     if key[0] == organelle_id:
                         self.assimilation_cooldown.pop(key, None)
-                self.host.retire_organelle(organelle_id)
-                self.population.remove(organelle_id)
+                host.retire_organelle(organelle_id)
+                population.remove(organelle_id)
 
         if self._winter_active and culled_bankrupt:
             preview = culled_bankrupt[:5]
@@ -320,9 +326,9 @@ class EcologyLoop:
             )
 
         for organelle_id in bankrupt:
-            self.population.record_score(organelle_id, 0.0)
-            self.population.record_energy(organelle_id, 0.0)
-            self.population.record_roi(organelle_id, 0.0)
+            population.record_score(organelle_id, 0.0)
+            population.record_energy(organelle_id, 0.0)
+            population.record_roi(organelle_id, 0.0)
 
         if self.colonies:
             try:
@@ -332,7 +338,7 @@ class EcologyLoop:
 
         # Prepare colony comms budgets (bandwidth + per-gen caps)
         if self.colonies:
-            tune = self.config.assimilation_tuning
+            tune = config.assimilation_tuning
             bw_base = float(getattr(tune, "colony_bandwidth_base", 2.0))
             bw_frac = float(getattr(tune, "colony_bandwidth_frac", 0.02))
             hazard_scale = float(getattr(tune, "colony_hazard_bandwidth_scale", 0.3))
@@ -348,11 +354,12 @@ class EcologyLoop:
             )
             if read_cap_hazard <= 0:
                 read_cap_hazard = max(0, min(read_cap_base, 1))
+            hazard_state = self._hazard_state
             for _cid, meta in self.colonies.items():
                 members = [str(x) for x in meta.get("members", [])]
                 pot = max(0.0, float(meta.get("pot", 0.0)))
                 hazard_members = sum(
-                    1 for m in members if bool(self._hazard_state.get(m, {}).get("active"))
+                    1 for m in members if bool(hazard_state.get(m, {}).get("active"))
                 )
                 hazard_active = hazard_members > 0
                 bandwidth = min(bw_base, pot * bw_frac)
@@ -2001,7 +2008,9 @@ class EcologyLoop:
         reserve_active = bool(reserve_state.get("active"))
         hazard_active = bool(hazard_state.get("active"))
         price_bias = bool(getattr(cfg, "price_bias_low_energy", True))
-        if (not reserve_active and not hazard_active) or not price_bias:
+        if not price_bias:
+            return task
+        if not (reserve_active or hazard_active):
             return task
         try:
             quantile = max(0.0, min(1.0, float(cfg.cheap_cell_quantile)))
