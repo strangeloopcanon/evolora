@@ -202,6 +202,11 @@ FINAL_HOLDOUT_SAMPLE_SIZE=120 \
 scripts/run_paper_ecology_suite.sh all
 ```
 
+For long runs, a good workflow is “calibrate → resume”: run ~10 generations to validate the config/model load, then resume the same run directory to the full length via `--resume-from`:
+```bash
+make calibrate-resume CONFIG=config/experiments/paper_qwen3_ecology.yaml FULL_GENS=50
+```
+
 ## Analyze a run
 ```bash
 MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/analyze_ecology_run.py <run_dir> --plots --report
