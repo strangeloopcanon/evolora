@@ -64,6 +64,8 @@ See `docs/paper_packs/` for detailed run reports and plots.
 
 A key question: does evolutionary adaptation actually outperform standard supervised fine-tuning given the same compute budget? This section explains how to run a fair comparison.
 
+Note: `scripts/run_sft.py` depends on `datasets` (in `requirements.txt`). If you see `ModuleNotFoundError: No module named 'datasets'`, run `.venv/bin/pip install -r requirements.txt`.
+
 ### Quick E2E Example
 
 ```bash
@@ -119,6 +121,7 @@ python scripts/evaluate_holdout.py \
        --holdout config/evaluation/regex_generalization.jsonl \
        --sft-adapter artifacts_sft/peft_adapter \
        --evo-checkpoint artifacts_evo/checkpoint.pt \
+       --output comparison_results.json \
        --verbose
    ```
    - Compares base model, SFT, and best evolution organelle
