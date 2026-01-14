@@ -98,7 +98,7 @@ Train a standard SFT LoRA with a compute-matched budget from an evolution run fo
 .venv/bin/python scripts/run_sft.py \
   --checkpoint <run_dir>/checkpoint.pt \
   --match-budget-field total_tokens \
-  --backprop-multiplier 3.0 \
+  --backprop-multiplier 2.0 \
   --data training_data.jsonl \
   --output sft_baseline_matched
 

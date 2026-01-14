@@ -71,7 +71,7 @@ def estimate_sft_token_budget_from_checkpoint(
     checkpoint_path: Path,
     *,
     match_budget_field: str = "total_tokens",
-    backprop_multiplier: float = 3.0,
+    backprop_multiplier: float = 2.0,
 ) -> tuple[int, dict[str, object]]:
     """Estimate an SFT token budget from an evolution checkpoint.
 
@@ -345,10 +345,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backprop-multiplier",
         type=float,
-        default=3.0,
+        default=2.0,
         help=(
             "Approximate relative compute of SFT per token vs forward-only inference "
-            "(default: 3.0). SFT token budget = evolution_tokens / backprop_multiplier."
+            "(default: 2.0). SFT token budget = evolution_tokens / backprop_multiplier."
         ),
     )
 
