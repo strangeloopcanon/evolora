@@ -67,14 +67,52 @@ def load_compute_budget_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]
     return compute
 
 
-def estimate_tokens_from_checkpoint(checkpoint_path: Path) -> int:
-    """Extract total_tokens from a checkpoint's compute budget."""
+def estimate_sft_token_budget_from_checkpoint(
+    checkpoint_path: Path,
+    *,
+    match_budget_field: str = "total_tokens",
+    backprop_multiplier: float = 3.0,
+) -> tuple[int, dict[str, object]]:
+    """Estimate an SFT token budget from an evolution checkpoint.
+
+    The evolution runner tracks *forward-only* token counts (prompt + generated) in
+    `compute_budget.total_tokens` (and subset `train_tokens`).
+
+    SFT tokens are more expensive than forward-only inference because they include
+    backprop. We approximate this with a multiplier and convert the evolution
+    compute budget into an SFT token budget:
+
+        sft_token_budget ≈ evolution_tokens / backprop_multiplier
+    """
     budget = load_compute_budget_from_checkpoint(checkpoint_path)
-    # Prefer training-only tokens when available (fair compute match vs. update-bearing episodes).
-    # Fall back to total_tokens for backward compatibility with older checkpoints.
-    if "train_tokens" in budget:
-        return int(budget.get("train_tokens", 0))
-    return int(budget.get("total_tokens", 0))
+    field = str(match_budget_field)
+    if field not in ("total_tokens", "train_tokens"):
+        raise ValueError(f"Unsupported match_budget_field: {field}")
+
+    raw = budget.get(field)
+    if raw is None:
+        fallback = "total_tokens" if field != "total_tokens" else "train_tokens"
+        raw = budget.get(fallback)
+        if raw is not None:
+            field = fallback
+    evolution_tokens = int(raw or 0)
+    if evolution_tokens <= 0:
+        raise ValueError(
+            f"Checkpoint compute_budget.{field} is missing/zero; cannot compute an SFT token budget"
+        )
+
+    multiplier = float(backprop_multiplier)
+    if multiplier <= 0:
+        raise ValueError("--backprop-multiplier must be positive")
+    sft_tokens = max(1, int(evolution_tokens / multiplier))
+
+    details: dict[str, object] = {
+        "match_budget_field": field,
+        "evolution_tokens": evolution_tokens,
+        "backprop_multiplier": multiplier,
+        "sft_token_budget": sft_tokens,
+    }
+    return sft_tokens, details
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +332,25 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="Explicit token budget (alternative to --checkpoint).",
     )
+    parser.add_argument(
+        "--match-budget-field",
+        type=str,
+        choices=["total_tokens", "train_tokens"],
+        default="total_tokens",
+        help=(
+            "When using --checkpoint, which evolution compute_budget field to match before applying "
+            "--backprop-multiplier (default: total_tokens)."
+        ),
+    )
+    parser.add_argument(
+        "--backprop-multiplier",
+        type=float,
+        default=3.0,
+        help=(
+            "Approximate relative compute of SFT per token vs forward-only inference "
+            "(default: 3.0). SFT token budget = evolution_tokens / backprop_multiplier."
+        ),
+    )
 
     # Data
     parser.add_argument(
@@ -381,9 +438,22 @@ def main() -> None:
     args = parse_args()
 
     # Determine token budget
+    budget_details: dict[str, object] | None = None
     if args.checkpoint:
-        token_budget = estimate_tokens_from_checkpoint(args.checkpoint)
-        print(f"[sft] Loaded token budget from checkpoint: {token_budget:,} tokens")
+        token_budget, details = estimate_sft_token_budget_from_checkpoint(
+            args.checkpoint,
+            match_budget_field=args.match_budget_field,
+            backprop_multiplier=args.backprop_multiplier,
+        )
+        budget_details = details
+        print(
+            "[sft] Loaded evolution compute budget: "
+            f"{details['evolution_tokens']:,} {details['match_budget_field']} tokens"
+        )
+        print(
+            f"[sft] Backprop multiplier: {details['backprop_multiplier']:.2f} "
+            f"→ SFT token budget: {token_budget:,} tokens"
+        )
     else:
         token_budget = args.token_budget
         print(f"[sft] Using explicit token budget: {token_budget:,} tokens")
@@ -507,6 +577,7 @@ def main() -> None:
         "tokens_processed": token_state.total_tokens,
         "training_examples": len(raw_data),
         "source_checkpoint": str(args.checkpoint) if args.checkpoint else None,
+        "budget_details": budget_details,
     }
     metadata_path = args.output / "sft_metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2))

@@ -185,6 +185,8 @@ if [ "$RUN_SFT" -eq 1 ]; then
     --checkpoint "$CHECKPOINT" \
     --data "$SFT_DATA" \
     --model "$MODEL" \
+    --match-budget-field total_tokens \
+    --backprop-multiplier 3.0 \
     --output "$SFT_OUT"
 fi
 

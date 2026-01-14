@@ -2,7 +2,7 @@
 #
 # This config is intended for the "evolution vs compute-matched SFT" regex track:
 # - Evolution run: `python scripts/run_evolution.py --config config/experiments/qwen3_regex.yaml ...`
-# - Compute-matched SFT: `python scripts/run_sft.py --checkpoint <run_dir>/checkpoint.pt --data config/training/regex_sft_data.jsonl --model Qwen/Qwen2.5-0.5B ...`
+# - Compute-matched SFT: `python scripts/run_sft.py --checkpoint <run_dir>/checkpoint.pt --match-budget-field total_tokens --backprop-multiplier 3.0 --data config/training/regex_sft_data.jsonl --model Qwen/Qwen2.5-0.5B ...`
 # - Holdout eval: `python scripts/evaluate_holdout.py --holdout config/evaluation/regex_generalization.jsonl ...`
 host:
   backbone_type: gemma

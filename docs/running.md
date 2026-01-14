@@ -91,12 +91,14 @@ PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python 
 
 ## SFT baseline (compute-matched)
 
-Train a standard SFT LoRA with the same token budget as an evolution run for fair comparison:
+Train a standard SFT LoRA with a compute-matched budget from an evolution run for fair comparison:
 
 ```bash
 # Match compute to an evolution checkpoint
 .venv/bin/python scripts/run_sft.py \
   --checkpoint <run_dir>/checkpoint.pt \
+  --match-budget-field total_tokens \
+  --backprop-multiplier 3.0 \
   --data training_data.jsonl \
   --output sft_baseline_matched
 

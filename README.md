@@ -80,6 +80,8 @@ python scripts/run_evolution.py \
 # 2. Run SFT with matched token budget from the evolution checkpoint
 python scripts/run_sft.py \
     --checkpoint artifacts_evo_run/checkpoint.pt \
+    --match-budget-field total_tokens \
+    --backprop-multiplier 3.0 \
     --data config/training/regex_sft_data.jsonl \
     --output artifacts_sft_run
 
@@ -103,6 +105,8 @@ python scripts/evaluate_holdout.py \
    # Match token budget from evolution checkpoint
    python scripts/run_sft.py \
        --checkpoint artifacts_evo/checkpoint.pt \
+       --match-budget-field total_tokens \
+       --backprop-multiplier 3.0 \
        --data config/training/regex_sft_data.jsonl \
        --output artifacts_sft
 
@@ -113,6 +117,7 @@ python scripts/evaluate_holdout.py \
        --output artifacts_sft
    ```
    - `TokenBudgetCallback` stops training when budget exhausted
+   - When using `--checkpoint`, SFT converts evolution *forward-only* tokens into an SFT token budget using `--backprop-multiplier`
    - Exports LoRA compatible with `HostKernel.load_organelle_adapter()`
 
 3. **Evaluate both** on the same holdout tasks:
@@ -140,7 +145,7 @@ python scripts/evaluate_holdout.py \
 
 - **Model compatibility**: The evolution checkpoint and evaluation must use the same base model (check tensor shapes match)
 - **Token tracking**: Tokens are tracked in `observations.metrics.tokens` in episodes.jsonl
-- **Best organelle selection**: `evaluate_holdout.py` automatically picks the organelle with highest ROI
+- **Best organelle selection**: `evaluate_holdout.py` selects the best organelle by scoring candidates on a separate selection/validation set (configurable via `--evo-selection-tasks`), with ROI-based fallback
 
 This enables fair comparison: evolutionary adaptation (many small adapters + population dynamics) vs traditional gradient-based fine-tuning (single adapter, supervised loss).
 
