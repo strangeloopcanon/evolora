@@ -87,3 +87,28 @@ DISABLE_HUMAN ?= 1
 FINAL_HOLDOUT ?=
 FINAL_HOLDOUT_SAMPLE_SIZE ?=
 NO_ANALYZE ?=
+
+.PHONY: regex-evo-vs-sft
+regex-evo-vs-sft: setup
+	./scripts/run_regex_evo_vs_sft.sh \
+	  --config $(REGEX_CONFIG) \
+	  --output $(REGEX_OUTPUT) \
+	  --calib-gens $(REGEX_CALIB_GENS) \
+	  --full-gens $(REGEX_FULL_GENS) \
+	  --checkpoint-every $(REGEX_CHECKPOINT_EVERY) \
+	  --seed $(REGEX_SEED) \
+	  $(if $(REGEX_DEVICE),--device $(REGEX_DEVICE),) \
+	  $(if $(REGEX_BATCH_SIZE),--batch-size $(REGEX_BATCH_SIZE),) \
+	  $(if $(REGEX_DISABLE_HUMAN),--disable-human,) \
+	  $(if $(REGEX_EVAL_MAX_SAMPLES),--eval-max-samples $(REGEX_EVAL_MAX_SAMPLES),)
+
+REGEX_CONFIG ?= config/experiments/qwen3_regex.yaml
+REGEX_OUTPUT ?= artifacts_regex_evo_sft_$(shell date +%Y%m%d_%H%M%S)
+REGEX_CALIB_GENS ?= 5
+REGEX_FULL_GENS ?= 50
+REGEX_CHECKPOINT_EVERY ?= 5
+REGEX_SEED ?= 777
+REGEX_DEVICE ?=
+REGEX_BATCH_SIZE ?=
+REGEX_DISABLE_HUMAN ?= 1
+REGEX_EVAL_MAX_SAMPLES ?=

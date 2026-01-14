@@ -70,6 +70,10 @@ def load_compute_budget_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]
 def estimate_tokens_from_checkpoint(checkpoint_path: Path) -> int:
     """Extract total_tokens from a checkpoint's compute budget."""
     budget = load_compute_budget_from_checkpoint(checkpoint_path)
+    # Prefer training-only tokens when available (fair compute match vs. update-bearing episodes).
+    # Fall back to total_tokens for backward compatibility with older checkpoints.
+    if "train_tokens" in budget:
+        return int(budget.get("train_tokens", 0))
     return int(budget.get("total_tokens", 0))
 
 

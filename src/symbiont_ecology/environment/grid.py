@@ -17,6 +17,7 @@ from symbiont_ecology.config import (
     PricingConfig,
 )
 from symbiont_ecology.metrics.telemetry import RewardBreakdown
+from symbiont_ecology.utils.regex_extract import pick_best_regex_candidate
 
 GridKey = Tuple[str, str]
 
@@ -146,56 +147,26 @@ class GridTask:
             task_reward = 1.0 if success else 0.0
 
         elif self.family == "regex":
-            # Extract the regex pattern from the response
-            import re as regex_module
-
-            # Clean up the response - remove markdown, quotes, etc.
-            pattern_text = clean.strip()
-            if pattern_text.startswith("```"):
-                stripped = pattern_text.strip("`")
-                lines = [line.strip() for line in stripped.splitlines() if line.strip()]
-                if lines and lines[0].lower() in ["regex", "regexp", "re"]:
-                    lines = lines[1:]
-                pattern_text = lines[0] if lines else ""
-
-            # Remove common delimiters if present
-            pattern_text = pattern_text.strip("'\"` /")
-
             # The target is a dict containing the correct pattern and test strings
             if isinstance(self.target, dict):
-                correct_pattern = self.target.get("pattern", "")
                 test_strings = self.target.get("test_strings", [])
             else:
-                # Fallback: treat target as the pattern string directly
-                correct_pattern = str(self.target)
                 test_strings = []
 
-            # Evaluate by testing if the pattern works correctly on test cases
-            success = False
-            try:
-                # Compile the user's pattern
-                user_regex = regex_module.compile(pattern_text)
-
-                # If we have test strings, check if pattern behaves correctly
-                if test_strings:
-                    all_correct = True
-                    for test_case in test_strings:
-                        test_str = test_case.get("string", "")
-                        should_match = test_case.get("should_match", False)
-                        does_match = bool(user_regex.fullmatch(test_str))
-
-                        if does_match != should_match:
-                            all_correct = False
-                            break
-
-                    success = all_correct
-                else:
-                    # No test strings - just check if patterns are equivalent
-                    # This is a simplified check
-                    success = pattern_text == correct_pattern
-
-            except (regex_module.error, Exception):
-                # Invalid regex pattern
+            picked, details = pick_best_regex_candidate(clean, test_cases=test_strings)
+            if (
+                picked
+                and isinstance(details.get("passed"), int)
+                and isinstance(details.get("total"), int)
+            ):
+                success = int(details["passed"]) >= int(details["total"]) > 0
+            elif picked:
+                try:
+                    re.compile(picked)
+                    success = True
+                except re.error:
+                    success = False
+            else:
                 success = False
 
             task_reward = 1.0 if success else 0.0

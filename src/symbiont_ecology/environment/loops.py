@@ -1421,6 +1421,9 @@ class EcologyLoop:
                 "roi": settlement["roi"],
                 "metrics": {
                     "tokens": metrics.tokens,
+                    "prompt_tokens": getattr(metrics, "prompt_tokens", 0),
+                    "generated_tokens": getattr(metrics, "generated_tokens", 0),
+                    "recurrent_passes": getattr(metrics, "recurrent_passes", 1),
                     "latency_ms": metrics.latency_ms,
                     "flops_estimate": metrics.flops_estimate,
                     "memory_gb": metrics.memory_gb,

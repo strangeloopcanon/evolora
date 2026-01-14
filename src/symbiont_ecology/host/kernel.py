@@ -15,7 +15,7 @@ from symbiont_ecology.config import EcologyConfig, HebbianConfig
 from symbiont_ecology.evolution.ledger import ATPLedger
 from symbiont_ecology.host.backbone import HFBackbone
 from symbiont_ecology.interfaces.messages import MessageEnvelope, Observation, Plan
-from symbiont_ecology.metrics.telemetry import RewardBreakdown, RouteEvent
+from symbiont_ecology.metrics.telemetry import ComputeBudget, RewardBreakdown, RouteEvent
 from symbiont_ecology.organelles import peft_hebbian
 from symbiont_ecology.organelles.base import Organelle, OrganelleContext
 from symbiont_ecology.routing.router import BanditRouter
@@ -29,6 +29,7 @@ class RouteMetrics:
     tokens: int
     latency_ms: float
     prompt_tokens: int
+    generated_tokens: int
     trainable_params: int
     flops_estimate: float
     memory_gb: float
@@ -57,6 +58,7 @@ class HostKernel:
     config: EcologyConfig
     router: BanditRouter
     ledger: ATPLedger
+    compute_budget: ComputeBudget | None = None
     device: torch.device = field(init=False)
     backbone: HFBackbone = field(init=False)
     organelles: dict[str, Organelle] = field(default_factory=dict)
@@ -114,6 +116,7 @@ class HostKernel:
         latent_mix: float | None = None,
         recurrent_passes: int | None = None,
     ) -> HostStepResult:
+        training_intent = self._is_training_intent(intent)
         observation = Observation(state={"text": prompt})
         plan = Plan(steps=[], confidence=0.1)
         envelope = MessageEnvelope(
@@ -135,6 +138,17 @@ class HostKernel:
             except Exception:
                 pass
         envelope.observation.state["latent"] = latent.squeeze(0).tolist()
+        prompt_tokens_fallback = self._count_tokens(prompt)
+        hidden = int(
+            getattr(self.backbone, "hidden_size", prompt_tokens_fallback) or prompt_tokens_fallback
+        )
+        if self.compute_budget is not None:
+            # Account for the backbone latent extraction pass (no generation tokens).
+            try:
+                flops = float(prompt_tokens_fallback * hidden * 2)
+                self.compute_budget.record_forward(prompt_tokens_fallback, 0, flops, training=False)
+            except Exception:
+                pass
         organelle_pool = (
             {oid: self.organelles[oid] for oid in allowed_organelle_ids if oid in self.organelles}
             if allowed_organelle_ids is not None
@@ -143,14 +157,15 @@ class HostKernel:
         routed = self.router.select(organelle_pool, envelope, k=max_routes)
         route_events: list[RouteEvent] = []
         responses: dict[str, RouteMetrics] = {}
-        prompt_tokens = self._count_tokens(prompt)
-        hidden = getattr(self.backbone, "hidden_size", prompt_tokens)
+        prompt_tokens = prompt_tokens_fallback
         for organelle in routed:
             env = envelope.model_copy(deep=True)
             base_prompt = prompt
             history: list[str] = []
             passes = recurrent_passes or self._default_recurrence_passes(intent)
             passes = max(1, passes)
+            prompt_tokens_total = 0
+            generated_tokens_total = 0
             for pass_idx in range(passes):
                 working_text = self._format_recurrence_prompt(
                     base_prompt, history, pass_idx + 1, passes
@@ -160,6 +175,15 @@ class HostKernel:
                 env.observation.state["recurrent_total"] = passes
                 env.observation.state["recurrent_history"] = list(history)
                 env = organelle.forward(env)
+                try:
+                    pt = env.observation.state.get("prompt_tokens")
+                    if isinstance(pt, int) and pt > 0:
+                        prompt_tokens_total += pt
+                    gt = env.observation.state.get("generated_tokens")
+                    if isinstance(gt, int) and gt >= 0:
+                        generated_tokens_total += gt
+                except Exception:
+                    pass
                 answer_step = env.observation.state.get("answer", "")
                 if answer_step:
                     history.append(answer_step)
@@ -167,6 +191,9 @@ class HostKernel:
             answer = envelope.observation.state.get("answer", "")
             trainable = self._trainable_params(organelle)
             adapters = self._active_adapters(organelle)
+            if prompt_tokens_total <= 0:
+                prompt_tokens_total = prompt_tokens
+            total_tokens = prompt_tokens_total + max(0, generated_tokens_total)
             route_events.append(
                 RouteEvent(
                     organelle_id=organelle.organelle_id,
@@ -177,23 +204,34 @@ class HostKernel:
                     risk_penalty=0.0,
                     cost_penalty=0.0,
                     atp_delta=0.0,
-                    tokens=prompt_tokens,
+                    tokens=total_tokens,
                     latency_ms=0.0,
                 )
             )
-            flops = float(prompt_tokens * hidden * 2 * passes)
-            memory_gb = float(prompt_tokens * hidden * 2 * passes) / (1024**3)
+            flops = float(total_tokens * hidden * 2)
+            memory_gb = float(total_tokens * hidden * 2) / (1024**3)
             responses[organelle.organelle_id] = RouteMetrics(
                 answer=answer,
-                tokens=prompt_tokens,
+                tokens=total_tokens,
                 latency_ms=0.0,
-                prompt_tokens=prompt_tokens,
+                prompt_tokens=prompt_tokens_total,
+                generated_tokens=max(0, generated_tokens_total),
                 trainable_params=trainable,
                 flops_estimate=flops,
                 memory_gb=memory_gb,
                 active_adapters=adapters,
                 recurrent_passes=passes,
             )
+            if self.compute_budget is not None:
+                try:
+                    self.compute_budget.record_forward(
+                        prompt_tokens_total,
+                        max(0, generated_tokens_total),
+                        flops,
+                        training=training_intent,
+                    )
+                except Exception:
+                    pass
         latency_ms = (time.time() - t0) * 1000.0
         for evt in route_events:
             evt.latency_ms = latency_ms
@@ -204,6 +242,7 @@ class HostKernel:
                     tokens=metrics.tokens,
                     latency_ms=latency_ms,
                     prompt_tokens=metrics.prompt_tokens,
+                    generated_tokens=metrics.generated_tokens,
                     trainable_params=metrics.trainable_params,
                     flops_estimate=metrics.flops_estimate,
                     memory_gb=metrics.memory_gb,
@@ -219,11 +258,20 @@ class HostKernel:
         envelope: MessageEnvelope,
         rewards: dict[str, RewardBreakdown],
     ) -> None:
+        intent_goal = ""
+        if getattr(envelope, "intent", None) is not None:
+            intent_goal = str(getattr(envelope.intent, "goal", "") or "")
+        training_intent = self._is_training_intent(intent_goal)
         for organelle_id, breakdown in rewards.items():
             organelle = self.organelles.get(organelle_id)
             if organelle is None:
                 continue
             organelle.update(envelope, breakdown)
+            if self.compute_budget is not None:
+                try:
+                    self.compute_budget.record_hebbian_update(training=training_intent)
+                except Exception:
+                    pass
             # Mint ATP based on total reward (which already subtracts cost_penalty)
             net_gain = max(0.0, breakdown.total)
             self.ledger.credit(organelle_id, net_gain * self.config.organism.atp_mint_rate)
@@ -247,6 +295,10 @@ class HostKernel:
         else:
             passes = getattr(host_cfg, "recurrence_train_passes", 1)
         return max(1, int(passes))
+
+    @staticmethod
+    def _is_training_intent(intent: str) -> bool:
+        return str(intent).strip().lower() == "solve task"
 
     def _format_recurrence_prompt(
         self,

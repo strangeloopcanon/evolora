@@ -39,7 +39,6 @@ from typing import Any
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-_CODE_BLOCK_RE = re.compile(r"```(?:regex)?\s*\n?(.*?)\n?```", re.DOTALL)
 _LORA_TARGET_MODULES = (
     "q_proj",
     "k_proj",
@@ -124,8 +123,10 @@ def check_answer(response: str, task: dict[str, Any]) -> tuple[bool, str]:
 
     # For synthesis tasks with test cases, try to validate the regex
     if test_cases:
-        # Extract the regex pattern from the response
-        pattern = extract_regex_pattern(response)
+        # Extract the regex pattern from the response using shared heuristics
+        from symbiont_ecology.utils.regex_extract import pick_best_regex_candidate
+
+        pattern, _pick_details = pick_best_regex_candidate(response, test_cases=test_cases)
         if not pattern:
             return False, "no pattern extracted"
 
@@ -139,7 +140,8 @@ def check_answer(response: str, task: dict[str, Any]) -> tuple[bool, str]:
                 if matches == should_match:
                     passed += 1
 
-            is_correct = passed >= len(test_cases) * 0.7  # 70% threshold
+            # Strict: require all test cases to pass for correctness.
+            is_correct = passed == len(test_cases)
             return is_correct, f"test cases: {passed}/{len(test_cases)}"
         except re.error as e:
             return False, f"invalid regex: {e}"
@@ -147,36 +149,6 @@ def check_answer(response: str, task: dict[str, Any]) -> tuple[bool, str]:
     # Default: check if response is non-empty and looks reasonable
     is_correct = len(response.strip()) > 0 and not response.strip().startswith("I don't")
     return is_correct, "non-empty response"
-
-
-def extract_regex_pattern(response: str) -> str | None:
-    """Extract a regex pattern from a model response."""
-    response = response.strip()
-
-    # If response is in a code block, extract it
-    code_match = _CODE_BLOCK_RE.search(response)
-    if code_match:
-        return code_match.group(1).strip()
-
-    # If response starts with a pattern-like character, use first line
-    first_line = response.split("\n")[0].strip()
-    if first_line and (
-        first_line.startswith("^")
-        or first_line.startswith("(")
-        or first_line.startswith("[")
-        or first_line.startswith("\\")
-    ):
-        return first_line
-
-    # If response is short and looks like a regex, use it directly
-    if len(response) < 200 and not response.startswith("The ") and not response.startswith("This "):
-        # Remove common prefixes
-        for prefix in ["Pattern: ", "Regex: ", "Answer: "]:
-            if response.startswith(prefix):
-                response = response[len(prefix) :]
-        return response.split("\n")[0].strip()
-
-    return None
 
 
 def evaluate_model(
@@ -242,7 +214,55 @@ def load_sft_model(base_model, adapter_path: Path):
     return PeftModel.from_pretrained(base_model, adapter_path)
 
 
-def load_evo_model(base_model, checkpoint_path: Path, tokenizer, organelle_id: str | None = None):
+def _select_best_organelle_by_training_roi(
+    episodes_path: Path, adapter_ids: set[str], *, family: str = "regex"
+) -> str | None:
+    if not episodes_path.exists():
+        return None
+    roi_sum: dict[str, float] = {}
+    roi_count: dict[str, int] = {}
+    with episodes_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if obj.get("type") != "episode":
+                continue
+            organelles = obj.get("organelles") or []
+            if not organelles:
+                continue
+            oid = str(organelles[0])
+            if oid not in adapter_ids:
+                continue
+            obs = obj.get("observations") or {}
+            cell = obs.get("cell") or {}
+            if str(cell.get("family", "")).lower() != str(family).lower():
+                continue
+            try:
+                roi = float(obs.get("roi", 0.0))
+            except Exception:
+                continue
+            roi_sum[oid] = float(roi_sum.get(oid, 0.0)) + roi
+            roi_count[oid] = int(roi_count.get(oid, 0)) + 1
+    if not roi_sum:
+        return None
+    scored = [(oid, roi_sum[oid] / max(1, roi_count.get(oid, 1))) for oid in roi_sum]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return scored[0][0] if scored else None
+
+
+def load_evo_model(
+    base_model,
+    checkpoint_path: Path,
+    tokenizer,
+    organelle_id: str | None = None,
+    *,
+    training_family: str | None = "regex",
+):
     """Load evolution checkpoint and apply the best organelle.
 
     Args:
@@ -250,6 +270,7 @@ def load_evo_model(base_model, checkpoint_path: Path, tokenizer, organelle_id: s
         checkpoint_path: Path to evolution checkpoint.pt
         tokenizer: Tokenizer (unused but kept for API consistency)
         organelle_id: Specific organelle to load, or None to auto-select best by ROI
+        training_family: When set, prefers the organelle with best training ROI on that family.
 
     Returns:
         (PEFT model with the selected organelle applied, organelle_id)
@@ -270,7 +291,23 @@ def load_evo_model(base_model, checkpoint_path: Path, tokenizer, organelle_id: s
 
     print(f"  [info] Evolution checkpoint has {len(adapter_states)} organelles")
 
-    # Find the best organelle by ROI from gen_summaries if not specified
+    # Prefer organelles that performed well on the relevant training family (e.g., regex tasks).
+    if organelle_id is None:
+        try:
+            if training_family:
+                episodes_path = checkpoint_path.parent / "episodes.jsonl"
+                choice = _select_best_organelle_by_training_roi(
+                    episodes_path, set(adapter_states.keys()), family=training_family
+                )
+                if choice is not None:
+                    organelle_id = choice
+                    print(
+                        f"  [info] Selected organelle by training ROI on {training_family}: {organelle_id}"
+                    )
+        except Exception:
+            pass
+
+    # Fallback: best organelle by overall ROI from gen_summaries.
     if organelle_id is None:
         summaries_path = checkpoint_path.parent / "gen_summaries.jsonl"
         if summaries_path.exists():
@@ -401,6 +438,12 @@ def main() -> None:
         help="Path to evolution checkpoint.pt file.",
     )
     parser.add_argument(
+        "--evo-organelle-id",
+        type=str,
+        default=None,
+        help="Optional organelle_id to evaluate from the evolution checkpoint (overrides auto-selection).",
+    )
+    parser.add_argument(
         "--max-samples",
         type=int,
         default=None,
@@ -436,15 +479,17 @@ def main() -> None:
 
     # Load base model and tokenizer
     print(f"\nLoading base model: {args.model}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     device_map = args.device if args.device != "auto" else "auto"
+    dtype = torch.float16 if args.device == "mps" else torch.bfloat16
     base_model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=dtype,
         device_map=device_map,
+        trust_remote_code=True,
     )
 
     results = []
@@ -469,7 +514,10 @@ def main() -> None:
         if args.sft_adapter.exists():
             # Load fresh base model to avoid state pollution
             sft_base = AutoModelForCausalLM.from_pretrained(
-                args.model, torch_dtype=torch.bfloat16, device_map=device_map
+                args.model,
+                torch_dtype=dtype,
+                device_map=device_map,
+                trust_remote_code=True,
             )
             sft_model = load_sft_model(sft_base, args.sft_adapter)
             sft_result = evaluate_model(
@@ -496,9 +544,17 @@ def main() -> None:
         if args.evo_checkpoint.exists():
             # Load fresh base model to avoid state pollution
             evo_base = AutoModelForCausalLM.from_pretrained(
-                args.model, torch_dtype=torch.bfloat16, device_map=device_map
+                args.model,
+                torch_dtype=dtype,
+                device_map=device_map,
+                trust_remote_code=True,
             )
-            evo_model, organelle_id = load_evo_model(evo_base, args.evo_checkpoint, tokenizer)
+            evo_model, organelle_id = load_evo_model(
+                evo_base,
+                args.evo_checkpoint,
+                tokenizer,
+                organelle_id=args.evo_organelle_id,
+            )
             model_name = f"evolution ({organelle_id})" if organelle_id else "evolution"
             evo_result = evaluate_model(
                 evo_model,

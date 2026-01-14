@@ -98,6 +98,10 @@ class HebbianPEFTOrganelle(Organelle):
             max_length=self.backbone.max_length,
         )
         enc = {k: v.to(self.device) for k, v in enc.items()}
+        try:
+            envelope.observation.state["prompt_tokens"] = int(enc["input_ids"].shape[1])
+        except Exception:
+            envelope.observation.state["prompt_tokens"] = 0
         outputs = self.model(**enc, output_hidden_states=True)
         hidden_last = outputs.hidden_states[-1]  # [B, T, H]
         pre = self.model.get_input_embeddings()(enc["input_ids"])  # [B, T, H]
@@ -138,6 +142,13 @@ class HebbianPEFTOrganelle(Organelle):
             if 0.0 < top_p < 1.0:
                 gen_kwargs["top_p"] = top_p
         gen_ids = self.model.generate(**enc, **gen_kwargs)
+        try:
+            prompt_len = int(enc["input_ids"].shape[1])
+            envelope.observation.state["generated_tokens"] = max(
+                0, int(gen_ids[0].shape[0]) - prompt_len
+            )
+        except Exception:
+            envelope.observation.state["generated_tokens"] = 0
         answer = self.tokenizer.decode(
             gen_ids[0][enc["input_ids"].shape[1] :], skip_special_tokens=True
         )
@@ -157,8 +168,18 @@ class HebbianPEFTOrganelle(Organelle):
         if self.traces.pre is None or self.traces.post is None:
             return
         baseline = float(getattr(self.context, "reward_baseline", 0.0))
-        centered = reward.total - baseline
-        if centered == 0.0:
+        decay = float(getattr(self.context.hebbian, "reward_baseline_decay", 0.99) or 0.99)
+        if math.isfinite(decay):
+            decay = max(0.0, min(1.0, decay))
+            try:
+                self.context.reward_baseline = decay * baseline + (1.0 - decay) * float(
+                    reward.total
+                )
+            except Exception:
+                pass
+        centered = float(reward.total) - baseline
+        # Negative updates tend to destabilize this non-gradient Hebbian rule; learn from improvements only.
+        if centered <= 0.0:
             return
         # Small, reward-modulated update across all lora layers
         for _name, module in self.model.named_modules():

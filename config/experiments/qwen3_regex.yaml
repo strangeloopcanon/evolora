@@ -1,16 +1,23 @@
-# Qwen3-0.6B ecology with regex generation tasks
-model:
-  name: "Qwen/Qwen2.5-0.5B"
-  device: "auto"
-  dtype: "bfloat16"
-  torch_compile: false
+# Regex evolution config (EcologyConfig schema).
+#
+# This config is intended for the "evolution vs compute-matched SFT" regex track:
+# - Evolution run: `python scripts/run_evolution.py --config config/experiments/qwen3_regex.yaml ...`
+# - Compute-matched SFT: `python scripts/run_sft.py --checkpoint <run_dir>/checkpoint.pt --data config/training/regex_sft_data.jsonl --model Qwen/Qwen2.5-0.5B ...`
+# - Holdout eval: `python scripts/evaluate_holdout.py --holdout config/evaluation/regex_generalization.jsonl ...`
+host:
+  backbone_type: gemma
+  backbone_model: Qwen/Qwen2.5-0.5B
+  tokenizer: Qwen/Qwen2.5-0.5B
+  device: mps
+  max_lora_rank: 8
+  max_sequence_length: 256
+  gen_max_new_tokens: 64
 
-env:
-  grid:
-    families: ["regex", "math", "word.count"]
-    depths: ["short", "medium", "long"]
+grid:
+  families: [regex, math, word.count]
+  depths: [short, medium, long]
 
-teacher:
+controller:
   tau: 0.5
   beta: 0.2
   eta: 0.5
@@ -34,51 +41,46 @@ energy:
 canary:
   q_min: 0.95
 
-population:
+population_strategy:
   mu: 4
   lambda: 12
   max_population: 16
+  initial_orgs: 4
 
 evolution:
   mutation_rate: 0.05
   max_merges_per_gen: 3
-  min_episodes_before_merge: 10
+  min_population: 4
+  max_population: 16
 
 assimilation_tuning:
   per_cell_interval: 5
   max_merges_per_cell: 1
   seed_scale: 0.5
   soup_size: 3
+  holdout_tasks_path: config/evaluation/holdout_regex.jsonl
+  holdout_sample_size: 8
   holdout_margin: 0.02
-  min_power: 0.2
+  bootstrap_uplift_enabled: false
   bootstrap_samples: 100
-  bootstrap_confidence: 0.85
+  permutation_samples: 100
+  dr_enabled: true
+  dr_min_power: 0.2
   hf_prompts:
     - "Summarize your solution for a non-technical reviewer."
     - "Suggest a follow-up action we can validate manually."
 
 environment:
-  synthetic_batch_size: 8
-  human_bandit_batch_size: 4
+  synthetic_batch_size: 2
   max_episode_steps: 128
   energy_budget: 50.0
-  lp_alpha: 0.5
 
 human_bandit:
   enabled: false
 
-limits:
-  lora_budget_frac: 0.03
-  max_active_adapters_per_layer: 2
-
-meta:
-  enabled: true
-  interval: 5
-  mutation_scale: 0.12
-  catastrophe_interval: 0
-
+# Disable periodic evaluation-by-holdout during training for clean comparisons.
 evaluation:
-  enabled: true
+  enabled: false
   cadence: 10
   tasks_path: config/evaluation/holdout_regex.jsonl
   sample_size: 8
@@ -89,11 +91,3 @@ comms:
 
 policy:
   enabled: false
-
-organelle:
-  lora_r: 8
-  lora_alpha: 16
-  lora_dropout: 0.05
-  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
-  hebbian_lr: 0.001
-  trace_decay: 0.95
