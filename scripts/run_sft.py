@@ -372,6 +372,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable trust_remote_code when loading HF model/tokenizer (default: disabled).",
     )
+    parser.add_argument(
+        "--attn-implementation",
+        type=str,
+        choices=["eager", "sdpa", "flash_attention_2"],
+        default="sdpa",
+        help=(
+            "Attention implementation passed to the HF model loader (default: sdpa). "
+            "If you hit NaNs during MPS training, try --attn-implementation eager."
+        ),
+    )
 
     # LoRA config
     parser.add_argument(
@@ -502,6 +512,7 @@ def main() -> None:
         args.model,
         torch_dtype=torch.float32,  # Use float32 for stability on CPU/MPS
         trust_remote_code=bool(args.trust_remote_code),
+        attn_implementation=args.attn_implementation,
     )
 
     # Apply LoRA - same target modules as evolution

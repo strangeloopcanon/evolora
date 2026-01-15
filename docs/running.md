@@ -99,6 +99,7 @@ Train a standard SFT LoRA with a compute-matched budget from an evolution run fo
   --checkpoint <run_dir>/checkpoint.pt \
   --match-budget-field total_tokens \
   --backprop-multiplier 2.0 \
+  --attn-implementation eager \
   --data training_data.jsonl \
   --output sft_baseline_matched
 
@@ -128,3 +129,4 @@ MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/evoscope.py <run_dir>
 ## macOS stability notes
 - Always set `MPLCONFIGDIR="$(mktemp -d)"` for analysis/plots.
 - If Metal/MPS memory pressure is still a problem, try `export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0` before starting a long run.
+- If SFT training hits NaNs on MPS, run with `--attn-implementation eager` (SDPA backward can be unstable on some setups).

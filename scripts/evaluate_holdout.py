@@ -546,6 +546,16 @@ def main() -> None:
         help="Enable trust_remote_code when loading HF model/tokenizer (default: disabled).",
     )
     parser.add_argument(
+        "--attn-implementation",
+        type=str,
+        choices=["eager", "sdpa", "flash_attention_2"],
+        default="sdpa",
+        help=(
+            "Attention implementation passed to the HF model loader (default: sdpa). "
+            "Use eager if you need a numerically safer attention kernel on your device."
+        ),
+    )
+    parser.add_argument(
         "--sft-adapter",
         type=Path,
         default=None,
@@ -654,6 +664,7 @@ def main() -> None:
         torch_dtype=dtype,
         device_map=device_map,
         trust_remote_code=bool(args.trust_remote_code),
+        attn_implementation=args.attn_implementation,
     )
 
     results = []
@@ -685,6 +696,7 @@ def main() -> None:
                 torch_dtype=dtype,
                 device_map=device_map,
                 trust_remote_code=bool(args.trust_remote_code),
+                attn_implementation=args.attn_implementation,
             )
             sft_model = load_sft_model(sft_base, args.sft_adapter)
             sft_result = evaluate_model(
@@ -729,6 +741,7 @@ def main() -> None:
                 torch_dtype=dtype,
                 device_map=device_map,
                 trust_remote_code=bool(args.trust_remote_code),
+                attn_implementation=args.attn_implementation,
             )
             evo_model, organelle_id = load_evo_model(
                 evo_base,

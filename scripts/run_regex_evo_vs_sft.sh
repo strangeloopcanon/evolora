@@ -187,6 +187,8 @@ if [ "$RUN_SFT" -eq 1 ]; then
     --model "$MODEL" \
     --match-budget-field total_tokens \
     --backprop-multiplier 2.0 \
+    --attn-implementation eager \
+    --optim adamw_torch \
     --output "$SFT_OUT"
 fi
 
@@ -201,6 +203,7 @@ if [ "$RUN_EVAL" -eq 1 ]; then
   fi
   echo "[eval] holdout=$HOLDOUT output=$EVAL_OUT"
   AGENT_MODE=baseline "$PY" scripts/evaluate_holdout.py \
+    --attn-implementation eager \
     "${EVAL_ARGS[@]}"
 fi
 

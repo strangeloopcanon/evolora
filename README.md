@@ -82,6 +82,7 @@ python scripts/run_sft.py \
     --checkpoint artifacts_evo_run/checkpoint.pt \
     --match-budget-field total_tokens \
     --backprop-multiplier 2.0 \
+    --attn-implementation eager \
     --data config/training/regex_sft_data.jsonl \
     --output artifacts_sft_run
 
@@ -107,6 +108,7 @@ python scripts/evaluate_holdout.py \
        --checkpoint artifacts_evo/checkpoint.pt \
        --match-budget-field total_tokens \
        --backprop-multiplier 2.0 \
+       --attn-implementation eager \
        --data config/training/regex_sft_data.jsonl \
        --output artifacts_sft
 
