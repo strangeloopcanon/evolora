@@ -541,6 +541,11 @@ def main() -> None:
         help="Base model name (default: Qwen/Qwen2.5-0.5B).",
     )
     parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Enable trust_remote_code when loading HF model/tokenizer (default: disabled).",
+    )
+    parser.add_argument(
         "--sft-adapter",
         type=Path,
         default=None,
@@ -636,7 +641,9 @@ def main() -> None:
 
     # Load base model and tokenizer
     print(f"\nLoading base model: {args.model}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model, trust_remote_code=bool(args.trust_remote_code)
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -646,7 +653,7 @@ def main() -> None:
         args.model,
         torch_dtype=dtype,
         device_map=device_map,
-        trust_remote_code=True,
+        trust_remote_code=bool(args.trust_remote_code),
     )
 
     results = []
@@ -677,7 +684,7 @@ def main() -> None:
                 args.model,
                 torch_dtype=dtype,
                 device_map=device_map,
-                trust_remote_code=True,
+                trust_remote_code=bool(args.trust_remote_code),
             )
             sft_model = load_sft_model(sft_base, args.sft_adapter)
             sft_result = evaluate_model(
@@ -721,7 +728,7 @@ def main() -> None:
                 args.model,
                 torch_dtype=dtype,
                 device_map=device_map,
-                trust_remote_code=True,
+                trust_remote_code=bool(args.trust_remote_code),
             )
             evo_model, organelle_id = load_evo_model(
                 evo_base,

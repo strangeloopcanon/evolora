@@ -367,6 +367,11 @@ def parse_args() -> argparse.Namespace:
         default="Qwen/Qwen3-0.6B",
         help="Base model to fine-tune (default: Qwen/Qwen3-0.6B).",
     )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Enable trust_remote_code when loading HF model/tokenizer (default: disabled).",
+    )
 
     # LoRA config
     parser.add_argument(
@@ -477,14 +482,16 @@ def main() -> None:
 
     # Load tokenizer and model
     print(f"[sft] Loading model: {args.model}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model, trust_remote_code=bool(args.trust_remote_code)
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         torch_dtype=torch.float32,  # Use float32 for stability on CPU/MPS
-        trust_remote_code=True,
+        trust_remote_code=bool(args.trust_remote_code),
     )
 
     # Apply LoRA - same target modules as evolution
