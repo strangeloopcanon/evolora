@@ -435,6 +435,16 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed.",
     )
+    parser.add_argument(
+        "--optim",
+        type=str,
+        choices=["adamw_torch", "adamw_torch_fused"],
+        default="adamw_torch",
+        help=(
+            "Optimizer implementation (default: adamw_torch). "
+            "On MPS, the fused variant can be unstable for some models."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -533,6 +543,7 @@ def main() -> None:
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        optim=args.optim,
         weight_decay=0.01,
         warmup_ratio=0.1,
         logging_steps=10,
