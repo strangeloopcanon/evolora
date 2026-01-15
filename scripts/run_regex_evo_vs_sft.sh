@@ -185,10 +185,11 @@ if [ "$RUN_SFT" -eq 1 ]; then
     --checkpoint "$CHECKPOINT" \
     --data "$SFT_DATA" \
     --model "$MODEL" \
-    --match-budget-field total_tokens \
-    --backprop-multiplier 2.0 \
+    --match-budget-field wall_clock_seconds \
     --attn-implementation eager \
     --optim adamw_torch \
+    --engine manual \
+    --resume \
     --output "$SFT_OUT"
 fi
 

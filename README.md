@@ -103,12 +103,13 @@ python scripts/evaluate_holdout.py \
 
 2. **Run SFT with matched budget**:
    ```bash
-   # Match token budget from evolution checkpoint
+   # Match compute to an evolution checkpoint (recommended: wall-clock match)
    python scripts/run_sft.py \
        --checkpoint artifacts_evo/checkpoint.pt \
-       --match-budget-field total_tokens \
-       --backprop-multiplier 2.0 \
+       --match-budget-field wall_clock_seconds \
        --attn-implementation eager \
+       --engine manual \
+       --resume \
        --data config/training/regex_sft_data.jsonl \
        --output artifacts_sft
 
@@ -118,8 +119,7 @@ python scripts/evaluate_holdout.py \
        --data config/training/regex_sft_data.jsonl \
        --output artifacts_sft
    ```
-   - `TokenBudgetCallback` stops training when budget exhausted
-   - When using `--checkpoint`, SFT converts evolution *forward-only* tokens into an SFT token budget using `--backprop-multiplier`
+   - On macOS/MPS, the default engine uses a manual training loop with NaN guards and resumable checkpoints
    - Exports LoRA compatible with `HostKernel.load_organelle_adapter()`
 
 3. **Evaluate both** on the same holdout tasks:
@@ -132,7 +132,6 @@ python scripts/evaluate_holdout.py \
        --verbose
    ```
    - Compares base model, SFT, and best evolution organelle
-   - Auto-selects the best organelle by ROI from `gen_summaries.jsonl`
    - Reports accuracy on held-out tasks
 
 ### Key Scripts
