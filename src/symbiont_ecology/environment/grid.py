@@ -954,96 +954,349 @@ class GridEnvironment:
 
     def _make_regex_task(self, depth: str) -> tuple[str, str, list[dict[str, object]]]:
         """Generate a regex pattern task with matching and non-matching examples."""
-        if depth == "short":
-            # Simple patterns: exact strings, character classes, basic quantifiers
-            templates = [
-                {
-                    "desc": "match emails starting with 'admin'",
-                    "pattern": r"admin\w*@\w+\.\w+",
-                    "matches": ["admin@example.com", "admin123@test.org"],
-                    "non_matches": ["user@example.com", "admin@"],
-                },
-                {
-                    "desc": "match 3-digit numbers",
-                    "pattern": r"\b\d{3}\b",
-                    "matches": ["123", "456", "789"],
-                    "non_matches": ["12", "1234", "abc"],
-                },
-                {
-                    "desc": "match words starting with 'test'",
-                    "pattern": r"\btest\w*",
-                    "matches": ["test", "testing", "tester"],
-                    "non_matches": ["contest", "attest", "rest"],
-                },
-                {
-                    "desc": "match hex colors",
-                    "pattern": r"#[0-9a-fA-F]{6}",
-                    "matches": ["#FF5733", "#00ff00", "#123ABC"],
-                    "non_matches": ["#FFF", "#GGGGGG", "FF5733"],
-                },
-            ]
-        elif depth == "medium":
-            # Medium patterns: alternation, groups, more complex quantifiers
-            templates = [
-                {
-                    "desc": "match phone numbers in format XXX-XXX-XXXX or (XXX) XXX-XXXX",
-                    "pattern": r"(\d{3}-\d{3}-\d{4}|\(\d{3}\) \d{3}-\d{4})",
-                    "matches": ["123-456-7890", "(123) 456-7890"],
-                    "non_matches": ["123.456.7890", "12-345-6789", "123-45-6789"],
-                },
-                {
-                    "desc": "match URLs starting with http:// or https://",
-                    "pattern": r"https?://[\w\.-]+\.\w+",
-                    "matches": ["http://example.com", "https://test.org"],
-                    "non_matches": ["ftp://example.com", "example.com", "http://"],
-                },
-                {
-                    "desc": "match variable names (letters, numbers, underscore, must start with letter)",
-                    "pattern": r"\b[a-zA-Z][a-zA-Z0-9_]*\b",
-                    "matches": ["var1", "test_var", "myVariable"],
-                    "non_matches": ["1var", "_test", "123"],
-                },
-                {
-                    "desc": "match dates in MM/DD/YYYY format",
-                    "pattern": r"\b(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])/\d{4}\b",
-                    "matches": ["01/15/2024", "12/31/2023"],
-                    "non_matches": ["13/01/2024", "1/5/2024", "01-15-2024"],
-                },
-            ]
-        else:  # long
-            # Complex patterns: lookaheads, nested groups, complex alternation
-            templates = [
-                {
-                    "desc": "match valid IPv4 addresses",
-                    "pattern": r"\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b",
-                    "matches": ["192.168.1.1", "10.0.0.255", "8.8.8.8"],
-                    "non_matches": ["256.1.1.1", "192.168.1", "192.168.1.1.1"],
-                },
-                {
-                    "desc": "match JSON-like key-value pairs with quoted strings",
-                    "pattern": r'"\w+"\s*:\s*"[^"]*"',
-                    "matches": ['"name": "John"', '"id": "123"'],
-                    "non_matches": ["name: John", '"name":"', 'name: "John"'],
-                },
-                {
-                    "desc": "match Python function definitions",
-                    "pattern": r"def\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*:",
-                    "matches": ["def foo():", "def bar(x, y):", "def _helper(data):"],
-                    "non_matches": ["def 123():", "def foo()", "function foo():"],
-                },
-                {
-                    "desc": "match email addresses with common TLDs",
-                    "pattern": r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|org|net|edu|gov)\b",
-                    "matches": ["user@example.com", "test.user@sub.domain.org"],
-                    "non_matches": ["user@example", "@example.com", "user@.com"],
-                },
-            ]
+        rng = self.rng
+        alphabet = "abcdefghijklmnopqrstuvwxyz"
 
-        choice = self.rng.choice(templates)
-        desc = choice["desc"]
-        pattern = choice["pattern"]
-        matches = choice["matches"]
-        non_matches = choice["non_matches"]
+        def random_word(min_len: int = 3, max_len: int = 8) -> str:
+            length = rng.randint(int(min_len), int(max_len))
+            return "".join(rng.choice(alphabet) for _ in range(max(1, length)))
+
+        def random_identifier(
+            min_len: int = 3,
+            max_len: int = 12,
+            *,
+            allow_leading_underscore: bool = True,
+        ) -> str:
+            first_pool = alphabet + alphabet.upper()
+            if allow_leading_underscore:
+                first_pool += "_"
+            first = rng.choice(first_pool)
+            rest_chars = alphabet + alphabet.upper() + "0123456789_"
+            length = rng.randint(max(1, int(min_len)), max(1, int(max_len)))
+            rest = "".join(rng.choice(rest_chars) for _ in range(max(0, length - 1)))
+            return first + rest
+
+        def random_domain(tlds: list[str] | None = None) -> str:
+            host = random_word(4, 10)
+            tld = rng.choice(list(tlds) if tlds else ["com", "org", "net", "io", "dev"])
+            if rng.random() < 0.25:
+                return f"{random_word(3, 6)}.{host}.{tld}"
+            return f"{host}.{tld}"
+
+        def pick_task() -> dict[str, object]:
+            if depth == "short":
+                kind = rng.choice(
+                    [
+                        "email_prefix",
+                        "n_digit",
+                        "word_prefix",
+                        "literal",
+                        "hex_color",
+                        "alpha_len",
+                    ]
+                )
+                if kind == "email_prefix":
+                    prefix = rng.choice(["admin", "root", "support", "sales", "team"]) + rng.choice(
+                        ["", "1", "42", "_bot"]
+                    )
+                    pattern = rf"{re.escape(prefix)}\w*@\w+(?:\.\w+)+"
+                    matches = [
+                        f"{prefix}@example.com",
+                        f"{prefix}123@{random_domain()}",
+                    ]
+                    non_matches = [
+                        f"user@{random_domain()}",
+                        f"{prefix}@",
+                        f"{prefix}.user@{random_domain()}",
+                    ]
+                    return {
+                        "desc": f"match emails starting with '{prefix}'",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "n_digit":
+                    digits = int(rng.randint(2, 6))
+                    pattern = rf"\b\d{{{digits}}}\b"
+                    matches = [
+                        "".join(str(rng.randint(0, 9)) for _ in range(digits)),
+                        "".join(str(rng.randint(0, 9)) for _ in range(digits)),
+                        "".join(str(rng.randint(0, 9)) for _ in range(digits)),
+                    ]
+                    non_matches = [
+                        "".join(str(rng.randint(0, 9)) for _ in range(max(1, digits - 1))),
+                        "".join(str(rng.randint(0, 9)) for _ in range(digits + 1)),
+                        random_word(3, 6),
+                    ]
+                    return {
+                        "desc": f"match exactly {digits}-digit numbers",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "word_prefix":
+                    prefix = rng.choice(["test", "pre", "bio", "micro", "sym", "eco"])
+                    pattern = rf"\b{re.escape(prefix)}\w*\b"
+                    matches = [
+                        prefix,
+                        prefix + random_word(2, 5),
+                        prefix + random_word(2, 5),
+                    ]
+                    non_matches = [
+                        random_word(2, 5) + prefix,
+                        random_word(2, 5) + prefix + random_word(2, 5),
+                        random_word(4, 8),
+                    ]
+                    return {
+                        "desc": f"match words starting with '{prefix}'",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "literal":
+                    literal = rng.choice(
+                        [
+                            "C++",
+                            "file.txt",
+                            "[URGENT]",
+                            "a|b",
+                            "x^2",
+                            "hello.world",
+                            "(test)",
+                        ]
+                    )
+                    pattern = re.escape(literal)
+                    matches = [literal]
+                    non_matches = [literal + random_word(1, 2), random_word(1, 2) + literal]
+                    return {
+                        "desc": f"match the literal string '{literal}' exactly",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "hex_color":
+                    digits = int(rng.choice([3, 6]))
+                    pattern = rf"#[0-9a-fA-F]{{{digits}}}"
+                    matches = ["#" + "".join(rng.choice("0123456789ABCDEF") for _ in range(digits))]
+                    non_matches = [
+                        "#"
+                        + "".join(
+                            rng.choice("0123456789ABCDEF") for _ in range(max(1, digits - 1))
+                        ),
+                        "#GGG" if digits == 3 else "#GGGGGG",
+                        random_word(3, 8),
+                    ]
+                    return {
+                        "desc": f"match hex colors with exactly {digits} hex digits",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                # alpha_len
+                length = int(rng.randint(4, 8))
+                pattern = rf"[A-Za-z]{{{length}}}"
+                matches = ["".join(rng.choice(alphabet) for _ in range(length))]
+                non_matches = [
+                    "".join(rng.choice(alphabet) for _ in range(length - 1)),
+                    "".join(rng.choice(alphabet) for _ in range(length + 1)),
+                    "".join(rng.choice("0123456789") for _ in range(length)),
+                ]
+                return {
+                    "desc": f"match exactly {length}-letter words (letters only)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if depth == "medium":
+                kind = rng.choice(
+                    [
+                        "phone",
+                        "url",
+                        "identifier",
+                        "date_mdy",
+                        "time_hm",
+                        "github",
+                    ]
+                )
+                if kind == "phone":
+                    pattern = r"(\d{3}-\d{3}-\d{4}|\(\d{3}\) \d{3}-\d{4})"
+                    matches = ["123-456-7890", "(123) 456-7890"]
+                    non_matches = ["123.456.7890", "12-345-6789", "123-45-6789"]
+                    return {
+                        "desc": "match phone numbers in format XXX-XXX-XXXX or (XXX) XXX-XXXX",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "url":
+                    domain = random_domain()
+                    pattern = r"https?://[\w\.-]+\.\w+(?:/[^\s]*)?"
+                    matches = [f"http://{domain}", f"https://{domain}/path/to/file"]
+                    non_matches = [f"ftp://{domain}", domain, "http://"]
+                    return {
+                        "desc": "match URLs starting with http:// or https://",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "identifier":
+                    pattern = r"\b[a-zA-Z][a-zA-Z0-9_]*\b"
+                    matches = [
+                        random_identifier(allow_leading_underscore=False),
+                        random_identifier(allow_leading_underscore=False),
+                        random_identifier(allow_leading_underscore=False),
+                    ]
+                    non_matches = [
+                        "1" + random_word(2, 4),
+                        "_" + random_word(2, 4),
+                        "123",
+                    ]
+                    return {
+                        "desc": "match variable names (letters, numbers, underscore, must start with letter)",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "date_mdy":
+                    pattern = r"\b(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])/\d{4}\b"
+                    matches = ["01/15/2024", "12/31/2023"]
+                    non_matches = ["13/01/2024", "1/5/2024", "01-15-2024"]
+                    return {
+                        "desc": "match dates in MM/DD/YYYY format",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "time_hm":
+                    pattern = r"\b([01]\d|2[0-3]):[0-5]\d\b"
+                    matches = ["00:00", "14:30", "23:59"]
+                    non_matches = ["24:00", "9:30", "14:60"]
+                    return {
+                        "desc": "match time in HH:MM format (24-hour clock)",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                # github
+                pattern = r"[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*"
+                matches = ["john-doe", "user123", "a-b-c"]
+                non_matches = ["-invalid", "user-", "bad--name"]
+                return {
+                    "desc": "match GitHub-style usernames (alphanumeric + hyphens, no leading/trailing hyphen)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            # long
+            kind = rng.choice(
+                [
+                    "ipv4",
+                    "json_kv",
+                    "py_def",
+                    "email_tld",
+                    "mac",
+                    "semver",
+                ]
+            )
+            if kind == "ipv4":
+                pattern = r"\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b"
+                matches = ["192.168.1.1", "10.0.0.255", "8.8.8.8"]
+                non_matches = ["256.1.1.1", "192.168.1", "192.168.1.1.1"]
+                return {
+                    "desc": "match valid IPv4 addresses",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "json_kv":
+                key = rng.choice(["name", "id", "type", "value", "status"])
+                pattern = r'"\w+"\s*:\s*"[^"]*"'
+                matches = [f'"{key}": "{random_word(3, 8)}"', '"id": "123"']
+                non_matches = [f"{key}: {random_word(3, 8)}", '"name":"', 'name: "John"']
+                return {
+                    "desc": "match JSON-like key-value pairs with quoted strings",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "py_def":
+                func = random_identifier(3, 10)
+                pattern = r"def\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*:"
+                matches = ["def foo():", f"def {func}(x, y):", "def _helper(data):"]
+                non_matches = ["def 123():", "def foo()", "function foo():"]
+                return {
+                    "desc": "match Python function definitions",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "email_tld":
+                pattern = r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|org|net|edu|gov)\b"
+                matches = [
+                    f"{random_word(3, 8)}@example.com",
+                    f"test.user@{random_domain(tlds=['com', 'org', 'net', 'edu', 'gov'])}",
+                ]
+                non_matches = ["user@example", "@example.com", "user@.com"]
+                return {
+                    "desc": "match email addresses with common TLDs",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "mac":
+                pattern = r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b"
+                matches = ["AA:BB:CC:DD:EE:FF", "00-11-22-33-44-55"]
+                non_matches = ["ZZ:BB:CC:DD:EE:FF", "AA:BB:CC:DD:EE", "AABBCCDDEEFF"]
+                return {
+                    "desc": "match MAC addresses (6 groups of 2 hex digits, colon or hyphen separated)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            # semver
+            major = rng.randint(0, 20)
+            minor = rng.randint(0, 20)
+            patch = rng.randint(0, 20)
+            pattern = r"\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b"
+            matches = [
+                f"{major}.{minor}.{patch}",
+                f"{major}.{minor}.{patch}-alpha.1",
+                f"{major}.{minor}.{patch}+build.5",
+            ]
+            non_matches = [
+                f"{major}.{minor}",
+                f"{major}.{minor}.{patch}.{rng.randint(0, 9)}",
+                f"v{major}.{minor}.{patch}",
+            ]
+            return {
+                "desc": "match semantic version numbers (e.g., 1.2.3, 1.2.3-alpha.1, 1.2.3+build.5)",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        choice = pick_task()
+        desc = str(choice["desc"])
+        pattern = str(choice["pattern"])
+        matches = list(choice["matches"])  # type: ignore[arg-type]
+        non_matches = list(choice["non_matches"])  # type: ignore[arg-type]
 
         # Create test examples string
         test_examples = []

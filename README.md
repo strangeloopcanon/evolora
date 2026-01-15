@@ -69,30 +69,9 @@ Note: `scripts/run_sft.py` depends on `datasets` (in `requirements.txt`). If you
 ### Quick E2E Example
 
 ```bash
-# 1. Run evolution (e.g., 10 generations with regex tasks)
-python scripts/run_evolution.py \
-    --config config/experiments/qwen3_regex_simple.yaml \
-    --generations 10 \
-    --output artifacts_evo_run \
-    --checkpoint-every 1 \
-    --disable-human
-
-# 2. Run SFT with matched token budget from the evolution checkpoint
-python scripts/run_sft.py \
-    --checkpoint artifacts_evo_run/checkpoint.pt \
-    --match-budget-field total_tokens \
-    --backprop-multiplier 2.0 \
-    --attn-implementation eager \
-    --data config/training/regex_sft_data.jsonl \
-    --output artifacts_sft_run
-
-# 3. Evaluate both on holdout tasks
-python scripts/evaluate_holdout.py \
-    --holdout config/evaluation/regex_generalization.jsonl \
-    --sft-adapter artifacts_sft_run/peft_adapter \
-    --evo-checkpoint artifacts_evo_run/checkpoint.pt \
-    --output comparison_results.json \
-    --verbose
+# End-to-end runner (calibration → resume → compute-matched SFT → eval).
+# Generates distribution-matched regex datasets into <run_dir>/datasets/.
+make regex-evo-vs-sft REGEX_FULL_GENS=10 REGEX_CALIB_GENS=2 REGEX_CHECKPOINT_EVERY=1
 ```
 
 ### How It Works
@@ -103,20 +82,29 @@ python scripts/evaluate_holdout.py \
 
 2. **Run SFT with matched budget**:
    ```bash
-   # Match compute to an evolution checkpoint (recommended: wall-clock match)
+   # Recommended: match evo "training" compute via tokens + multiplier
    python scripts/run_sft.py \
        --checkpoint artifacts_evo/checkpoint.pt \
+       --match-budget-field train_tokens \
+       --backprop-multiplier 2.0 \
+       --attn-implementation eager \
+       --engine manual \
+       --resume \
+       --data artifacts_evo/datasets/sft_train.jsonl \
+       --output artifacts_sft
+
+   # Alternatives: wall-clock match or an explicit token budget
+   python scripts/run_sft.py \
        --match-budget-field wall_clock_seconds \
        --attn-implementation eager \
        --engine manual \
        --resume \
-       --data config/training/regex_sft_data.jsonl \
+       --data artifacts_evo/datasets/sft_train.jsonl \
        --output artifacts_sft
 
-   # Or specify explicit budget
    python scripts/run_sft.py \
        --token-budget 500000 \
-       --data config/training/regex_sft_data.jsonl \
+       --data artifacts_evo/datasets/sft_train.jsonl \
        --output artifacts_sft
    ```
    - On macOS/MPS, the default engine uses a manual training loop with NaN guards and resumable checkpoints
@@ -124,15 +112,24 @@ python scripts/evaluate_holdout.py \
 
 3. **Evaluate both** on the same holdout tasks:
    ```bash
+   # In-distribution regex holdout (and selection set for evo organelle picking)
    python scripts/evaluate_holdout.py \
-       --holdout config/evaluation/regex_generalization.jsonl \
+       --holdout artifacts_evo/datasets/holdout_tasks.jsonl \
+       --evo-selection-tasks artifacts_evo/datasets/selection_tasks.jsonl \
        --sft-adapter artifacts_sft/peft_adapter \
        --evo-checkpoint artifacts_evo/checkpoint.pt \
-       --output comparison_results.json \
-       --verbose
+       --output comparison_results_id.json
+
+   # OOD / mixed holdout (optional)
+   python scripts/evaluate_holdout.py \
+       --holdout config/evaluation/regex_generalization.jsonl \
+       --evo-selection-tasks artifacts_evo/datasets/selection_tasks.jsonl \
+       --sft-adapter artifacts_sft/peft_adapter \
+       --evo-checkpoint artifacts_evo/checkpoint.pt \
+       --output comparison_results_ood.json
    ```
    - Compares base model, SFT, and best evolution organelle
-   - Reports accuracy on held-out tasks
+   - Picks the best evolved organelle on `--evo-selection-tasks` (to avoid test leakage)
 
 ### Key Scripts
 

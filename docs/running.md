@@ -94,7 +94,18 @@ PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python 
 Train a standard SFT LoRA with a compute-matched budget from an evolution run for fair comparison:
 
 ```bash
-# Match compute to an evolution checkpoint
+# Recommended: match evo "training" compute via tokens + multiplier
+.venv/bin/python scripts/run_sft.py \
+  --checkpoint <run_dir>/checkpoint.pt \
+  --match-budget-field train_tokens \
+  --backprop-multiplier 2.0 \
+  --attn-implementation eager \
+  --engine manual \
+  --resume \
+  --data training_data.jsonl \
+  --output sft_baseline_matched
+
+# Alternatives: wall-clock match or an explicit token budget
 .venv/bin/python scripts/run_sft.py \
   --checkpoint <run_dir>/checkpoint.pt \
   --match-budget-field wall_clock_seconds \
@@ -102,9 +113,8 @@ Train a standard SFT LoRA with a compute-matched budget from an evolution run fo
   --engine manual \
   --resume \
   --data training_data.jsonl \
-  --output sft_baseline_matched
+  --output sft_baseline_wallclock
 
-# Or specify token budget directly
 .venv/bin/python scripts/run_sft.py \
   --token-budget 100000 \
   --data training_data.jsonl \

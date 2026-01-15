@@ -91,7 +91,11 @@ def check_answer(response: str, task: dict[str, Any]) -> tuple[bool, str]:
     Returns (is_correct, reason).
     """
     expected = task.get("expected_answer")
-    test_cases = task.get("test_cases", [])
+    test_cases = task.get("test_cases", []) or []
+    if not test_cases:
+        target = task.get("target", {}) or {}
+        if isinstance(target, dict):
+            test_cases = target.get("test_strings", []) or []
     required_keywords = task.get("metadata", {}).get("required_keywords", [])
 
     # For recognition tasks with expected yes/no answer
@@ -267,9 +271,33 @@ def _apply_adapter_state_to_peft_model(peft_model, adapter_state: dict[str, torc
         if peft_key not in model_state:
             continue
         expected = model_state[peft_key]
-        if expected.shape != tensor.shape:
-            return 0
-        updates[peft_key] = tensor.to(dtype=expected.dtype)
+        candidate = tensor
+        if expected.shape != candidate.shape:
+            # Allow rank-mismatched organelles by padding smaller LoRA ranks into a larger PEFT model.
+            # This enables selection across a checkpoint where morphogenesis changed LoRA rank.
+            if (
+                candidate.ndim == 2
+                and expected.ndim == 2
+                and "lora_A" in peft_key
+                and candidate.shape[1] == expected.shape[1]
+                and candidate.shape[0] < expected.shape[0]
+            ):
+                padded = torch.zeros(expected.shape, dtype=candidate.dtype)
+                padded[: candidate.shape[0], :] = candidate
+                candidate = padded
+            elif (
+                candidate.ndim == 2
+                and expected.ndim == 2
+                and "lora_B" in peft_key
+                and candidate.shape[0] == expected.shape[0]
+                and candidate.shape[1] < expected.shape[1]
+            ):
+                padded = torch.zeros(expected.shape, dtype=candidate.dtype)
+                padded[:, : candidate.shape[1]] = candidate
+                candidate = padded
+            else:
+                continue
+        updates[peft_key] = candidate.to(dtype=expected.dtype)
     if not updates:
         return 0
     _reset_lora_weights(peft_model)
@@ -419,23 +447,28 @@ def load_evo_model(
 
     print(f"  [info] Evolution checkpoint has {len(adapter_states)} organelles")
 
-    # Infer LoRA config from any organelle (assumed consistent across the checkpoint).
-    first_state = next(iter(adapter_states.values()))
-    if not isinstance(first_state, dict) or not first_state:
-        print("  [error] Could not read any adapter state tensors from checkpoint")
-        return base_model, None
-    lora_rank = None
-    target_modules = set()
-    for key, tensor in first_state.items():
-        if "lora_A" in key:
-            if lora_rank is None:
-                lora_rank = tensor.shape[0]
-            parts = key.replace("base_model.model.model.", "").split(".")
-            for part in parts:
-                if part in _LORA_TARGET_MODULES:
-                    target_modules.add(part)
-    if lora_rank is None:
+    # Infer a PEFT config that can load *all* organelles (some may differ in rank due to morphogenesis).
+    # We build a max-rank adapter and pad smaller ranks when loading weights.
+    lora_rank = 0
+    target_modules: set[str] = set()
+    for state in adapter_states.values():
+        if not isinstance(state, dict) or not state:
+            continue
+        for key, tensor in state.items():
+            if "lora_A" in key:
+                try:
+                    lora_rank = max(lora_rank, int(tensor.shape[0]))
+                except Exception:
+                    continue
+            if any(module in key for module in _LORA_TARGET_MODULES):
+                for part in key.split("."):
+                    if part in _LORA_TARGET_MODULES:
+                        target_modules.add(part)
+    if lora_rank <= 0:
         print("  [error] Could not infer LoRA rank from checkpoint")
+        return base_model, None
+    if not target_modules:
+        print("  [error] Could not infer LoRA target_modules from checkpoint")
         return base_model, None
 
     lora_config = LoraConfig(
