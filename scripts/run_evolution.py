@@ -969,7 +969,10 @@ def main() -> None:
 
     config.metrics.root.mkdir(parents=True, exist_ok=True)
     json_path = config.metrics.root / "gen_summaries.jsonl"
-    json_path.write_text("\n".join(json.dumps(s) for s in gen_summaries))
+    jsonl = "\n".join(json.dumps(s) for s in gen_summaries)
+    if jsonl:
+        jsonl += "\n"
+    json_path.write_text(jsonl, encoding="utf-8")
 
     fieldnames = sorted({key for record in gen_summaries for key in record.keys()})
     with (config.metrics.root / "gen_summaries.csv").open("w", newline="") as handle:
