@@ -256,10 +256,11 @@ def main() -> None:
         raise ValueError("Config has empty grid.depths")
 
     # Task-mix weights (roughly aligned to regex_generalization.jsonl proportions).
+    synthesis_family = "regex" if "regex" in families else "regex.synthesis"
     weights: dict[str, float] = {
         "regex.recognition": 0.25,
         "regex.mutation_effect": 0.10,
-        "regex.synthesis": 0.25,
+        synthesis_family: 0.25,
         "regex.debugging": 0.20,
         "regex.refactoring": 0.10,
         "regex.explanation": 0.10,
