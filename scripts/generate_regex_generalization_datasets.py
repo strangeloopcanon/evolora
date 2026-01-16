@@ -308,7 +308,7 @@ def main() -> None:
         counts=holdout_counts,
         rng=holdout_rng,
         exclude=reserved,
-        dedupe_within_split=True,
+        dedupe_within_split=False,
     )
     reserved.update(_grid_task_key(task) for task in holdout_tasks)
     # Train split can contain duplicates, but must not overlap selection/holdout tasks.
