@@ -40,7 +40,6 @@ from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
 )
@@ -228,14 +227,11 @@ def load_jsonl_data(path: Path) -> list[dict[str, str]]:
                 print(f"[sft] Warning: skipping malformed line {line_num}: {e}")
                 continue
 
-            # Normalize to {"text": full_sequence}
             if "text" in obj:
-                records.append({"text": obj["text"]})
+                records.append({"prompt": "", "completion": obj["text"]})
             elif "prompt" in obj:
                 completion = obj.get("completion") or obj.get("target") or ""
-                # Format as prompt + completion for causal LM training
-                text = f"{obj['prompt']}\n{completion}".strip()
-                records.append({"text": text})
+                records.append({"prompt": obj["prompt"], "completion": completion})
             else:
                 print(f"[sft] Warning: skipping line {line_num}, no 'prompt' or 'text' field")
                 continue
@@ -249,25 +245,62 @@ def prepare_dataset(
     max_length: int,
     token_state: TokenBudgetState,
 ) -> Dataset:
-    """Tokenize data and track total tokens."""
+    """Tokenize prompt/completion pairs for supervised fine-tuning.
+
+    We build a single causal sequence per example:
+        <prompt>\n<completion>
+
+    and mask labels so loss is computed only on the completion tokens.
+    """
     dataset = Dataset.from_list(data)
 
     def tokenize_and_count(examples: dict[str, list[str]]) -> dict[str, list]:
-        tokenized = tokenizer(
-            examples["text"],
-            truncation=True,
-            max_length=max_length,
-            padding=False,
-        )
-        # Count tokens for budget tracking
-        for ids in tokenized["input_ids"]:
-            token_state.add_tokens(len(ids))
-        return tokenized
+        input_ids_batch: list[list[int]] = []
+        attention_masks_batch: list[list[int]] = []
+        labels_batch: list[list[int]] = []
+
+        prompts = examples.get("prompt") or []
+        completions = examples.get("completion") or []
+        for prompt, completion in zip(prompts, completions, strict=False):
+            prompt_prefix = str(prompt).rstrip()
+            if prompt_prefix:
+                prompt_prefix = f"{prompt_prefix}\n"
+            completion_text = str(completion)
+            full_text = f"{prompt_prefix}{completion_text}"
+
+            full = tokenizer(
+                full_text,
+                truncation=True,
+                max_length=max_length,
+                padding=False,
+            )
+            prompt_tokens = tokenizer(
+                prompt_prefix,
+                truncation=True,
+                max_length=max_length,
+                padding=False,
+            )
+
+            input_ids = list(full.get("input_ids") or [])
+            attention_mask = list(full.get("attention_mask") or [1] * len(input_ids))
+            prompt_len = min(len(prompt_tokens.get("input_ids") or []), len(input_ids))
+
+            labels = [-100] * int(prompt_len) + input_ids[int(prompt_len) :]
+            input_ids_batch.append(input_ids)
+            attention_masks_batch.append(attention_mask)
+            labels_batch.append(labels)
+            token_state.add_tokens(len(input_ids))
+
+        return {
+            "input_ids": input_ids_batch,
+            "attention_mask": attention_masks_batch,
+            "labels": labels_batch,
+        }
 
     tokenized = dataset.map(
         tokenize_and_count,
         batched=True,
-        remove_columns=["text"],
+        remove_columns=["prompt", "completion"],
         desc="Tokenizing",
     )
     # Reset counter - we'll count again during actual training
@@ -275,6 +308,43 @@ def prepare_dataset(
     token_state.total_tokens = 0
 
     return tokenized
+
+
+# ---------------------------------------------------------------------------
+# Data collator (pads labels with -100)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SupervisedDataCollator:
+    tokenizer: AutoTokenizer
+    label_pad_token_id: int = -100
+
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+        features_no_labels = []
+        labels = []
+        for feature in features:
+            features_no_labels.append(
+                {
+                    "input_ids": feature["input_ids"],
+                    "attention_mask": feature["attention_mask"],
+                }
+            )
+            labels.append(feature.get("labels") or [])
+
+        batch = self.tokenizer.pad(features_no_labels, padding=True, return_tensors="pt")
+        max_len = int(batch["input_ids"].shape[1])
+        labels_tensor = torch.full(
+            (len(labels), max_len), int(self.label_pad_token_id), dtype=torch.long
+        )
+        for idx, label in enumerate(labels):
+            label_ids = label[:max_len]
+            if not label_ids:
+                continue
+            labels_tensor[idx, : len(label_ids)] = torch.tensor(label_ids, dtype=torch.long)
+
+        batch["labels"] = labels_tensor
+        return batch
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +707,63 @@ def _estimate_forward_flops(tokens: int, *, hidden_size: int) -> float:
     return float(int(tokens) * int(hidden_size) * 2)
 
 
+def _mean_tokens_per_example(dataset: Dataset) -> float | None:
+    try:
+        masks = dataset["attention_mask"]
+    except Exception:
+        return None
+    if not masks:
+        return None
+    total = 0
+    for mask in masks:
+        total += int(sum(mask))
+    return float(total) / float(len(masks))
+
+
+def _scheduler_steps_for_budget(
+    *,
+    dataset: Dataset,
+    budget: SFTBudget,
+    batch_size: int,
+    epochs: int,
+    hidden_size: int,
+    warmup_ratio: float,
+) -> tuple[int, int, dict[str, object]]:
+    steps_per_epoch = max(1, math.ceil(len(dataset) / int(batch_size)))
+    default_max_steps = steps_per_epoch * int(epochs)
+    scheduler_max_steps = default_max_steps
+
+    details: dict[str, object] = {
+        "steps_per_epoch": steps_per_epoch,
+        "default_max_steps": default_max_steps,
+    }
+
+    token_budget: int | None = None
+    if budget.kind == "tokens":
+        token_budget = int(budget.value)
+        details["token_budget"] = token_budget
+    elif budget.kind == "forward_flops":
+        denom = float(int(hidden_size) * 2)
+        token_budget = int(float(budget.value) / denom) if denom > 0 else None
+        details["token_budget_from_flops"] = token_budget
+
+    if token_budget is not None and token_budget > 0:
+        mean_tokens = _mean_tokens_per_example(dataset)
+        if mean_tokens is not None and mean_tokens > 0:
+            tokens_per_step = mean_tokens * float(batch_size)
+            estimated_steps = int(math.ceil(float(token_budget) / tokens_per_step))
+            scheduler_max_steps = max(1, min(default_max_steps, estimated_steps))
+            details["mean_tokens_per_example"] = mean_tokens
+            details["estimated_steps_to_budget"] = estimated_steps
+            details["tokens_per_step_estimate"] = tokens_per_step
+
+    warmup_steps = int(float(scheduler_max_steps) * float(warmup_ratio))
+    warmup_steps = max(0, min(warmup_steps, scheduler_max_steps))
+    details["scheduler_max_steps"] = scheduler_max_steps
+    details["warmup_steps"] = warmup_steps
+    return scheduler_max_steps, warmup_steps, details
+
+
 def _atomic_torch_save(obj: object, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -706,9 +833,19 @@ def train_manual(
     except TypeError:
         optimizer = torch.optim.AdamW(trainable_params, **optimizer_kwargs)  # type: ignore[arg-type]
 
-    steps_per_epoch = max(1, math.ceil(len(dataset) / int(args.batch_size)))
-    max_steps = steps_per_epoch * int(args.epochs)
-    warmup_steps = int(max_steps * float(args.warmup_ratio))
+    max_steps, warmup_steps, scheduler_details = _scheduler_steps_for_budget(
+        dataset=dataset,
+        budget=budget,
+        batch_size=int(args.batch_size),
+        epochs=int(args.epochs),
+        hidden_size=hidden_size,
+        warmup_ratio=float(args.warmup_ratio),
+    )
+    print(
+        "[sft] LR schedule: "
+        f"max_steps={max_steps:,} warmup_steps={warmup_steps:,} "
+        f"(budget_kind={budget.kind})"
+    )
     scheduler = get_scheduler(
         args.lr_scheduler_type,
         optimizer,
@@ -763,6 +900,15 @@ def train_manual(
                 scheduler.load_state_dict(sched_state)
             except Exception:
                 pass
+        prev_max_steps = ckpt.get("scheduler_max_steps")
+        prev_warmup = ckpt.get("scheduler_warmup_steps")
+        if prev_max_steps is not None or prev_warmup is not None:
+            if prev_max_steps != max_steps or prev_warmup != warmup_steps:
+                print(
+                    "[sft] Warning: scheduler settings differ from checkpoint "
+                    f"(ckpt max_steps={prev_max_steps}, warmup_steps={prev_warmup}; "
+                    f"current max_steps={max_steps}, warmup_steps={warmup_steps})"
+                )
         py_state = ckpt.get("python_random_state")
         if py_state is not None:
             try:
@@ -915,6 +1061,9 @@ def train_manual(
                         "nonfinite_restarts": nonfinite_restarts,
                         "optimizer_state": optimizer.state_dict(),
                         "scheduler_state": scheduler.state_dict(),
+                        "scheduler_max_steps": max_steps,
+                        "scheduler_warmup_steps": warmup_steps,
+                        "scheduler_details": scheduler_details,
                         "python_random_state": random.getstate(),
                         "torch_rng_state": torch.get_rng_state(),
                     },
@@ -939,6 +1088,9 @@ def train_manual(
             "nonfinite_restarts": nonfinite_restarts,
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
+            "scheduler_max_steps": max_steps,
+            "scheduler_warmup_steps": warmup_steps,
+            "scheduler_details": scheduler_details,
             "python_random_state": random.getstate(),
             "torch_rng_state": torch.get_rng_state(),
         },
@@ -954,6 +1106,9 @@ def train_manual(
         "nonfinite_events": nonfinite_events,
         "nonfinite_restarts": nonfinite_restarts,
         "checkpoint_path": str(ckpt_path),
+        "scheduler_max_steps": max_steps,
+        "scheduler_warmup_steps": warmup_steps,
+        "scheduler_details": scheduler_details,
     }
 
 
@@ -1077,11 +1232,7 @@ def main() -> None:
     print(f"[sft] Tokenizing dataset (max_length={args.max_length})")
     dataset = prepare_dataset(raw_data, tokenizer, args.max_length, token_state)
 
-    # Data collator for causal LM
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,  # Causal LM, not masked LM
-    )
+    data_collator = SupervisedDataCollator(tokenizer)
 
     # Output directory
     args.output.mkdir(parents=True, exist_ok=True)
