@@ -178,9 +178,11 @@ def _generate_grid_tasks(
     depths: list[str],
     counts: dict[str, int],
     rng: random.Random,
-    seen: set[tuple[str, str, str]],
+    exclude: set[tuple[str, str, str]],
+    dedupe_within_split: bool,
 ) -> list[GridTask]:
     tasks: list[GridTask] = []
+    local_seen: set[tuple[str, str, str]] = set() if dedupe_within_split else set()
     attempts = 0
     total_target = sum(int(counts.get(f, 0)) for f in families)
     family_order = [f for f in families if int(counts.get(f, 0)) > 0]
@@ -194,14 +196,17 @@ def _generate_grid_tasks(
                 attempts += 1
                 if attempts > total_target * 200:
                     raise RuntimeError(
-                        f"Failed to generate enough unique tasks (got {len(tasks)}/{total_target})."
+                        f"Failed to generate enough tasks (got {len(tasks)}/{total_target})."
                     )
                 depth = rng.choice(depths)
                 task = env._make_task((family, depth), canary=False)  # noqa: SLF001
                 key = _grid_task_key(task)
-                if key in seen:
+                if key in exclude:
                     continue
-                seen.add(key)
+                if dedupe_within_split and key in local_seen:
+                    continue
+                if dedupe_within_split:
+                    local_seen.add(key)
                 tasks.append(task)
                 break
 
@@ -267,7 +272,7 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    seen: set[tuple[str, str, str]] = set()
+    reserved: set[tuple[str, str, str]] = set()
     train_rng = random.Random(int(args.seed) + 1)
     sel_rng = random.Random(int(args.seed) + 2)
     holdout_rng = random.Random(int(args.seed) + 3)
@@ -286,29 +291,35 @@ def main() -> None:
     selection_counts = _alloc_counts(int(args.selection_size), weights)
     holdout_counts = _alloc_counts(int(args.holdout_size), weights)
 
-    train_tasks = _generate_grid_tasks(
-        env_train,
-        families=list(train_counts.keys()),
-        depths=depths,
-        counts=train_counts,
-        rng=train_rng,
-        seen=seen,
-    )
     selection_tasks = _generate_grid_tasks(
         env_sel,
         families=list(selection_counts.keys()),
         depths=depths,
         counts=selection_counts,
         rng=sel_rng,
-        seen=seen,
+        exclude=reserved,
+        dedupe_within_split=True,
     )
+    reserved.update(_grid_task_key(task) for task in selection_tasks)
     holdout_tasks = _generate_grid_tasks(
         env_holdout,
         families=list(holdout_counts.keys()),
         depths=depths,
         counts=holdout_counts,
         rng=holdout_rng,
-        seen=seen,
+        exclude=reserved,
+        dedupe_within_split=True,
+    )
+    reserved.update(_grid_task_key(task) for task in holdout_tasks)
+    # Train split can contain duplicates, but must not overlap selection/holdout tasks.
+    train_tasks = _generate_grid_tasks(
+        env_train,
+        families=list(train_counts.keys()),
+        depths=depths,
+        counts=train_counts,
+        rng=train_rng,
+        exclude=reserved,
+        dedupe_within_split=False,
     )
 
     sft_rows: list[dict[str, Any]] = []
