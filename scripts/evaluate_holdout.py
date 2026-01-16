@@ -90,6 +90,21 @@ def check_answer(response: str, task: dict[str, Any]) -> tuple[bool, str]:
 
     Returns (is_correct, reason).
     """
+    if "capability" in task:
+        try:
+            from symbiont_ecology.evaluation.regex_generalization import (
+                RegexGeneralizationEvaluator,
+                RegexTask,
+            )
+
+            regex_task = RegexTask.from_dict(task)
+            evaluator = RegexGeneralizationEvaluator([regex_task])
+            result = evaluator.evaluate_single(regex_task, response)
+            return bool(result.success), f"capability={regex_task.capability.value}"
+        except Exception:
+            # Fall back to the lightweight evaluator below.
+            pass
+
     expected = task.get("expected_answer")
     test_cases = task.get("test_cases", []) or []
     if not test_cases:
@@ -123,7 +138,8 @@ def check_answer(response: str, task: dict[str, Any]) -> tuple[bool, str]:
     if required_keywords:
         response_lower = response.lower()
         found = sum(1 for kw in required_keywords if kw.lower() in response_lower)
-        is_correct = found >= len(required_keywords) // 2  # At least half
+        threshold = (len(required_keywords) * 7 + 9) // 10  # ceil(0.7 * n)
+        is_correct = found >= threshold
         return is_correct, f"keywords: {found}/{len(required_keywords)}"
 
     # For synthesis tasks with test cases, try to validate the regex
@@ -229,6 +245,9 @@ def _load_selection_tasks(
     if not path.exists():
         raise FileNotFoundError(f"Selection tasks file not found: {path}")
     tasks: list[dict[str, Any]] = []
+    family_filter = family
+    if isinstance(family_filter, str) and family_filter.lower() in {"any", "all", "*"}:
+        family_filter = None
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
@@ -238,10 +257,17 @@ def _load_selection_tasks(
                 obj = json.loads(line)
             except Exception:
                 continue
-            if family is not None:
-                if str(obj.get("family", "")).lower() != str(family).lower():
+            if family_filter is not None:
+                if str(obj.get("family", "")).lower() != str(family_filter).lower():
                     continue
-            if "prompt" not in obj or "target" not in obj:
+            if "prompt" not in obj:
+                continue
+            has_test_cases = bool(obj.get("test_cases"))
+            has_expected = bool(obj.get("expected_answer"))
+            has_keywords = bool(obj.get("metadata", {}).get("required_keywords", []))
+            has_target = bool(obj.get("target"))
+            has_capability = bool(obj.get("capability"))
+            if not (has_target or has_test_cases or has_expected or has_keywords or has_capability):
                 continue
             tasks.append(obj)
     if not tasks:
@@ -305,25 +331,54 @@ def _apply_adapter_state_to_peft_model(peft_model, adapter_state: dict[str, torc
     return len(updates)
 
 
-def _evaluate_regex_selection_tasks(
+def _infer_capability(task: dict[str, Any]) -> str:
+    capability = task.get("capability")
+    if capability:
+        return str(capability).strip().lower()
+    family = str(task.get("family", "")).strip().lower()
+    if family in {"regex", "regex.synthesis"}:
+        return "synthesis"
+    if family == "regex.debugging":
+        return "debugging"
+    if family == "regex.recognition":
+        return "recognition"
+    if family in {"regex.explanation", "regex.mutation_effect"}:
+        return "explanation"
+    if family == "regex.refactoring":
+        return "refactoring"
+    return family or "unknown"
+
+
+def _extract_test_cases(task: dict[str, Any]) -> list[dict[str, object]]:
+    test_cases = task.get("test_cases", []) or []
+    if test_cases:
+        return list(test_cases)
+    target = task.get("target", {}) or {}
+    if isinstance(target, dict):
+        return list(target.get("test_strings", []) or [])
+    return []
+
+
+def _evaluate_selection_tasks(
     model,
     tokenizer,
     tasks: list[dict[str, Any]],
     *,
     max_new_tokens: int = 96,
-) -> tuple[int, int, int, int]:
+) -> dict[str, Any]:
     from symbiont_ecology.utils.regex_extract import pick_best_regex_candidate
 
     correct = 0
     total = 0
     passed_cases = 0
     total_cases = 0
+    by_capability: dict[str, dict[str, int]] = {}
+
     for task in tasks:
         prompt = str(task.get("prompt", ""))
-        target = task.get("target", {}) or {}
-        test_cases = target.get("test_strings", []) or []
-        if not prompt or not test_cases:
+        if not prompt:
             continue
+        cap = _infer_capability(task)
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         with torch.no_grad():
@@ -337,8 +392,18 @@ def _evaluate_regex_selection_tasks(
             outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
         ).strip()
 
-        pattern, _pick = pick_best_regex_candidate(response, test_cases=test_cases)
+        is_correct, _reason = check_answer(response, task)
         total += 1
+        bucket = by_capability.setdefault(cap, {"correct": 0, "total": 0})
+        bucket["total"] += 1
+        if is_correct:
+            correct += 1
+            bucket["correct"] += 1
+
+        test_cases = _extract_test_cases(task)
+        if not test_cases:
+            continue
+        pattern, _pick = pick_best_regex_candidate(response, test_cases=test_cases)
         if not pattern:
             total_cases += len(test_cases)
             continue
@@ -347,19 +412,44 @@ def _evaluate_regex_selection_tasks(
         except re.error:
             total_cases += len(test_cases)
             continue
-        ok = True
         for tc in test_cases:
-            test_str = tc.get("string", "")
+            test_str = str(tc.get("string", ""))
             should_match = bool(tc.get("should_match", False))
             match = bool(compiled.fullmatch(test_str))
             if match == should_match:
                 passed_cases += 1
-            else:
-                ok = False
             total_cases += 1
-        if ok:
-            correct += 1
-    return correct, total, passed_cases, total_cases
+
+    acc = float(correct / total) if total else 0.0
+    case_acc = float(passed_cases / total_cases) if total_cases else 0.0
+
+    # Geometric mean across major capability buckets to avoid selecting a specialist that collapses
+    # on one axis (e.g., synthesis-only).
+    major_caps = ["recognition", "synthesis", "explanation", "debugging", "refactoring"]
+    cap_accs: list[float] = []
+    for c in major_caps:
+        stats = by_capability.get(c)
+        if not stats or not stats.get("total"):
+            continue
+        cap_accs.append(float(stats["correct"] / stats["total"]))
+    if cap_accs:
+        import math
+
+        eps = 1e-6
+        gm = float(math.exp(sum(math.log(max(a, eps)) for a in cap_accs) / len(cap_accs)))
+    else:
+        gm = acc
+
+    return {
+        "accuracy": acc,
+        "correct": correct,
+        "total": total,
+        "case_accuracy": case_acc,
+        "cases_passed": passed_cases,
+        "cases_total": total_cases,
+        "geometric_mean_accuracy": gm,
+        "by_capability": by_capability,
+    }
 
 
 def _select_best_organelle_by_selection_tasks(
@@ -371,7 +461,7 @@ def _select_best_organelle_by_selection_tasks(
     max_new_tokens: int = 96,
 ) -> tuple[str | None, dict[str, Any]]:
     best_id: str | None = None
-    best_score: tuple[float, float] = (-1.0, -1.0)
+    best_score: tuple[float, float, float] = (-1.0, -1.0, -1.0)
     best_details: dict[str, Any] = {}
     if not tasks:
         return None, {"error": "no selection tasks"}
@@ -380,25 +470,26 @@ def _select_best_organelle_by_selection_tasks(
             continue
         if _apply_adapter_state_to_peft_model(peft_model, state) <= 0:
             continue
-        correct, total, passed_cases, total_cases = _evaluate_regex_selection_tasks(
-            peft_model,
-            tokenizer,
-            tasks,
-            max_new_tokens=max_new_tokens,
+        metrics = _evaluate_selection_tasks(
+            peft_model, tokenizer, tasks, max_new_tokens=max_new_tokens
         )
-        acc = float(correct / total) if total else 0.0
-        case_acc = float(passed_cases / total_cases) if total_cases else 0.0
-        score = (acc, case_acc)
+        score = (
+            float(metrics.get("geometric_mean_accuracy", 0.0) or 0.0),
+            float(metrics.get("accuracy", 0.0) or 0.0),
+            float(metrics.get("case_accuracy", 0.0) or 0.0),
+        )
         if score > best_score:
             best_score = score
             best_id = oid
             best_details = {
-                "selection_accuracy": acc,
-                "selection_correct": correct,
-                "selection_total": total,
-                "selection_case_accuracy": case_acc,
-                "selection_cases_passed": passed_cases,
-                "selection_cases_total": total_cases,
+                "selection_geometric_mean_accuracy": score[0],
+                "selection_accuracy": score[1],
+                "selection_case_accuracy": score[2],
+                "selection_correct": metrics.get("correct", 0),
+                "selection_total": metrics.get("total", 0),
+                "selection_cases_passed": metrics.get("cases_passed", 0),
+                "selection_cases_total": metrics.get("cases_total", 0),
+                "selection_by_capability": metrics.get("by_capability", {}),
             }
     return best_id, best_details
 

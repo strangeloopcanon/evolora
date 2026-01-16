@@ -42,3 +42,42 @@ def test_regex_gridtask_evaluate_rejects_obviously_wrong_pattern():
     task = env.sample_task_from_cell(("regex", "short"))
     ok, _ = task.evaluate(r"^$")
     assert ok is False
+
+
+def test_regex_generalization_families_generate_solvable_tasks() -> None:
+    env = GridEnvironment(
+        GridConfig(
+            families=[
+                "regex.synthesis",
+                "regex.recognition",
+                "regex.explanation",
+                "regex.debugging",
+                "regex.refactoring",
+                "regex.mutation_effect",
+            ],
+            depths=["short"],
+        ),
+        ControllerConfig(tau=0.5, beta=0.2, eta=0.1),
+        PricingConfig(base=1.0, k=1.0, min=0.3, max=2.0),
+        CanaryConfig(q_min=0.7),
+        seed=19,
+    )
+    for family in [
+        "regex.synthesis",
+        "regex.recognition",
+        "regex.explanation",
+        "regex.debugging",
+        "regex.refactoring",
+        "regex.mutation_effect",
+    ]:
+        task = env.sample_task_from_cell((family, "short"))
+        assert isinstance(task.target, dict)
+        if family == "regex.recognition":
+            expected = bool(task.target.get("expected", False))
+            answer = "yes" if expected else "no"
+        elif family in {"regex.explanation", "regex.mutation_effect"}:
+            answer = str(task.target.get("reference_answer", ""))
+        else:
+            answer = str(task.target.get("pattern", ""))
+        ok, _reward = task.evaluate(answer)
+        assert ok is True

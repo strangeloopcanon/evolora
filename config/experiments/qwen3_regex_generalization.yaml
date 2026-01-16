@@ -1,0 +1,100 @@
+# Regex generalization evo-vs-SFT config (EcologyConfig schema).
+#
+# This config is meant for the "regex_generalization" task mix:
+# - recognition (yes/no), synthesis, explanation (keywords), debugging, refactoring, mutation-effect.
+#
+# Runner (recommended):
+#   make regex-generalization-evo-vs-sft
+#
+# Or:
+#   scripts/run_regex_generalization_evo_vs_sft.sh --config config/experiments/qwen3_regex_generalization.yaml ...
+host:
+  backbone_type: gemma
+  backbone_model: Qwen/Qwen2.5-0.5B
+  tokenizer: Qwen/Qwen2.5-0.5B
+  device: mps
+  max_lora_rank: 8
+  max_sequence_length: 256
+  gen_max_new_tokens: 96
+
+grid:
+  families:
+    - regex.synthesis
+    - regex.recognition
+    - regex.explanation
+    - regex.debugging
+    - regex.refactoring
+    - regex.mutation_effect
+  depths: [short, medium, long]
+
+controller:
+  tau: 0.5
+  beta: 0.2
+  eta: 0.5
+
+pricing:
+  base: 1.0
+  k: 1.5
+  min: 0.3
+  max: 2.0
+
+energy:
+  Emax: 5.0
+  m: 1.0
+  alpha: 1.0e-14
+  beta: 0.02
+  gamma: 0.001
+  lambda_p: 1.0e-7
+  bankruptcy_grace: 3
+  cost_scale: 1.0
+
+canary:
+  q_min: 0.95
+
+population_strategy:
+  mu: 4
+  lambda: 12
+  max_population: 16
+  initial_orgs: 4
+
+evolution:
+  mutation_rate: 0.05
+  max_merges_per_gen: 3
+  min_population: 4
+  max_population: 16
+
+assimilation_tuning:
+  per_cell_interval: 5
+  max_merges_per_cell: 1
+  seed_scale: 0.5
+  soup_size: 3
+  holdout_tasks_path: config/evaluation/holdout_regex.jsonl
+  holdout_sample_size: 8
+  holdout_margin: 0.02
+  bootstrap_uplift_enabled: false
+  bootstrap_samples: 100
+  permutation_samples: 100
+  dr_enabled: true
+  dr_min_power: 0.2
+
+environment:
+  synthetic_batch_size: 2
+  max_episode_steps: 128
+  energy_budget: 50.0
+
+human_bandit:
+  enabled: false
+
+# Disable periodic evaluation-by-holdout during training for clean comparisons.
+evaluation:
+  enabled: false
+  cadence: 10
+  tasks_path: config/evaluation/holdout_regex.jsonl
+  sample_size: 8
+  reward_weight: 0.75
+
+comms:
+  enabled: false
+
+policy:
+  enabled: false

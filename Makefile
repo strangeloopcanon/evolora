@@ -112,3 +112,28 @@ REGEX_DEVICE ?=
 REGEX_BATCH_SIZE ?=
 REGEX_DISABLE_HUMAN ?= 1
 REGEX_EVAL_MAX_SAMPLES ?=
+
+.PHONY: regex-generalization-evo-vs-sft
+regex-generalization-evo-vs-sft: setup
+	./scripts/run_regex_generalization_evo_vs_sft.sh \
+	  --config $(REGEX_GEN_CONFIG) \
+	  --output $(REGEX_GEN_OUTPUT) \
+	  --calib-gens $(REGEX_GEN_CALIB_GENS) \
+	  --full-gens $(REGEX_GEN_FULL_GENS) \
+	  --checkpoint-every $(REGEX_GEN_CHECKPOINT_EVERY) \
+	  --seed $(REGEX_GEN_SEED) \
+	  $(if $(REGEX_GEN_DEVICE),--device $(REGEX_GEN_DEVICE),) \
+	  $(if $(REGEX_GEN_BATCH_SIZE),--batch-size $(REGEX_GEN_BATCH_SIZE),) \
+	  $(if $(REGEX_GEN_DISABLE_HUMAN),--disable-human,) \
+	  $(if $(REGEX_GEN_EVAL_MAX_SAMPLES),--eval-max-samples $(REGEX_GEN_EVAL_MAX_SAMPLES),)
+
+REGEX_GEN_CONFIG ?= config/experiments/qwen3_regex_generalization.yaml
+REGEX_GEN_OUTPUT ?= artifacts_regex_gen_evo_sft_$(shell date +%Y%m%d_%H%M%S)
+REGEX_GEN_CALIB_GENS ?= 5
+REGEX_GEN_FULL_GENS ?= 50
+REGEX_GEN_CHECKPOINT_EVERY ?= 5
+REGEX_GEN_SEED ?= 777
+REGEX_GEN_DEVICE ?=
+REGEX_GEN_BATCH_SIZE ?=
+REGEX_GEN_DISABLE_HUMAN ?= 1
+REGEX_GEN_EVAL_MAX_SAMPLES ?=

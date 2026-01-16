@@ -22,6 +22,53 @@ from symbiont_ecology.utils.regex_extract import pick_best_regex_candidate
 GridKey = Tuple[str, str]
 
 
+def _regex_complexity_score(pattern: str) -> float:
+    """Compute a lightweight regex complexity score (lower is simpler).
+
+    Kept local to avoid circular imports between environment and evaluation modules.
+    """
+    char_length = len(pattern)
+    alternation_count = pattern.count("|")
+    group_count = len(re.findall(r"\((?!\?:)", pattern))
+    group_count += len(re.findall(r"\(\?:", pattern))
+    quantifier_count = len(re.findall(r"[+*?]|\{\d+(?:,\d*)?\}", pattern))
+    node_patterns = [
+        r"\[(?:\^)?[^\]]+\]",
+        r"\\[dDwWsS]",
+        r"\\.",
+        r"[+*?]",
+        r"\{\d+(?:,\d*)?\}",
+        r"\|",
+        r"\((?:\?:)?",
+        r"\)",
+        r"\^|\$",
+        r"[^\\[\]{}()+*?|^$]",
+    ]
+    ast_node_count = sum(len(re.findall(p, pattern)) for p in node_patterns)
+    max_depth = 0
+    current_depth = 0
+    for char in pattern:
+        if char == "(":
+            current_depth += 1
+            max_depth = max(max_depth, current_depth)
+        elif char == ")":
+            current_depth = max(0, current_depth - 1)
+    has_backtracking_risk = bool(
+        re.search(r"\.\*.*\.\*", pattern)
+        or re.search(r"\([^)]*[+*][^)]*\)[+*]", pattern)
+        or re.search(r"(?<!\?)\*\*", pattern)
+    )
+    return float(
+        char_length * 0.1
+        + ast_node_count * 1.0
+        + max_depth * 2.0
+        + alternation_count * 1.5
+        + group_count * 0.5
+        + quantifier_count * 0.3
+        + (5.0 if has_backtracking_risk else 0.0)
+    )
+
+
 @dataclass
 class GridTask:
     task_id: str
@@ -146,7 +193,7 @@ class GridTask:
             success = normalized == str(self.target)
             task_reward = 1.0 if success else 0.0
 
-        elif self.family == "regex":
+        elif self.family in {"regex", "regex.debugging", "regex.synthesis"}:
             # The target is a dict containing the correct pattern and test strings
             if isinstance(self.target, dict):
                 test_strings = self.target.get("test_strings", [])
@@ -168,6 +215,96 @@ class GridTask:
                     success = False
             else:
                 success = False
+
+            task_reward = 1.0 if success else 0.0
+
+        elif self.family == "regex.recognition":
+            expected_bool: bool | None = None
+            if isinstance(self.target, dict):
+                expected = self.target.get("expected")
+                if isinstance(expected, bool):
+                    expected_bool = expected
+                elif expected is not None:
+                    expected_bool = bool(expected)
+            elif isinstance(self.target, bool):
+                expected_bool = self.target
+            else:
+                expected_bool = None
+
+            # Extract first boolean token ignoring markdown or prose
+            text = clean.strip().lower()
+            m = re.search(r"\b(true|false|yes|no)\b", text)
+            if m:
+                token = m.group(1)
+                if token in {"true", "false"}:
+                    predicted_bool = token == "true"
+                else:
+                    predicted_bool = token == "yes"
+            else:
+                predicted_bool = None
+
+            success = (
+                predicted_bool is not None
+                and expected_bool is not None
+                and predicted_bool == expected_bool
+            )
+            task_reward = 1.0 if success else 0.0
+
+        elif self.family in {"regex.explanation", "regex.mutation_effect"}:
+            keywords: list[str] = []
+            if isinstance(self.target, dict):
+                raw = self.target.get("required_keywords") or self.target.get("keywords") or []
+                if isinstance(raw, list):
+                    keywords = [str(kw) for kw in raw if kw]
+            elif isinstance(self.target, list):
+                keywords = [str(kw) for kw in self.target if kw]
+
+            response_lower = clean.lower()
+            found_keywords = [kw for kw in keywords if kw.lower() in response_lower]
+            score = len(found_keywords) / len(keywords) if keywords else 1.0
+            success = score >= 0.7
+            task_reward = 1.0 if success else 0.0
+
+        elif self.family == "regex.refactoring":
+            test_strings: list[dict[str, object]] = []
+            original_pattern = ""
+            if isinstance(self.target, dict):
+                test_strings = self.target.get("test_strings", []) or []
+                original_pattern = str(self.target.get("original_pattern") or "")
+            picked, _pick_details = pick_best_regex_candidate(clean, test_cases=test_strings)
+            if not picked:
+                success = False
+            else:
+                try:
+                    compiled = re.compile(picked)
+                except re.error:
+                    compiled = None
+                if compiled is None:
+                    success = False
+                else:
+                    passed = 0
+                    total = 0
+                    ok = True
+                    for tc in test_strings:
+                        test_str = str(tc.get("string", ""))
+                        should_match = bool(tc.get("should_match", False))
+                        matched = bool(compiled.fullmatch(test_str))
+                        if matched == should_match:
+                            passed += 1
+                        else:
+                            ok = False
+                        total += 1
+                    if not ok or total <= 0:
+                        success = False
+                    elif original_pattern:
+                        try:
+                            success = _regex_complexity_score(picked) <= _regex_complexity_score(
+                                original_pattern
+                            )
+                        except Exception:
+                            success = True
+                    else:
+                        success = True
 
             task_reward = 1.0 if success else 0.0
 
@@ -795,6 +932,103 @@ class GridEnvironment:
                 failure_cost_scale=self.failure_cost_multiplier,
             )
 
+        if family == "regex.synthesis":
+            prompt_regex, target_pattern, test_strings = self._make_regex_task(depth)
+            target_dict = {"pattern": target_pattern, "test_strings": test_strings}
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_regex,
+                price=price,
+                target=target_dict,
+                family="regex.synthesis",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.recognition":
+            prompt_recog, recog_target = self._make_regex_recognition_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_recog,
+                price=price,
+                target=recog_target,
+                family="regex.recognition",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.explanation":
+            prompt_explain, explain_target = self._make_regex_explanation_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_explain,
+                price=price,
+                target=explain_target,
+                family="regex.explanation",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.debugging":
+            prompt_debug, debug_target = self._make_regex_debugging_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_debug,
+                price=price,
+                target=debug_target,
+                family="regex.debugging",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.refactoring":
+            prompt_refactor, refactor_target = self._make_regex_refactoring_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_refactor,
+                price=price,
+                target=refactor_target,
+                family="regex.refactoring",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.mutation_effect":
+            prompt_mut, mut_target = self._make_regex_mutation_effect_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_mut,
+                price=price,
+                target=mut_target,
+                family="regex.mutation_effect",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
         # fallback: math task
         return self._make_task(("math", depth), canary)
 
@@ -1316,6 +1550,284 @@ class GridEnvironment:
         ]
 
         return prompt, pattern, test_strings
+
+    def _regex_cases_pass(self, pattern: str, test_strings: list[dict[str, object]]) -> bool:
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            return False
+        if not test_strings:
+            return False
+        for tc in test_strings:
+            test_str = str(tc.get("string", ""))
+            should_match = bool(tc.get("should_match", False))
+            matched = bool(compiled.fullmatch(test_str))
+            if matched != should_match:
+                return False
+        return True
+
+    def _extract_regex_desc(self, prompt: str) -> str:
+        match = re.search(r"Write a regex pattern to (.+?)\\. Test cases:", prompt)
+        return match.group(1) if match else "match the desired strings"
+
+    def _make_regex_recognition_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        for _ in range(25):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            tc = self.rng.choice(list(test_strings))
+            test_str = str(tc.get("string", ""))
+            expected = bool(tc.get("should_match", False))
+            prompt = (
+                "Given this regex:\n"
+                f"{pattern}\n\n"
+                f'Does it match "{test_str}"? Answer yes or no, and briefly explain why.'
+            )
+            return prompt, {"expected": expected, "pattern": pattern, "test_string": test_str}
+        # Fallback: a trivial recognition task
+        prompt = 'Does the regex "^a+$" match "aaa"? Answer yes or no.'
+        return prompt, {"expected": True, "pattern": "^a+$", "test_string": "aaa"}
+
+    def _make_regex_explanation_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        stop = {
+            "match",
+            "matches",
+            "exactly",
+            "string",
+            "strings",
+            "with",
+            "the",
+            "a",
+            "an",
+            "of",
+            "to",
+            "in",
+            "format",
+            "starting",
+            "style",
+            "names",
+            "name",
+            "numbers",
+            "number",
+            "words",
+            "word",
+        }
+        for _ in range(25):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            desc = self._extract_regex_desc(synth_prompt)
+            tokens = re.findall(r"[A-Za-z0-9_]+", desc)
+            keywords: list[str] = []
+            for tok in tokens:
+                t = tok.strip().lower()
+                if not t or t in stop:
+                    continue
+                if t not in keywords:
+                    keywords.append(t)
+            if not keywords:
+                keywords = ["regex", "match"]
+            keywords = keywords[:8]
+            explanation = f"This regex matches strings that {desc}."
+            prompt = f"Explain what this regex matches in plain English:\n{pattern}"
+            return prompt, {
+                "required_keywords": keywords,
+                "pattern": pattern,
+                "reference_answer": explanation,
+            }
+        prompt = "Explain what this regex matches in plain English:\n^a+$"
+        return prompt, {
+            "required_keywords": ["a"],
+            "pattern": "^a+$",
+            "reference_answer": "Matches one or more 'a' characters.",
+        }
+
+    def _mutate_regex_pattern(self, pattern: str) -> list[tuple[str, str]]:
+        """Return candidate (mutated_pattern, mutation_note) pairs."""
+        mutations: list[tuple[str, str]] = []
+
+        if "2[0-3]" in pattern:
+            mutations.append((pattern.replace("2[0-3]", "2\\d", 1), "widened a bounded range"))
+            mutations.append((pattern.replace("2[0-3]", "2[0-4]", 1), "widened a bounded range"))
+
+        # Prefer loosening fixed-length digit runs.
+        widened = re.sub(r"\\d\{\d+\}", lambda _m: r"\d+", pattern, count=1)
+        if widened != pattern:
+            mutations.append((widened, "loosened a fixed-length quantifier"))
+
+        # Loosen a simple range quantifier.
+        widened_range = re.sub(r"\{\d+(?:,\d*)?\}", "{1,}", pattern, count=1)
+        if widened_range != pattern:
+            mutations.append((widened_range, "loosened a range quantifier"))
+
+        # Loosen a plus to star.
+        plus_to_star = pattern.replace("+", "*", 1)
+        if plus_to_star != pattern:
+            mutations.append((plus_to_star, "changed + to *"))
+
+        # Expand month/day constraints to allow invalid numbers (common bug template).
+        widened_month = pattern.replace("(0[1-9]|1[0-2])", "(\\d{2})", 1)
+        if widened_month != pattern:
+            mutations.append((widened_month, "removed month range constraint"))
+
+        widened_day = pattern.replace("(0[1-9]|[12]\\d|3[01])", "(\\d{2})", 1)
+        if widened_day != pattern:
+            mutations.append((widened_day, "removed day range constraint"))
+
+        return mutations
+
+    def _make_regex_debugging_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        for _ in range(40):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            desc = self._extract_regex_desc(synth_prompt)
+            candidates = self._mutate_regex_pattern(pattern)
+            self.rng.shuffle(candidates)
+            for mutated, note in candidates:
+                if mutated == pattern:
+                    continue
+                if not self._regex_cases_pass(pattern, test_strings):
+                    continue
+                # Mutated must compile and fail at least one case.
+                try:
+                    re.compile(mutated)
+                except re.error:
+                    continue
+                if self._regex_cases_pass(mutated, test_strings):
+                    continue
+                prompt = (
+                    f"This regex is supposed to {desc} but has a bug:\n"
+                    f"{mutated}\n\n"
+                    "Fix the regex. Respond with only the corrected pattern."
+                )
+                return prompt, {
+                    "pattern": pattern,
+                    "broken_pattern": mutated,
+                    "bug_description": note,
+                    "test_strings": test_strings,
+                }
+        # Fallback: mutate by loosening digits in a simple pattern.
+        prompt = (
+            "This regex is supposed to match exactly three digits but has a bug:\n"
+            "^\\d+$\n\nFix the regex. Respond with only the corrected pattern."
+        )
+        return prompt, {
+            "pattern": "^\\d{3}$",
+            "broken_pattern": "^\\d+$",
+            "bug_description": "loosened a fixed-length quantifier",
+            "test_strings": [
+                {"string": "123", "should_match": True},
+                {"string": "12", "should_match": False},
+                {"string": "1234", "should_match": False},
+            ],
+        }
+
+    def _inflate_regex_pattern(self, pattern: str) -> str:
+        inflated = pattern
+
+        def expand_digits(match: re.Match[str]) -> str:
+            n = int(match.group(1))
+            if n <= 0 or n > 6:
+                return match.group(0)
+            return "[0-9]" * n
+
+        inflated = re.sub(r"\\d\{(\d+)\}", expand_digits, inflated)
+        inflated = inflated.replace("\\d", "[0-9]")
+        inflated = inflated.replace("\\w", "[A-Za-z0-9_]")
+        if inflated == pattern:
+            inflated = f"(?:{pattern})"
+        return inflated
+
+    def _make_regex_refactoring_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        for _ in range(25):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            inflated = self._inflate_regex_pattern(pattern)
+            if not self._regex_cases_pass(inflated, test_strings):
+                continue
+            try:
+                if _regex_complexity_score(inflated) <= _regex_complexity_score(pattern):
+                    inflated = f"(?:{inflated})"
+            except Exception:
+                pass
+            prompt = (
+                "Simplify this regex without changing its matching behavior:\n"
+                f"{inflated}\n\nRespond with only the simplified pattern."
+            )
+            return prompt, {
+                "pattern": pattern,
+                "original_pattern": inflated,
+                "test_strings": test_strings,
+            }
+        prompt = (
+            "Simplify this regex without changing its matching behavior:\n"
+            "^(?:[0-9][0-9][0-9])$\n\nRespond with only the simplified pattern."
+        )
+        return prompt, {
+            "pattern": "^\\d{3}$",
+            "original_pattern": "^(?:[0-9][0-9][0-9])$",
+            "test_strings": [
+                {"string": "123", "should_match": True},
+                {"string": "12", "should_match": False},
+                {"string": "1234", "should_match": False},
+            ],
+        }
+
+    def _make_regex_mutation_effect_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        for _ in range(40):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            candidates = self._mutate_regex_pattern(pattern)
+            self.rng.shuffle(candidates)
+            for mutated, note in candidates:
+                if mutated == pattern:
+                    continue
+                try:
+                    compiled = re.compile(mutated)
+                    compiled_orig = re.compile(pattern)
+                except re.error:
+                    continue
+                # Keep positives matching.
+                positives_ok = True
+                new_matches: list[str] = []
+                for tc in test_strings:
+                    test_str = str(tc.get("string", ""))
+                    should_match = bool(tc.get("should_match", False))
+                    orig_match = bool(compiled_orig.fullmatch(test_str))
+                    mut_match = bool(compiled.fullmatch(test_str))
+                    if should_match and not mut_match:
+                        positives_ok = False
+                        break
+                    if (not should_match) and (not orig_match) and mut_match:
+                        new_matches.append(test_str)
+                if not positives_ok or not new_matches:
+                    continue
+                required = list(dict.fromkeys(new_matches))[:6]
+                reference = ", ".join(required)
+                prompt = (
+                    f"Original regex: {pattern}\n"
+                    f"Mutated regex: {mutated}\n\n"
+                    f"The regex was changed ({note}). What new strings will now match that didn't before?"
+                )
+                return prompt, {
+                    "required_keywords": required,
+                    "pattern": pattern,
+                    "mutated_pattern": mutated,
+                    "reference_answer": reference,
+                }
+        prompt = (
+            "Original regex: ^\\d{3}$\nMutated regex: ^\\d+$\n\n"
+            "The quantifier was changed from {3} to +. What new strings will now match?"
+        )
+        return prompt, {
+            "required_keywords": ["1", "12", "1234"],
+            "pattern": "^\\d{3}$",
+            "mutated_pattern": "^\\d+$",
+            "reference_answer": "1, 12, 1234",
+        }
 
     # ------------------------------------------------------------------
     def register_result(self, organelle_id: str, task: GridTask, success: bool) -> None:

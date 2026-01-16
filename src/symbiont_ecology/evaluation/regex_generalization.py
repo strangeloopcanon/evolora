@@ -335,6 +335,19 @@ def evaluate_recognition_task(task: RegexTask, response: str) -> tuple[bool, dic
             )
         return success, {"expected": expected, "response_snippet": response_lower[:100]}
 
+    # Some recognition-style tasks (e.g. mutation-effect questions) do not have a strict yes/no
+    # answer, but specify required_keywords for a free-text explanation.
+    keywords = task.metadata.get("required_keywords", [])
+    if keywords:
+        found_keywords = [kw for kw in keywords if str(kw).lower() in response_lower]
+        score = len(found_keywords) / len(keywords) if keywords else 1.0
+        success = score >= 0.7
+        return success, {
+            "required_keywords": keywords,
+            "found_keywords": found_keywords,
+            "coverage_score": score,
+        }
+
     return False, {"error": "No expected answer provided"}
 
 

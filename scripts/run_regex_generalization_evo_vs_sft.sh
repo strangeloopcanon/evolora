@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end runner: regex evolution → compute-matched SFT → holdout evaluation.
+# End-to-end runner: regex_generalization evolution → compute-matched SFT → holdout evaluation.
 #
 # This wraps long runs with a short calibration segment first, so failures show up early,
 # and then resumes into the same output directory. All intermediate artifacts are saved.
@@ -28,14 +28,14 @@ timestamp() {
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  scripts/run_regex_evo_vs_sft.sh [options]
+  scripts/run_regex_generalization_evo_vs_sft.sh [options]
 
 Options:
-  --config <yaml>            EcologyConfig YAML (default: config/experiments/qwen3_regex.yaml)
-  --output <dir>             Output run directory (default: artifacts_regex_evo_sft_<timestamp>)
+  --config <yaml>            EcologyConfig YAML (default: config/experiments/qwen3_regex_generalization.yaml)
+  --output <dir>             Output run directory (default: artifacts_regex_gen_evo_sft_<timestamp>)
   --train-size <int>         Generated SFT train tasks (default: 20000)
-  --selection-size <int>     Generated selection tasks for evo organelle picking (default: 64)
-  --id-holdout-size <int>    Generated in-distribution holdout tasks (default: 256)
+  --selection-size <int>     Generated selection tasks for evo organelle picking (default: 256)
+  --id-holdout-size <int>    Generated in-distribution holdout tasks (default: 512)
   --calib-gens <int>         Calibration generations (default: 5)
   --full-gens <int>          Total generations after resume (default: 50)
   --checkpoint-every <int>   Checkpoint cadence in generations (default: 5)
@@ -46,7 +46,7 @@ Options:
   --sft-data <jsonl>         Optional SFT data file (default: generated from GridEnvironment)
   --holdout <jsonl>          OOD holdout eval tasks (default: config/evaluation/regex_generalization.jsonl)
   --eval-max-samples <int>   Optional cap on holdout task count (default: all)
-  --no-eval-id               Skip in-distribution regex holdout evaluation
+  --no-eval-id               Skip in-distribution mixed holdout evaluation
   --no-eval-ood              Skip OOD holdout evaluation
   --sft-match-budget-field   One of: total_tokens,train_tokens,total_flops,train_flops,wall_clock_seconds (default: train_flops)
   --backprop-multiplier      Convert evo budget → SFT budget (default: 3.0)
@@ -55,11 +55,11 @@ Options:
 EOF
 }
 
-CONFIG="config/experiments/qwen3_regex.yaml"
+CONFIG="config/experiments/qwen3_regex_generalization.yaml"
 OUTPUT=""
 TRAIN_SIZE=20000
-SELECTION_SIZE=64
-ID_HOLDOUT_SIZE=256
+SELECTION_SIZE=256
+ID_HOLDOUT_SIZE=512
 CALIB_GENS=5
 FULL_GENS=50
 CHECKPOINT_EVERY=5
@@ -131,7 +131,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$OUTPUT" ]; then
-  OUTPUT="artifacts_regex_evo_sft_$(timestamp)"
+  OUTPUT="artifacts_regex_gen_evo_sft_$(timestamp)"
 fi
 
 if ! [ -f "$CONFIG" ]; then
@@ -185,8 +185,8 @@ if [ -z "$SFT_DATA" ]; then
 fi
 
 if ! [ -f "$SFT_DATA" ] || ! [ -f "$ID_SELECTION_TASKS" ] || ! [ -f "$ID_HOLDOUT" ]; then
-  echo "[data] generating distribution-matched regex datasets into $DATASET_DIR"
-  AGENT_MODE=baseline "$PY" scripts/generate_regex_grid_datasets.py \
+  echo "[data] generating distribution-matched regex_generalization datasets into $DATASET_DIR"
+  AGENT_MODE=baseline "$PY" scripts/generate_regex_generalization_datasets.py \
     --config "$CONFIG" \
     --seed "$SEED" \
     --train-size "$TRAIN_SIZE" \
@@ -243,7 +243,7 @@ fi
 if [ "$RUN_EVAL" -eq 1 ]; then
   if [ "$RUN_EVAL_ID" -eq 1 ]; then
     EVAL_ID_OUT="$OUTPUT/eval_holdout_id.json"
-    EVAL_ID_ARGS=(--holdout "$ID_HOLDOUT" --model "$MODEL" --evo-checkpoint "$CHECKPOINT" --output "$EVAL_ID_OUT" --evo-selection-tasks "$ID_SELECTION_TASKS")
+    EVAL_ID_ARGS=(--holdout "$ID_HOLDOUT" --model "$MODEL" --evo-checkpoint "$CHECKPOINT" --output "$EVAL_ID_OUT" --evo-selection-tasks "$ID_SELECTION_TASKS" --evo-selection-family any)
     if [ "$RUN_SFT" -eq 1 ]; then
       EVAL_ID_ARGS+=(--sft-adapter "$OUTPUT/sft/peft_adapter")
     fi
@@ -257,7 +257,7 @@ if [ "$RUN_EVAL" -eq 1 ]; then
   fi
   if [ "$RUN_EVAL_OOD" -eq 1 ]; then
     EVAL_OOD_OUT="$OUTPUT/eval_holdout_ood.json"
-    EVAL_OOD_ARGS=(--holdout "$HOLDOUT" --model "$MODEL" --evo-checkpoint "$CHECKPOINT" --output "$EVAL_OOD_OUT" --evo-selection-tasks "$ID_SELECTION_TASKS")
+    EVAL_OOD_ARGS=(--holdout "$HOLDOUT" --model "$MODEL" --evo-checkpoint "$CHECKPOINT" --output "$EVAL_OOD_OUT" --evo-selection-tasks "$ID_SELECTION_TASKS" --evo-selection-family any)
     if [ "$RUN_SFT" -eq 1 ]; then
       EVAL_OOD_ARGS+=(--sft-adapter "$OUTPUT/sft/peft_adapter")
     fi

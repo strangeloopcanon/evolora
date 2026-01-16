@@ -269,7 +269,12 @@ class HostKernel:
             organelle.update(envelope, breakdown)
             if self.compute_budget is not None:
                 try:
-                    self.compute_budget.record_hebbian_update(training=training_intent)
+                    params = self._trainable_params(organelle)
+                    # Estimate: 2 FLOPs per param (scale + add)
+                    hebbian_flops = float(params * 2)
+                    self.compute_budget.record_hebbian_update(
+                        estimated_flops=hebbian_flops, training=training_intent
+                    )
                 except Exception:
                     pass
             # Mint ATP based on total reward (which already subtracts cost_penalty)
