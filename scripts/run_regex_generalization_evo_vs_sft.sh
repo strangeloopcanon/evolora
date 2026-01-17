@@ -219,7 +219,7 @@ MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
   --output "$OUTPUT" \
   --checkpoint-every "$CHECKPOINT_EVERY" \
   --seed "$SEED" \
-  "${EXTRA_ARGS[@]}"
+  "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
 echo "[resume] resume_from=$OUTPUT gens=$RESUME_GENS seed=$SEED checkpoint_every=$CHECKPOINT_EVERY"
 MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
@@ -228,7 +228,7 @@ MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
   --generations "$RESUME_GENS" \
   --checkpoint-every "$CHECKPOINT_EVERY" \
   --seed "$SEED" \
-  "${EXTRA_ARGS[@]}"
+  "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
 CHECKPOINT="$OUTPUT/checkpoint.pt"
 if ! [ -f "$CHECKPOINT" ]; then
