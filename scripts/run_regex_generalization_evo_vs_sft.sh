@@ -34,7 +34,7 @@ Options:
   --config <yaml>            EcologyConfig YAML (default: config/experiments/qwen3_regex_generalization.yaml)
   --output <dir>             Output run directory (default: artifacts_regex_gen_evo_sft_<timestamp>)
   --train-size <int>         Generated SFT train tasks (default: 20000)
-  --selection-size <int>     Generated selection tasks for evo organelle picking (default: 256)
+  --selection-size <int>     Generated selection tasks for evo organelle picking (default: 64)
   --id-holdout-size <int>    Generated in-distribution holdout tasks (default: 512)
   --calib-gens <int>         Calibration generations (default: 5)
   --full-gens <int>          Total generations after resume (default: 50)
@@ -48,6 +48,9 @@ Options:
   --eval-max-samples <int>   Optional cap on holdout task count (default: all)
   --no-eval-id               Skip in-distribution mixed holdout evaluation
   --no-eval-ood              Skip OOD holdout evaluation
+  --evo-selection-max-samples <int>  Cap selection task count (default: all)
+  --evo-selection-top-k-by-roi <int> Shortlist organelles by ROI before selection (default: 8)
+  --evo-selection-max-new-tokens <int> Max new tokens per selection generation (default: 64)
   --sft-match-budget-field   One of: total_tokens,train_tokens,total_flops,train_flops,wall_clock_seconds (default: train_flops)
   --backprop-multiplier      Convert evo budget → SFT budget (default: 3.0)
   --no-sft                   Skip SFT baseline training
@@ -58,7 +61,7 @@ EOF
 CONFIG="config/experiments/qwen3_regex_generalization.yaml"
 OUTPUT=""
 TRAIN_SIZE=20000
-SELECTION_SIZE=256
+SELECTION_SIZE=64
 ID_HOLDOUT_SIZE=512
 CALIB_GENS=5
 FULL_GENS=50
@@ -70,6 +73,9 @@ DISABLE_HUMAN=0
 SFT_DATA=""
 HOLDOUT="config/evaluation/regex_generalization.jsonl"
 EVAL_MAX_SAMPLES=""
+EVO_SELECTION_MAX_SAMPLES=""
+EVO_SELECTION_TOP_K_BY_ROI="8"
+EVO_SELECTION_MAX_NEW_TOKENS="64"
 RUN_SFT=1
 RUN_EVAL=1
 RUN_EVAL_ID=1
@@ -109,6 +115,12 @@ while [ $# -gt 0 ]; do
       HOLDOUT="${2:-}"; shift 2 ;;
     --eval-max-samples)
       EVAL_MAX_SAMPLES="${2:-}"; shift 2 ;;
+    --evo-selection-max-samples)
+      EVO_SELECTION_MAX_SAMPLES="${2:-}"; shift 2 ;;
+    --evo-selection-top-k-by-roi)
+      EVO_SELECTION_TOP_K_BY_ROI="${2:-}"; shift 2 ;;
+    --evo-selection-max-new-tokens)
+      EVO_SELECTION_MAX_NEW_TOKENS="${2:-}"; shift 2 ;;
     --no-eval-id)
       RUN_EVAL_ID=0; shift ;;
     --no-eval-ood)
@@ -243,9 +255,12 @@ fi
 if [ "$RUN_EVAL" -eq 1 ]; then
   if [ "$RUN_EVAL_ID" -eq 1 ]; then
     EVAL_ID_OUT="$OUTPUT/eval_holdout_id.json"
-    EVAL_ID_ARGS=(--holdout "$ID_HOLDOUT" --model "$MODEL" --evo-checkpoint "$CHECKPOINT" --output "$EVAL_ID_OUT" --evo-selection-tasks "$ID_SELECTION_TASKS" --evo-selection-family any)
+    EVAL_ID_ARGS=(--holdout "$ID_HOLDOUT" --model "$MODEL" --evo-checkpoint "$CHECKPOINT" --output "$EVAL_ID_OUT" --evo-selection-tasks "$ID_SELECTION_TASKS" --evo-selection-family any --evo-selection-max-new-tokens "$EVO_SELECTION_MAX_NEW_TOKENS" --evo-selection-top-k-by-roi "$EVO_SELECTION_TOP_K_BY_ROI")
     if [ "$RUN_SFT" -eq 1 ]; then
       EVAL_ID_ARGS+=(--sft-adapter "$OUTPUT/sft/peft_adapter")
+    fi
+    if [ -n "$EVO_SELECTION_MAX_SAMPLES" ]; then
+      EVAL_ID_ARGS+=(--evo-selection-max-samples "$EVO_SELECTION_MAX_SAMPLES")
     fi
     if [ -n "$EVAL_MAX_SAMPLES" ]; then
       EVAL_ID_ARGS+=(--max-samples "$EVAL_MAX_SAMPLES")
@@ -257,9 +272,12 @@ if [ "$RUN_EVAL" -eq 1 ]; then
   fi
   if [ "$RUN_EVAL_OOD" -eq 1 ]; then
     EVAL_OOD_OUT="$OUTPUT/eval_holdout_ood.json"
-    EVAL_OOD_ARGS=(--holdout "$HOLDOUT" --model "$MODEL" --evo-checkpoint "$CHECKPOINT" --output "$EVAL_OOD_OUT" --evo-selection-tasks "$ID_SELECTION_TASKS" --evo-selection-family any)
+    EVAL_OOD_ARGS=(--holdout "$HOLDOUT" --model "$MODEL" --evo-checkpoint "$CHECKPOINT" --output "$EVAL_OOD_OUT" --evo-selection-tasks "$ID_SELECTION_TASKS" --evo-selection-family any --evo-selection-max-new-tokens "$EVO_SELECTION_MAX_NEW_TOKENS" --evo-selection-top-k-by-roi "$EVO_SELECTION_TOP_K_BY_ROI")
     if [ "$RUN_SFT" -eq 1 ]; then
       EVAL_OOD_ARGS+=(--sft-adapter "$OUTPUT/sft/peft_adapter")
+    fi
+    if [ -n "$EVO_SELECTION_MAX_SAMPLES" ]; then
+      EVAL_OOD_ARGS+=(--evo-selection-max-samples "$EVO_SELECTION_MAX_SAMPLES")
     fi
     if [ -n "$EVAL_MAX_SAMPLES" ]; then
       EVAL_OOD_ARGS+=(--max-samples "$EVAL_MAX_SAMPLES")

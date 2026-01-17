@@ -458,6 +458,7 @@ def _select_best_organelle_by_selection_tasks(
     adapter_states: dict[str, dict[str, torch.Tensor]],
     tasks: list[dict[str, Any]],
     *,
+    candidate_ids: list[str] | None = None,
     max_new_tokens: int = 96,
 ) -> tuple[str | None, dict[str, Any]]:
     best_id: str | None = None
@@ -465,7 +466,14 @@ def _select_best_organelle_by_selection_tasks(
     best_details: dict[str, Any] = {}
     if not tasks:
         return None, {"error": "no selection tasks"}
-    for oid, state in adapter_states.items():
+    if candidate_ids is None:
+        candidate_ids = list(adapter_states.keys())
+    candidate_ids = [cid for cid in candidate_ids if cid in adapter_states]
+    if not candidate_ids:
+        return None, {"error": "no candidate organelles"}
+    total = len(candidate_ids)
+    for idx, oid in enumerate(candidate_ids, 1):
+        state = adapter_states.get(oid)
         if not isinstance(state, dict) or not state:
             continue
         if _apply_adapter_state_to_peft_model(peft_model, state) <= 0:
@@ -491,6 +499,11 @@ def _select_best_organelle_by_selection_tasks(
                 "selection_cases_total": metrics.get("cases_total", 0),
                 "selection_by_capability": metrics.get("by_capability", {}),
             }
+        if total > 1:
+            print(
+                f"  [select] {idx}/{total} organelle={oid} gm_acc={score[0]:.3f} "
+                f"acc={score[1]:.3f} cases={score[2]:.3f}"
+            )
     return best_id, best_details
 
 
@@ -504,6 +517,7 @@ def load_evo_model(
     selection_max_samples: int | None = None,
     selection_seed: int = 9403,
     selection_family: str | None = "regex",
+    selection_top_k_by_roi: int | None = None,
     selection_max_new_tokens: int = 96,
 ):
     """Load evolution checkpoint and apply the best organelle.
@@ -578,6 +592,38 @@ def load_evo_model(
     if organelle_id is None:
         try:
             if selection_tasks_path is not None:
+                candidate_ids: list[str] | None = None
+                shortlist_k = (
+                    int(selection_top_k_by_roi)
+                    if selection_top_k_by_roi is not None and int(selection_top_k_by_roi) > 0
+                    else None
+                )
+                if shortlist_k is not None and shortlist_k < len(adapter_states):
+                    summaries_path = checkpoint_path.parent / "gen_summaries.jsonl"
+                    if summaries_path.exists():
+                        try:
+                            summaries = [
+                                json.loads(line)
+                                for line in summaries_path.read_text().splitlines()
+                                if line.strip()
+                            ]
+                            if summaries:
+                                roi_by_org = summaries[-1].get("roi_by_organelle", {}) or {}
+                                valid_rois: list[tuple[str, float]] = []
+                                for oid, roi in roi_by_org.items():
+                                    if oid in adapter_states:
+                                        try:
+                                            valid_rois.append((str(oid), float(roi)))
+                                        except Exception:
+                                            continue
+                                valid_rois.sort(key=lambda item: item[1], reverse=True)
+                                if valid_rois:
+                                    candidate_ids = [oid for oid, _ in valid_rois[:shortlist_k]]
+                                    print(
+                                        f"  [info] Selection shortlist by ROI: {len(candidate_ids)} candidates"
+                                    )
+                        except Exception:
+                            candidate_ids = None
                 tasks = _load_selection_tasks(
                     selection_tasks_path,
                     max_samples=selection_max_samples,
@@ -589,6 +635,7 @@ def load_evo_model(
                     tokenizer,
                     adapter_states,
                     tasks,
+                    candidate_ids=candidate_ids,
                     max_new_tokens=selection_max_new_tokens,
                 )
                 if choice is not None:
@@ -735,6 +782,16 @@ def main() -> None:
         help="Max new tokens during selection generations (default: 96).",
     )
     parser.add_argument(
+        "--evo-selection-top-k-by-roi",
+        type=int,
+        default=None,
+        help=(
+            "Optional shortlist of candidate organelles (by ROI from gen_summaries.jsonl) before "
+            "running selection tasks. This trades a small selection-bias risk for much faster "
+            "selection (default: all organelles)."
+        ),
+    )
+    parser.add_argument(
         "--no-evo-selection",
         action="store_true",
         help="Disable selection-task organelle picking (falls back to ROI-based selection).",
@@ -781,15 +838,23 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    device_map = args.device if args.device != "auto" else "auto"
-    dtype = torch.float16 if args.device == "mps" else torch.bfloat16
+    resolved_device = args.device
+    if resolved_device == "auto":
+        if torch.backends.mps.is_available():
+            resolved_device = "mps"
+        elif torch.cuda.is_available():
+            resolved_device = "cuda"
+        else:
+            resolved_device = "cpu"
+    dtype = torch.float16 if resolved_device in {"mps", "cuda"} else torch.float32
     base_model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        torch_dtype=dtype,
-        device_map=device_map,
+        dtype=dtype,
         trust_remote_code=bool(args.trust_remote_code),
         attn_implementation=args.attn_implementation,
     )
+    base_model.to(resolved_device)
+    base_model.eval()
 
     results = []
     evo_selection_details: dict[str, Any] | None = None
@@ -817,11 +882,12 @@ def main() -> None:
             # Load fresh base model to avoid state pollution
             sft_base = AutoModelForCausalLM.from_pretrained(
                 args.model,
-                torch_dtype=dtype,
-                device_map=device_map,
+                dtype=dtype,
                 trust_remote_code=bool(args.trust_remote_code),
                 attn_implementation=args.attn_implementation,
             )
+            sft_base.to(resolved_device)
+            sft_base.eval()
             sft_model = load_sft_model(sft_base, args.sft_adapter)
             sft_result = evaluate_model(
                 sft_model,
@@ -862,11 +928,12 @@ def main() -> None:
             # Load fresh base model to avoid state pollution
             evo_base = AutoModelForCausalLM.from_pretrained(
                 args.model,
-                torch_dtype=dtype,
-                device_map=device_map,
+                dtype=dtype,
                 trust_remote_code=bool(args.trust_remote_code),
                 attn_implementation=args.attn_implementation,
             )
+            evo_base.to(resolved_device)
+            evo_base.eval()
             evo_model, organelle_id = load_evo_model(
                 evo_base,
                 args.evo_checkpoint,
@@ -876,6 +943,7 @@ def main() -> None:
                 selection_max_samples=args.evo_selection_max_samples,
                 selection_seed=args.evo_selection_seed,
                 selection_family=args.evo_selection_family,
+                selection_top_k_by_roi=args.evo_selection_top_k_by_roi,
                 selection_max_new_tokens=args.evo_selection_max_new_tokens,
             )
             evo_selection_details = getattr(evo_model, "_selection_details", None)

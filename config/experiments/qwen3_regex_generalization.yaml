@@ -19,7 +19,7 @@ host:
 
 grid:
   families:
-    - regex
+    - regex.synthesis
     - regex.recognition
     - regex.explanation
     - regex.debugging

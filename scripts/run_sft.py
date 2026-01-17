@@ -1231,6 +1231,10 @@ def main() -> None:
     # Prepare dataset
     print(f"[sft] Tokenizing dataset (max_length={args.max_length})")
     dataset = prepare_dataset(raw_data, tokenizer, args.max_length, token_state)
+    try:
+        dataset = dataset.shuffle(seed=int(args.seed))
+    except Exception:
+        pass
 
     data_collator = SupervisedDataCollator(tokenizer)
 

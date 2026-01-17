@@ -230,8 +230,8 @@ def main() -> None:
     parser.add_argument(
         "--selection-size",
         type=int,
-        default=256,
-        help="Selection/validation task count for organelle picking (default: 256).",
+        default=64,
+        help="Selection/validation task count for organelle picking (default: 64).",
     )
     parser.add_argument(
         "--holdout-size",

@@ -1217,6 +1217,161 @@ class GridEnvironment:
                 return f"{random_word(3, 6)}.{host}.{tld}"
             return f"{host}.{tld}"
 
+        def _mmdd(value: int) -> str:
+            return f"{int(value):02d}"
+
+        def _yyyy(value: int) -> str:
+            return f"{int(value):04d}"
+
+        def task_day_01_31() -> dict[str, object]:
+            pattern = r"^(0[1-9]|[12]\d|3[01])$"
+            matches_set: set[str] = set()
+            while len(matches_set) < 4:
+                matches_set.add(_mmdd(rng.randint(1, 31)))
+            matches = sorted(matches_set)
+            non_matches = [
+                "00",
+                "32",
+                str(rng.randint(1, 9)),
+                str(rng.randint(32, 99)),
+            ]
+            return {
+                "desc": "match day numbers 01-31 where days 1-9 must have leading zero",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def task_date_ymd() -> dict[str, object]:
+            pattern = r"^(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$"
+            matches_set: set[str] = set()
+            while len(matches_set) < 3:
+                y = _yyyy(rng.randint(1900, 2099))
+                m = _mmdd(rng.randint(1, 12))
+                d = _mmdd(rng.randint(1, 31))
+                matches_set.add(f"{y}-{m}-{d}")
+            matches = sorted(matches_set)
+
+            y_bad = _yyyy(rng.choice([1899, 2100]))
+            y_ok = _yyyy(rng.randint(1900, 2099))
+            m_bad = _mmdd(rng.choice([0, 13]))
+            d_bad = _mmdd(rng.choice([0, 32]))
+            m_ok_int = rng.randint(1, 9)
+            d_ok_int = rng.randint(1, 9)
+            non_matches = [
+                f"{y_bad}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))}",
+                f"{y_ok}-{m_bad}-{_mmdd(rng.randint(1, 31))}",
+                f"{y_ok}-{_mmdd(rng.randint(1, 12))}-{d_bad}",
+                f"{y_ok}/{_mmdd(rng.randint(1, 12))}/{_mmdd(rng.randint(1, 31))}",
+                f"{y_ok}-{m_ok_int}-{d_ok_int}",
+            ]
+            return {
+                "desc": "match dates in YYYY-MM-DD format (years 1900-2099, months 01-12, days 01-31) with no extra characters",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def task_date_dot() -> dict[str, object]:
+            pattern = r"^(20\d{2})\.(0[1-9]|1[0-2])\.(0[1-9]|[12]\d|3[01])$"
+            matches_set: set[str] = set()
+            while len(matches_set) < 2:
+                y = _yyyy(rng.randint(2000, 2099))
+                m = _mmdd(rng.randint(1, 12))
+                d = _mmdd(rng.randint(1, 31))
+                matches_set.add(f"{y}.{m}.{d}")
+            matches = sorted(matches_set)
+            non_matches = [
+                f"{_yyyy(rng.randint(2000, 2099))}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))}",
+                f"{_yyyy(rng.randint(2000, 2099))}.{_mmdd(rng.choice([0, 13]))}.{_mmdd(rng.randint(1, 31))}",
+                f"{_yyyy(rng.choice([1999, 2100]))}.{_mmdd(rng.randint(1, 12))}.{_mmdd(rng.randint(1, 31))}",
+            ]
+            return {
+                "desc": "match dates in YYYY.MM.DD format (using dots as separators) with no extra characters",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def _hh(value: int) -> str:
+            return f"{int(value):02d}"
+
+        def _time_hms(*, valid: bool) -> str:
+            if valid:
+                hh = _hh(rng.randint(0, 23))
+                mm = _hh(rng.randint(0, 59))
+                ss = _hh(rng.randint(0, 59))
+            else:
+                hh = _hh(rng.choice([24, 25, 29]))
+                mm = _hh(rng.choice([60, 61, 99]))
+                ss = _hh(rng.choice([60, 61, 99]))
+                # Randomly pick which field to break (avoid always breaking all of them).
+                pick = rng.choice(["hh", "mm", "ss"])
+                if pick == "hh":
+                    mm = _hh(rng.randint(0, 59))
+                    ss = _hh(rng.randint(0, 59))
+                elif pick == "mm":
+                    hh = _hh(rng.randint(0, 23))
+                    ss = _hh(rng.randint(0, 59))
+                else:
+                    hh = _hh(rng.randint(0, 23))
+                    mm = _hh(rng.randint(0, 59))
+            return f"{hh}:{mm}:{ss}"
+
+        def task_datetime_iso_t() -> dict[str, object]:
+            pattern = (
+                r"^(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T"
+                r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$"
+            )
+            matches_set: set[str] = set()
+            while len(matches_set) < 2:
+                y = _yyyy(rng.randint(1900, 2099))
+                m = _mmdd(rng.randint(1, 12))
+                d = _mmdd(rng.randint(1, 31))
+                matches_set.add(f"{y}-{m}-{d}T{_time_hms(valid=True)}")
+            matches = sorted(matches_set)
+            y = _yyyy(rng.randint(1900, 2099))
+            m = _mmdd(rng.randint(1, 12))
+            d = _mmdd(rng.randint(1, 31))
+            non_matches = [
+                f"{y}-{m}-{d} {_time_hms(valid=True)}",
+                f"{y}-{m}-{d}T{_time_hms(valid=False)}",
+                f"{y}-{m}-{d}T{_hh(rng.randint(0, 23))}:{_hh(rng.randint(0, 59))}",
+            ]
+            return {
+                "desc": "match ISO 8601 datetimes in YYYY-MM-DDTHH:MM:SS format (years 1900-2099) with no extra characters",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def task_timestamp_ymd_hms() -> dict[str, object]:
+            pattern = (
+                r"^(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]) "
+                r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$"
+            )
+            matches_set: set[str] = set()
+            while len(matches_set) < 3:
+                y = _yyyy(rng.randint(1900, 2099))
+                m = _mmdd(rng.randint(1, 12))
+                d = _mmdd(rng.randint(1, 31))
+                matches_set.add(f"{y}-{m}-{d} {_time_hms(valid=True)}")
+            matches = sorted(matches_set)
+            y = _yyyy(rng.randint(1900, 2099))
+            non_matches = [
+                f"{y}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))} {_time_hms(valid=False)}",
+                f"{y}-{_mmdd(rng.choice([0, 13]))}-{_mmdd(rng.randint(1, 31))} {_time_hms(valid=True)}",
+                f"{y}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.choice([0, 32]))} {_time_hms(valid=True)}",
+                f"{y}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))}T{_time_hms(valid=True)}",
+                f"{y}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))}{_time_hms(valid=True)}",
+            ]
+            return {
+                "desc": "match timestamps in YYYY-MM-DD HH:MM:SS format (years 1900-2099, 24-hour time) with exactly one space between date and time",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
         def pick_task() -> dict[str, object]:
             if depth == "short":
                 kind = rng.choice(
@@ -1355,6 +1510,11 @@ class GridEnvironment:
                         "identifier",
                         "date_mdy",
                         "time_hm",
+                        "day_01_31",
+                        "date_ymd",
+                        "date_dot",
+                        "datetime_iso_t",
+                        "timestamp_ymd_hms",
                         "github",
                     ]
                 )
@@ -1422,6 +1582,21 @@ class GridEnvironment:
                         "non_matches": non_matches,
                     }
 
+                if kind == "day_01_31":
+                    return task_day_01_31()
+
+                if kind == "date_ymd":
+                    return task_date_ymd()
+
+                if kind == "date_dot":
+                    return task_date_dot()
+
+                if kind == "datetime_iso_t":
+                    return task_datetime_iso_t()
+
+                if kind == "timestamp_ymd_hms":
+                    return task_timestamp_ymd_hms()
+
                 # github
                 pattern = r"[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*"
                 matches = ["john-doe", "user123", "a-b-c"]
@@ -1442,8 +1617,80 @@ class GridEnvironment:
                     "email_tld",
                     "mac",
                     "semver",
+                    "date_iso",
+                    "day_01_31",
+                    "date_ymd",
+                    "date_dot",
+                    "datetime_iso_t",
+                    "timestamp_ymd_hms",
+                    "uuid",
+                    "log_level",
+                    "file_path",
                 ]
             )
+            if kind == "day_01_31":
+                return task_day_01_31()
+
+            if kind == "date_ymd":
+                return task_date_ymd()
+
+            if kind == "date_dot":
+                return task_date_dot()
+
+            if kind == "datetime_iso_t":
+                return task_datetime_iso_t()
+
+            if kind == "timestamp_ymd_hms":
+                return task_timestamp_ymd_hms()
+
+            if kind == "date_iso":
+                pattern = r"\b\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b"
+                matches = ["2024-01-15", "1999-12-31"]
+                non_matches = ["2024/01/15", "15-01-2024", "2024-13-01"]
+                return {
+                    "desc": "match ISO 8601 dates (YYYY-MM-DD)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "uuid":
+                pattern = r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+                matches = [
+                    "123e4567-e89b-12d3-a456-426614174000",
+                    "00000000-0000-0000-0000-000000000000",
+                ]
+                non_matches = ["123e4567-e89b-12d3-a456", "123e4567-e89b-12d3-a456-4266141740000"]
+                return {
+                    "desc": "match UUIDs (standard 8-4-4-4-12 hex format)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "log_level":
+                pattern = r"^\[(INFO|WARN|ERROR|DEBUG)\]\s+.*$"
+                matches = ["[INFO] System started", "[ERROR] Connection failed"]
+                non_matches = ["INFO System started", "[TRACE] Details...", "[info] lower case"]
+                return {
+                    "desc": "match log lines starting with [INFO], [WARN], [ERROR], or [DEBUG] at the start of the string",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "file_path":
+                # Unix-style absolute paths
+                pattern = r"^/[a-zA-Z0-9_./-]+$"
+                matches = ["/var/log/syslog", "/home/user/.bashrc", "/usr/local/share/data.txt"]
+                non_matches = ["var/log", "C:\\Windows", "/var/log/invalid char!"]
+                return {
+                    "desc": "match Unix-style absolute file paths (start with /, alphanumeric/dot/dash/underscore)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
             if kind == "ipv4":
                 pattern = r"\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b"
                 matches = ["192.168.1.1", "10.0.0.255", "8.8.8.8"]
@@ -1645,6 +1892,17 @@ class GridEnvironment:
     def _mutate_regex_pattern(self, pattern: str) -> list[tuple[str, str]]:
         """Return candidate (mutated_pattern, mutation_note) pairs."""
         mutations: list[tuple[str, str]] = []
+
+        if pattern.startswith("^") and pattern.endswith("$") and len(pattern) > 2:
+            core = pattern[1:-1]
+            mutations.append((core, "removed anchors"))
+            mutations.append((pattern[1:], "removed start anchor"))
+            mutations.append((pattern[:-1], "removed end anchor"))
+
+        if " " in pattern:
+            no_space = pattern.replace(" ", "", 1)
+            if no_space != pattern:
+                mutations.append((no_space, "removed required whitespace"))
 
         if "2[0-3]" in pattern:
             mutations.append((pattern.replace("2[0-3]", "2\\d", 1), "widened a bounded range"))
