@@ -206,7 +206,14 @@ class GridTask:
                 and isinstance(details.get("passed"), int)
                 and isinstance(details.get("total"), int)
             ):
-                success = int(details["passed"]) >= int(details["total"]) > 0
+                passed = int(details["passed"])
+                total = int(details["total"])
+                if total > 0:
+                    task_reward = float(passed) / float(total)
+                    success = passed >= total
+                else:
+                    task_reward = 0.0
+                    success = False
             elif picked:
                 try:
                     re.compile(picked)
@@ -216,7 +223,8 @@ class GridTask:
             else:
                 success = False
 
-            task_reward = 1.0 if success else 0.0
+            if task_reward <= 0.0:
+                task_reward = 1.0 if success else 0.0
 
         elif self.family == "regex.recognition":
             expected_bool: bool | None = None
@@ -263,7 +271,7 @@ class GridTask:
             found_keywords = [kw for kw in keywords if kw.lower() in response_lower]
             score = len(found_keywords) / len(keywords) if keywords else 1.0
             success = score >= 0.7
-            task_reward = 1.0 if success else 0.0
+            task_reward = float(score)
 
         elif self.family == "regex.refactoring":
             test_strings: list[dict[str, object]] = []
@@ -274,6 +282,7 @@ class GridTask:
             picked, _pick_details = pick_best_regex_candidate(clean, test_cases=test_strings)
             if not picked:
                 success = False
+                task_reward = 0.0
             else:
                 try:
                     compiled = re.compile(picked)
@@ -281,6 +290,7 @@ class GridTask:
                     compiled = None
                 if compiled is None:
                     success = False
+                    task_reward = 0.0
                 else:
                     passed = 0
                     total = 0
@@ -294,35 +304,41 @@ class GridTask:
                         else:
                             ok = False
                         total += 1
-                    if not ok or total <= 0:
+                    if total <= 0:
                         success = False
-                    elif original_pattern:
-                        try:
-                            success = _regex_complexity_score(picked) <= _regex_complexity_score(
-                                original_pattern
-                            )
-                        except Exception:
-                            success = True
+                        task_reward = 0.0
                     else:
-                        success = True
-
-            task_reward = 1.0 if success else 0.0
+                        case_ratio = float(passed) / float(total)
+                        if original_pattern:
+                            try:
+                                complexity_ok = _regex_complexity_score(
+                                    picked
+                                ) <= _regex_complexity_score(original_pattern)
+                            except Exception:
+                                complexity_ok = True
+                        else:
+                            complexity_ok = True
+                        success = bool(ok and complexity_ok)
+                        if case_ratio < 1.0:
+                            task_reward = case_ratio * 0.5
+                        else:
+                            task_reward = 1.0 if complexity_ok else 0.5
 
         novelty = min(0.1, self.difficulty * 0.1)
-        competence = 0.05 if success else 0.0
         helper = 0.0
-        risk_penalty = 0.0 if success else 0.1 * max(self.failure_cost_scale, 0.0)
         if success:
-            task_reward = 1.0 + max(self.reward_bonus, 0.0)
-        else:
-            task_reward = 0.0
+            task_reward = float(task_reward) + max(self.reward_bonus, 0.0)
+        progress = max(0.0, min(1.0, float(task_reward)))
+        competence = 0.05 * progress
+        risk_penalty = (1.0 - progress) * 0.1 * max(self.failure_cost_scale, 0.0)
+        cost_penalty = (1.0 - progress) * 0.05 * max(self.failure_cost_scale, 0.0)
         reward = RewardBreakdown(
             task_reward=task_reward,
             novelty_bonus=novelty,
             competence_bonus=competence,
             helper_bonus=helper,
             risk_penalty=risk_penalty,
-            cost_penalty=0.05 * max(self.failure_cost_scale, 0.0) if not success else 0.0,
+            cost_penalty=cost_penalty,
         )
         return success, reward
 
