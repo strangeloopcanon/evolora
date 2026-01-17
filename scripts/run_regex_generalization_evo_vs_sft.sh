@@ -237,12 +237,50 @@ if ! [ -f "$CHECKPOINT" ]; then
 fi
 
 if [ "$RUN_SFT" -eq 1 ]; then
+  EVO_LORA_RANK="$("$PY" - <<'PY' "$CHECKPOINT" || echo "0"
+import pickle
+import sys
+from pathlib import Path
+
+checkpoint_path = Path(sys.argv[1])
+try:
+    checkpoint = pickle.loads(checkpoint_path.read_bytes())
+except Exception:
+    print("0")
+    raise SystemExit(0)
+
+adapter_states = checkpoint.get("adapter_states", {}) or {}
+max_rank = 0
+for state in adapter_states.values():
+    if not isinstance(state, dict):
+        continue
+    for key, tensor in state.items():
+        if "lora_A" not in str(key):
+            continue
+        try:
+            max_rank = max(max_rank, int(getattr(tensor, "shape", [0])[0]))
+        except Exception:
+            continue
+print(str(max_rank))
+PY
+  )"
+  if [ -z "$EVO_LORA_RANK" ] || [ "$EVO_LORA_RANK" -le 0 ]; then
+    echo "[sft] Failed to infer evo LoRA rank from $CHECKPOINT; defaulting to rank=8" >&2
+    EVO_LORA_RANK="8"
+  fi
+  EVO_LORA_ALPHA=$((EVO_LORA_RANK * 2))
+  if [ "$EVO_LORA_ALPHA" -le 0 ]; then
+    EVO_LORA_ALPHA="16"
+  fi
+
   SFT_OUT="$OUTPUT/sft"
-  echo "[sft] checkpoint=$CHECKPOINT data=$SFT_DATA output=$SFT_OUT"
+  echo "[sft] checkpoint=$CHECKPOINT data=$SFT_DATA output=$SFT_OUT lora_rank=$EVO_LORA_RANK"
   AGENT_MODE=baseline "$PY" scripts/run_sft.py \
     --checkpoint "$CHECKPOINT" \
     --data "$SFT_DATA" \
     --model "$MODEL" \
+    --lora-rank "$EVO_LORA_RANK" \
+    --lora-alpha "$EVO_LORA_ALPHA" \
     --match-budget-field "$SFT_MATCH_BUDGET_FIELD" \
     --backprop-multiplier "$BACKPROP_MULTIPLIER" \
     --attn-implementation eager \
