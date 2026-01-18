@@ -1311,8 +1311,8 @@ class EcologyLoop:
             price_multiplier = max(1.0, price_multiplier)
             price_multiplier = min(max(1.0, premium_cap), price_multiplier)
         config = self.config.energy
-        revenue = price * reward.total
-        cost = compute_route_cost(config, metrics, price_multiplier=price_multiplier).total_cost
+        revenue = (price * price_multiplier) * reward.total
+        cost = compute_route_cost(config, metrics).total_cost
         if cost > 0:
             roi = revenue / max(cost, 1e-6)
         elif revenue > 0:

@@ -51,6 +51,11 @@ energy:
 canary:
   q_min: 0.95
 
+limits:
+  # For this benchmark we want capacity to come from task learning signal, not from
+  # aggressively shrinking LoRA ranks due to adapter-cap bookkeeping.
+  max_active_adapters_per_layer: 32
+
 population_strategy:
   mu: 4
   lambda: 12
