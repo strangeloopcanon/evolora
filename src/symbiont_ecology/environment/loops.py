@@ -5701,6 +5701,20 @@ class EcologyLoop:
             hebbian_config=self.config.hebbian,
             activation_bias=mutant_template.gate_bias,
         )
+        # Attempt heredity: copy parent weights to child
+        getter = getattr(self.host, "get_organelle", None)
+        if callable(getter):
+            try:
+                parent_org = getter(genome.organelle_id)
+                child_org = getter(new_id)
+                inheritor = (
+                    getattr(child_org, "inherit_from", None) if child_org is not None else None
+                )
+                if parent_org is not None and callable(inheritor):
+                    inheritor(parent_org)
+            except Exception:
+                pass
+
         child_genome = Genome(
             organelle_id=new_id,
             drive_weights=mutant_template.drive_weights,

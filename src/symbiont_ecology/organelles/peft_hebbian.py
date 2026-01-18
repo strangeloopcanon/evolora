@@ -182,9 +182,9 @@ class HebbianPEFTOrganelle(Organelle):
         if centered <= 0.0:
             return
         # Small, reward-modulated update across all lora layers
-        for _name, module in self.model.named_modules():
+        for module_name, module in self.model.named_modules():
             if hasattr(module, "lora_A") and hasattr(module, "lora_B"):
-                self._update_lora_pair(module, centered)
+                self._update_lora_pair(module, centered, module_name=module_name)
         self.step()
         activation_scale = self._last_activation_scale
         if activation_scale <= 0.0:
@@ -202,7 +202,7 @@ class HebbianPEFTOrganelle(Organelle):
             return
         self._fisher_importance = decay * self._fisher_importance + (1.0 - decay) * fisher_delta
 
-    def _update_lora_pair(self, module: nn.Module, scale: float) -> None:
+    def _update_lora_pair(self, module: nn.Module, scale: float, *, module_name: str = "") -> None:
         # module.lora_A / lora_B are dict-like keyed by adapter name; update this organelle's adapter.
         try:
             adapter = self.organelle_id
@@ -224,16 +224,53 @@ class HebbianPEFTOrganelle(Organelle):
         r = a_weight.shape[0] if a_weight.dim() == 2 else self.rank
         in_features = a_weight.shape[1] if a_weight.shape[0] == r else a_weight.shape[0]
         out_features = b_weight.shape[1] if b_weight.shape[0] == r else b_weight.shape[0]
-        rng = torch.Generator(device=self.device)
-        rng.manual_seed(int(abs(hash(self.organelle_id)) % (2**31 - 1)))
+        module_name = module_name or ""
 
-        pre = self.traces.pre[:in_features]
-        post = self.traces.post[:out_features]
-        # simple outer products projected to rank r; ensure consistent dtype
-        ones_a = torch.ones(1, r, device=self.device, dtype=pre.dtype)
-        ones_b = torch.ones(r, 1, device=self.device, dtype=post.dtype)
-        delta_a = pre.unsqueeze(1) @ ones_a
-        delta_b = ones_b @ post.unsqueeze(0)
+        def _stable_seed(material: str) -> int:
+            digest = hashlib.sha1(material.encode("utf-8"), usedforsecurity=False).hexdigest()
+            return int(digest[:16], 16) % (2**31 - 1)
+
+        pre = self.traces.pre
+        post = self.traces.post
+
+        def _match_dim(vec: torch.Tensor, target: int, label: str) -> torch.Tensor:
+            if vec.shape[0] == target:
+                return vec
+            if vec.shape[0] > target:
+                return vec[:target]
+            # Expand via a deterministic CountSketch-like projection.
+            # Keep the projection fixed per-module to avoid introducing unstable noise.
+            rng = torch.Generator(device=vec.device)
+            seed = _stable_seed(
+                f"hebbian-proj:{label}:{self.organelle_id}:{module_name}:{vec.shape[0]}:{target}"
+            )
+            rng.manual_seed(seed)
+            idx = torch.randint(0, vec.shape[0], (target,), device=vec.device, generator=rng)
+            signs = (
+                torch.randint(0, 2, (target,), device=vec.device, generator=rng, dtype=vec.dtype)
+                * 2
+                - 1
+            )
+            return vec[idx] * signs
+
+        pre = _match_dim(pre, in_features, "pre")
+        post = _match_dim(post, out_features, "post")
+
+        # Sample Rademacher sign vector s of length r for CountSketch-like update
+        # s in {-1, 1}
+        rng = torch.Generator(device=self.device)
+        rng.manual_seed(
+            _stable_seed(f"hebbian-s:{self.organelle_id}:{module_name}:{self.steps}:{r}")
+        )
+        s = torch.randint(0, 2, (r,), device=self.device, generator=rng, dtype=pre.dtype) * 2 - 1
+
+        # delta_a = pre @ s.T (outer product) -> [in, r]
+        # delta_b = s @ post.T (outer product) -> [r, out]
+        # Normalization: sqrt(r) so that delta_a @ delta_b ~ r * pre @ post / r = pre @ post
+        norm = math.sqrt(r)
+        delta_a = torch.outer(pre, s) / norm
+        delta_b = torch.outer(s, post) / norm
+
         lr = 1e-3
         try:
             lr = float(getattr(self.context.hebbian, "learning_rate", lr))
@@ -257,6 +294,155 @@ class HebbianPEFTOrganelle(Organelle):
                 b_weight.add_(delta_b)
             elif b_weight.shape == delta_b.t().shape:
                 b_weight.add_(delta_b.t())
+
+    def inherit_from(self, parent: Organelle) -> None:
+        """Inherit LoRA weights from a parent organelle.
+
+        This is the key "heredity" mechanism for evolution: offspring should start from
+        the parent's learned adapter weights (even when ranks differ).
+
+        Important: keep this implementation CPU-friendly (no full-matrix SVD), since
+        MPS linalg support is incomplete and we don't want evolution to stall/crash.
+        """
+
+        parent_state = parent.export_adapter_state()
+        if not parent_state:
+            return
+
+        def _std_a(tensor: torch.Tensor) -> tuple[torch.Tensor, bool]:
+            if tensor.ndim != 2:
+                raise ValueError("Expected rank-2 LoRA A tensor")
+            # LoRA A is typically [r, in]; if transposed [in, r], flip.
+            if tensor.shape[0] <= tensor.shape[1]:
+                return tensor, False
+            return tensor.t(), True
+
+        def _std_b(tensor: torch.Tensor) -> tuple[torch.Tensor, bool]:
+            if tensor.ndim != 2:
+                raise ValueError("Expected rank-2 LoRA B tensor")
+            # LoRA B is typically [out, r]; if transposed [r, out], flip.
+            if tensor.shape[0] >= tensor.shape[1]:
+                return tensor, False
+            return tensor.t(), True
+
+        try:
+            self.model.set_adapter(self.organelle_id)
+        except Exception:
+            pass
+
+        for name, module in self.model.named_modules():
+            if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
+                continue
+            try:
+                if self.organelle_id not in module.lora_A or self.organelle_id not in module.lora_B:
+                    continue
+            except Exception:
+                continue
+
+            key_a = f"{name}.lora_A"
+            key_b = f"{name}.lora_B"
+            if key_a not in parent_state or key_b not in parent_state:
+                continue
+            old_a_raw = parent_state[key_a]
+            old_b_raw = parent_state[key_b]
+            if not isinstance(old_a_raw, torch.Tensor) or not isinstance(old_b_raw, torch.Tensor):
+                continue
+
+            try:
+                new_a_param = module.lora_A[self.organelle_id].weight
+                new_b_param = module.lora_B[self.organelle_id].weight
+            except Exception:
+                continue
+
+            # Fast path: exact shape match.
+            if old_a_raw.shape == new_a_param.shape and old_b_raw.shape == new_b_param.shape:
+                with torch.no_grad():
+                    new_a_param.copy_(
+                        old_a_raw.to(device=new_a_param.device, dtype=new_a_param.dtype)
+                    )
+                    new_b_param.copy_(
+                        old_b_raw.to(device=new_b_param.device, dtype=new_b_param.dtype)
+                    )
+                continue
+
+            try:
+                old_a, _old_a_t = _std_a(old_a_raw.detach().cpu())
+                old_b, _old_b_t = _std_b(old_b_raw.detach().cpu())
+
+                new_a_view, new_a_t = _std_a(new_a_param)
+                new_b_view, new_b_t = _std_b(new_b_param)
+            except Exception:
+                continue
+
+            r_old = old_a.shape[0]
+            r_new = new_a_view.shape[0]
+            if r_old <= 0 or r_new <= 0:
+                continue
+            if old_b.shape[1] != r_old or new_b_view.shape[1] != r_new:
+                continue
+
+            in_overlap = min(old_a.shape[1], new_a_view.shape[1])
+            out_overlap = min(old_b.shape[0], new_b_view.shape[0])
+            if in_overlap <= 0 or out_overlap <= 0:
+                continue
+
+            old_a_f = old_a[:, :in_overlap].to(dtype=torch.float32)
+            old_b_f = old_b[:out_overlap, :].to(dtype=torch.float32)
+            try:
+                a_norm = torch.linalg.norm(old_a_f, dim=1)
+                b_norm = torch.linalg.norm(old_b_f, dim=0)
+            except Exception:
+                continue
+            scores = a_norm * b_norm
+            if scores.numel() != r_old:
+                continue
+
+            keep = min(r_new, r_old)
+            try:
+                selected = torch.argsort(scores, descending=True)[:keep]
+            except Exception:
+                selected = torch.arange(keep)
+
+            projected_a = torch.zeros((r_new, new_a_view.shape[1]), dtype=torch.float32)
+            projected_b = torch.zeros((new_b_view.shape[0], r_new), dtype=torch.float32)
+            for new_idx, old_idx in enumerate(selected.tolist()):
+                projected_a[new_idx, :in_overlap] = old_a_f[old_idx, :in_overlap]
+                projected_b[:out_overlap, new_idx] = old_b_f[:out_overlap, old_idx]
+
+            if r_new > keep:
+                rng = torch.Generator(device="cpu")
+                seed_material = f"inherit:{self.organelle_id}:{name}:{r_new}".encode("utf-8")
+                digest = hashlib.sha1(seed_material, usedforsecurity=False).hexdigest()
+                seed = int(digest[:16], 16) % (2**31 - 1)
+                rng.manual_seed(seed)
+                projected_a[keep:, :] = (
+                    torch.randn(
+                        (r_new - keep, new_a_view.shape[1]),
+                        dtype=torch.float32,
+                        generator=rng,
+                    )
+                    * 1e-3
+                )
+                projected_b[:, keep:] = (
+                    torch.randn(
+                        (new_b_view.shape[0], r_new - keep),
+                        dtype=torch.float32,
+                        generator=rng,
+                    )
+                    * 1e-3
+                )
+
+            projected_a = projected_a.to(device=new_a_param.device, dtype=new_a_param.dtype)
+            projected_b = projected_b.to(device=new_b_param.device, dtype=new_b_param.dtype)
+            with torch.no_grad():
+                if new_a_t:
+                    new_a_param.copy_(projected_a.t())
+                else:
+                    new_a_param.copy_(projected_a)
+                if new_b_t:
+                    new_b_param.copy_(projected_b.t())
+                else:
+                    new_b_param.copy_(projected_b)
 
     # ------------------------------------------------------------------
     def get_rank(self) -> int:
