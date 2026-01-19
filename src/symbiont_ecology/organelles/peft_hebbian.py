@@ -167,17 +167,18 @@ class HebbianPEFTOrganelle(Organelle):
     def update(self, envelope: MessageEnvelope, reward: RewardBreakdown) -> None:
         if self.traces.pre is None or self.traces.post is None:
             return
+        # Learning signal: exclude compute cost. Evolution already accounts for compute via energy/ROI,
+        # and using cost inside the plasticity rule biases learning toward "being cheap" over "being right".
+        signal = float(reward.total + reward.cost_penalty)
         baseline = float(getattr(self.context, "reward_baseline", 0.0))
         decay = float(getattr(self.context.hebbian, "reward_baseline_decay", 0.99) or 0.99)
         if math.isfinite(decay):
             decay = max(0.0, min(1.0, decay))
             try:
-                self.context.reward_baseline = decay * baseline + (1.0 - decay) * float(
-                    reward.total
-                )
+                self.context.reward_baseline = decay * baseline + (1.0 - decay) * signal
             except Exception:
                 pass
-        centered = float(reward.total) - baseline
+        centered = signal - baseline
         # Negative updates tend to destabilize this non-gradient Hebbian rule; learn from improvements only.
         if centered <= 0.0:
             return
