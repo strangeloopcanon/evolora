@@ -193,24 +193,13 @@ def _holdout_success(family: str, target: Any, answer: str) -> bool:
 def _select_best_organelle_for_cell(
     population: PopulationManager, cell: tuple[str, str], candidates: list[str]
 ) -> tuple[str, float]:
-    best_id = candidates[0]
-    best_score = float("-inf")
-    for oid in candidates:
-        score = population.cell_values.get(oid, {}).get(cell)
-        if score is None:
-            continue
-        try:
-            val = float(score)
-        except Exception:
-            continue
-        if val > best_score:
-            best_score = val
-            best_id = oid
-    if best_score == float("-inf"):
-        scored = [(oid, float(population.average_roi(oid, limit=10))) for oid in candidates]
-        scored.sort(key=lambda kv: kv[1], reverse=True)
-        best_id, best_score = scored[0][0], scored[0][1]
-    return best_id, best_score
+    # Select based on global task reward (competence) to find the most accurate model.
+    # We ignore cell-specific ROI because it includes energy penalties that disadvantage high-rank models.
+    scored = [(oid, float(population.average_task_reward(oid, limit=10))) for oid in candidates]
+    scored.sort(key=lambda kv: kv[1], reverse=True)
+    if scored:
+        return scored[0][0], scored[0][1]
+    return candidates[0], 0.0
 
 
 def _format_holdout_markdown(payload: dict[str, Any]) -> str:

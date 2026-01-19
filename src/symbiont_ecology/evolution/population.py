@@ -284,9 +284,25 @@ class PopulationManager:
         records = self.recent_score_records(organelle_id, limit)
         if not records:
             return 0.0
-        # If task_reward is missing (old records), fallback to 'score' which might be total reward
-        values = [float(r.get("task_reward", r.get("score", 0.0))) for r in records]
-        return sum(values) / len(values) if values else 0.0
+        # If task_reward is missing (old records), fall back to the recorded score.
+        values: list[float] = []
+        for record in records:
+            task_reward = record.get("task_reward")
+            if isinstance(task_reward, (int, float)):
+                values.append(float(task_reward))
+                continue
+            score = record.get("score")
+            if isinstance(score, (int, float)):
+                values.append(float(score))
+                continue
+            if isinstance(score, str):
+                try:
+                    values.append(float(score))
+                except Exception:
+                    continue
+        if not values:
+            return 0.0
+        return sum(values) / len(values)
 
     def average_energy(self, organelle_id: str, limit: int = 10) -> float:
         values = self.energy.get(organelle_id, [])[-limit:]

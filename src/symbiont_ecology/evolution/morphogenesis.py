@@ -22,7 +22,7 @@ class MorphogenesisController:
         backbone_params = max(self.host.total_backbone_params(), 1)
         base_budget = backbone_params * limits.lora_budget_frac
         adapter_cap = max(0, limits.max_active_adapters_per_layer)
-        roi_ranked: list[tuple[Genome, float, Organelle]] = []
+        score_ranked: list[tuple[Genome, float, Organelle]] = []
         for genome in survivors:
             organelle = self.host.get_organelle(genome.organelle_id)
             if organelle is None:
@@ -33,18 +33,22 @@ class MorphogenesisController:
                 # Still nudge gating bias based on a neutral ROI prior.
                 self._tweak_gate_bias(genome, roi=population.aggregate_roi(limit=5))
                 continue
-            roi = population.average_roi(genome.organelle_id, limit=5)
-            roi_ranked.append((genome, roi, organelle))
+            # Use task_reward (competence) instead of ROI to decide rank changes.
+            # This allows high-rank models to survive if they are accurate, even if expensive.
+            score = population.average_task_reward(genome.organelle_id, limit=5)
+            score_ranked.append((genome, score, organelle))
 
-        if not roi_ranked:
+        if not score_ranked:
             return
-        roi_ranked.sort(key=lambda item: item[1])
-        n = len(roi_ranked)
+        score_ranked.sort(key=lambda item: item[1])
+        n = len(score_ranked)
         # Small populations: preserve the original absolute ROI thresholds.
         # (Used by unit tests and keeps behaviour intuitive when mu < 4.)
         if n < 4:
-            for genome, roi, organelle in roi_ranked:
+            for genome, _score, organelle in score_ranked:
                 target_rank = genome.rank
+                # Fallback to ROI for absolute thresholds if population is tiny
+                roi = population.average_roi(genome.organelle_id, limit=5)
                 if roi >= 1.2:
                     target_rank = min(genome.rank + 1, self.config.host.max_lora_rank)
                 elif roi <= 0.6 and genome.rank > 1:
@@ -71,13 +75,14 @@ class MorphogenesisController:
                 self._enforce_layer_caps(survivors, population, adapter_cap)
             return
 
-        # Scale-free: adjust ranks by relative ROI within the current survivors set.
+        # Scale-free: adjust ranks by relative competence (score) within the current survivors set.
         # With mu=4 this becomes 1 shrink + 1 grow per gen (when ranks allow).
         low_count = int(n // 4)
         high_start = n - low_count
 
-        for idx, (genome, roi, organelle) in enumerate(roi_ranked):
+        for idx, (genome, _score, organelle) in enumerate(score_ranked):
             target_rank = genome.rank
+            roi = population.average_roi(genome.organelle_id, limit=5)
             if low_count > 0 and idx < low_count and genome.rank > 1:
                 target_rank = max(1, genome.rank - 1)
             elif low_count > 0 and idx >= high_start:

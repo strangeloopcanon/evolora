@@ -661,6 +661,7 @@ class EcologyLoop:
                     "difficulty": float(getattr(task, "difficulty", 0.0)),
                     "success": bool(success),
                     "generation": self.generation_index,
+                    "task_reward": float(reward.task_reward),
                 }
                 self.population.record_score(organelle_id, reward.total, meta=meta)
                 self.population.record_energy(organelle_id, settlement["cost"])
