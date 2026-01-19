@@ -74,8 +74,8 @@ SFT_DATA=""
 HOLDOUT="config/evaluation/regex_generalization.jsonl"
 EVAL_MAX_SAMPLES=""
 EVO_SELECTION_MAX_SAMPLES=""
-EVO_SELECTION_TOP_K_BY_ROI="8"
-EVO_SELECTION_MAX_NEW_TOKENS="64"
+EVO_SELECTION_TOP_K_BY_ROI="0"
+EVO_SELECTION_MAX_NEW_TOKENS="96"
 RUN_SFT=1
 RUN_EVAL=1
 RUN_EVAL_ID=1
@@ -212,28 +212,65 @@ if ! [ -f "$SFT_DATA" ]; then
   exit 2
 fi
 
-echo "[calibration] gens=$CALIB_GENS seed=$SEED checkpoint_every=$CHECKPOINT_EVERY"
-MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
-  --config "$CONFIG" \
-  --generations "$CALIB_GENS" \
-  --output "$OUTPUT" \
-  --checkpoint-every "$CHECKPOINT_EVERY" \
-  --seed "$SEED" \
-  "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
-
-echo "[resume] resume_from=$OUTPUT gens=$RESUME_GENS seed=$SEED checkpoint_every=$CHECKPOINT_EVERY"
-MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
-  --config "$CONFIG" \
-  --resume-from "$OUTPUT" \
-  --generations "$RESUME_GENS" \
-  --checkpoint-every "$CHECKPOINT_EVERY" \
-  --seed "$SEED" \
-  "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
-
 CHECKPOINT="$OUTPUT/checkpoint.pt"
-if ! [ -f "$CHECKPOINT" ]; then
+current_generation() {
+  local checkpoint_path="$1"
+  if ! [ -f "$checkpoint_path" ]; then
+    echo "0"
+    return 0
+  fi
+  "$PY" - <<'PY' "$checkpoint_path" || echo "0"
+import pickle
+import sys
+from pathlib import Path
+
+checkpoint_path = Path(sys.argv[1])
+try:
+    state = pickle.loads(checkpoint_path.read_bytes())
+    gen = int(state.get("generation", 0) or 0)
+    print(str(gen))
+except Exception:
+    print("0")
+PY
+}
+
+GEN_DONE="$(current_generation "$CHECKPOINT")"
+if [ -z "$GEN_DONE" ]; then
+  GEN_DONE="0"
+fi
+
+if [ "$GEN_DONE" -le 0 ]; then
+  echo "[calibration] gens=$CALIB_GENS seed=$SEED checkpoint_every=$CHECKPOINT_EVERY"
+  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
+    --config "$CONFIG" \
+    --generations "$CALIB_GENS" \
+    --output "$OUTPUT" \
+    --checkpoint-every "$CHECKPOINT_EVERY" \
+    --seed "$SEED" \
+    "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+fi
+
+GEN_DONE="$(current_generation "$CHECKPOINT")"
+if [ -z "$GEN_DONE" ]; then
+  GEN_DONE="0"
+fi
+if [ "$GEN_DONE" -le 0 ]; then
   echo "Expected checkpoint at $CHECKPOINT" >&2
   exit 1
+fi
+
+if [ "$GEN_DONE" -lt "$FULL_GENS" ]; then
+  REMAINING=$((FULL_GENS - GEN_DONE))
+  echo "[resume] resume_from=$OUTPUT gens=$REMAINING (done=$GEN_DONE/$FULL_GENS) seed=$SEED checkpoint_every=$CHECKPOINT_EVERY"
+  MPLCONFIGDIR=$(mktemp -d) AGENT_MODE=baseline "$PY" scripts/run_evolution.py \
+    --config "$CONFIG" \
+    --resume-from "$OUTPUT" \
+    --generations "$REMAINING" \
+    --checkpoint-every "$CHECKPOINT_EVERY" \
+    --seed "$SEED" \
+    "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+else
+  echo "[resume] already complete: done=$GEN_DONE/$FULL_GENS"
 fi
 
 if [ "$RUN_SFT" -eq 1 ]; then
@@ -286,6 +323,8 @@ PY
     --attn-implementation eager \
     --optim adamw_torch \
     --engine manual \
+    --save-every-steps 100 \
+    --log-every-steps 50 \
     --resume \
     --output "$SFT_OUT"
 fi

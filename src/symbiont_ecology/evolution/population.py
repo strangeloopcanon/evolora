@@ -279,6 +279,15 @@ class PopulationManager:
             return 0.0
         return sum(scores) / len(scores)
 
+    def average_task_reward(self, organelle_id: str, limit: int = 10) -> float:
+        """Calculate average raw task reward (competence) from metadata."""
+        records = self.recent_score_records(organelle_id, limit)
+        if not records:
+            return 0.0
+        # If task_reward is missing (old records), fallback to 'score' which might be total reward
+        values = [float(r.get("task_reward", r.get("score", 0.0))) for r in records]
+        return sum(values) / len(values) if values else 0.0
+
     def average_energy(self, organelle_id: str, limit: int = 10) -> float:
         values = self.energy.get(organelle_id, [])[-limit:]
         if not values:
@@ -418,7 +427,7 @@ class PopulationManager:
             viable = 1.0 if viability.get(genome.organelle_id, False) else 0.0
             roi = self.average_roi(genome.organelle_id)
             score = self.average_score(genome.organelle_id)
-            return (viable, roi, score)
+            return (viable, score, roi)
 
         return sorted(
             self.population.values(),

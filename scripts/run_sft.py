@@ -965,137 +965,143 @@ def train_manual(
         )
         return True
 
-    for epoch_idx in range(epoch, int(args.epochs)):
-        epoch = epoch_idx
-        step_in_epoch_local = 0
-        loader_iter = iter(train_loader)
-        if epoch_idx == epoch and step_in_epoch > 0:
-            for _ in range(step_in_epoch):
-                next(loader_iter, None)
-            step_in_epoch_local = step_in_epoch
-        for batch in loader_iter:
-            if device.type == "cuda":
-                torch.cuda.synchronize()
-            elif device.type == "mps":
-                torch.mps.synchronize()
-            wall = time.perf_counter() - start_time
-            if budget.exhausted(
-                tokens=tokens_processed,
-                forward_flops=forward_flops_processed,
-                wall_clock_seconds=wall,
-            ):
-                stop_reason = "budget_exhausted"
-                break
-
-            global_step += 1
-            step_in_epoch_local += 1
-            step_in_epoch = step_in_epoch_local
-
-            batch = {k: v.to(device) for k, v in batch.items()}
-            batch_tokens = _count_nonpad_tokens(batch, pad_token_id=int(tokenizer.pad_token_id))
-            tokens_processed += batch_tokens
-            forward_flops_processed += _estimate_forward_flops(
-                batch_tokens, hidden_size=hidden_size
-            )
-
-            optimizer.zero_grad(set_to_none=True)
-            outputs = model(**batch)
-            loss = outputs.loss
-            if loss is None or not torch.isfinite(loss).all():
-                nonfinite_events += 1
-                consecutive_nonfinite += 1
-                if consecutive_nonfinite >= int(args.max_consecutive_nonfinite):
-                    if not _recover("nonfinite_loss"):
-                        break
-                continue
-
-            loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, float(args.max_grad_norm))
-            if not math.isfinite(float(grad_norm)):
-                nonfinite_events += 1
-                consecutive_nonfinite += 1
-                if consecutive_nonfinite >= int(args.max_consecutive_nonfinite):
-                    if not _recover("nonfinite_grad"):
-                        break
-                continue
-
-            optimizer.step()
-            scheduler.step()
-            consecutive_nonfinite = 0
-
-            # Guard against parameters becoming NaN/Inf; restore last-good snapshot.
-            params_ok = True
-            for p in trainable_params:
-                if not torch.isfinite(p).all():
-                    params_ok = False
-                    break
-            if not params_ok:
-                nonfinite_events += 1
-                consecutive_nonfinite += 1
-                # Parameter corruption is severe: restore immediately (and count as a recovery).
-                if not _recover("nonfinite_params"):
-                    break
-                continue
-
-            last_good = _snapshot_trainable_params(model)
-
-            if int(args.log_every_steps) > 0 and global_step % int(args.log_every_steps) == 0:
-                lr = float(optimizer.param_groups[0].get("lr", 0.0))
-                print(
-                    f"[sft] step={global_step} epoch={epoch_idx} "
-                    f"loss={float(loss.detach().item()):.4f} grad_norm={float(grad_norm):.4f} "
-                    f"lr={lr:.3g} tokens={tokens_processed:,} flops={forward_flops_processed:,.0f}"
-                )
-
-            if int(args.save_every_steps) > 0 and global_step % int(args.save_every_steps) == 0:
+    try:
+        for epoch_idx in range(epoch, int(args.epochs)):
+            epoch = epoch_idx
+            step_in_epoch_local = 0
+            loader_iter = iter(train_loader)
+            if epoch_idx == epoch and step_in_epoch > 0:
+                for _ in range(step_in_epoch):
+                    next(loader_iter, None)
+                step_in_epoch_local = step_in_epoch
+            for batch in loader_iter:
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+                elif device.type == "mps":
+                    torch.mps.synchronize()
                 wall = time.perf_counter() - start_time
-                _atomic_torch_save(
-                    {
-                        "global_step": global_step,
-                        "epoch": epoch_idx,
-                        "step_in_epoch": step_in_epoch_local,
-                        "tokens_processed": tokens_processed,
-                        "forward_flops_processed": forward_flops_processed,
-                        "elapsed_seconds": wall,
-                        "trainable_state": last_good,
-                        "nonfinite_restarts": nonfinite_restarts,
-                        "optimizer_state": optimizer.state_dict(),
-                        "scheduler_state": scheduler.state_dict(),
-                        "scheduler_max_steps": max_steps,
-                        "scheduler_warmup_steps": warmup_steps,
-                        "scheduler_details": scheduler_details,
-                        "python_random_state": random.getstate(),
-                        "torch_rng_state": torch.get_rng_state(),
-                    },
-                    ckpt_path,
+                if budget.exhausted(
+                    tokens=tokens_processed,
+                    forward_flops=forward_flops_processed,
+                    wall_clock_seconds=wall,
+                ):
+                    stop_reason = "budget_exhausted"
+                    break
+
+                global_step += 1
+                step_in_epoch_local += 1
+                step_in_epoch = step_in_epoch_local
+
+                batch = {k: v.to(device) for k, v in batch.items()}
+                batch_tokens = _count_nonpad_tokens(batch, pad_token_id=int(tokenizer.pad_token_id))
+                tokens_processed += batch_tokens
+                forward_flops_processed += _estimate_forward_flops(
+                    batch_tokens, hidden_size=hidden_size
                 )
 
-        if stop_reason != "max_epochs":
-            break
-        step_in_epoch = 0
+                optimizer.zero_grad(set_to_none=True)
+                outputs = model(**batch)
+                loss = outputs.loss
+                if loss is None or not torch.isfinite(loss).all():
+                    nonfinite_events += 1
+                    consecutive_nonfinite += 1
+                    if consecutive_nonfinite >= int(args.max_consecutive_nonfinite):
+                        if not _recover("nonfinite_loss"):
+                            break
+                    continue
 
-    wall = time.perf_counter() - start_time
-    # Always save a final resumable checkpoint (cheap for LoRA).
-    _atomic_torch_save(
-        {
-            "global_step": global_step,
-            "epoch": epoch,
-            "step_in_epoch": step_in_epoch,
-            "tokens_processed": tokens_processed,
-            "forward_flops_processed": forward_flops_processed,
-            "elapsed_seconds": wall,
-            "trainable_state": last_good,
-            "nonfinite_restarts": nonfinite_restarts,
-            "optimizer_state": optimizer.state_dict(),
-            "scheduler_state": scheduler.state_dict(),
-            "scheduler_max_steps": max_steps,
-            "scheduler_warmup_steps": warmup_steps,
-            "scheduler_details": scheduler_details,
-            "python_random_state": random.getstate(),
-            "torch_rng_state": torch.get_rng_state(),
-        },
-        ckpt_path,
-    )
+                loss.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    trainable_params, float(args.max_grad_norm)
+                )
+                if not math.isfinite(float(grad_norm)):
+                    nonfinite_events += 1
+                    consecutive_nonfinite += 1
+                    if consecutive_nonfinite >= int(args.max_consecutive_nonfinite):
+                        if not _recover("nonfinite_grad"):
+                            break
+                    continue
+
+                optimizer.step()
+                scheduler.step()
+                consecutive_nonfinite = 0
+
+                # Guard against parameters becoming NaN/Inf; restore last-good snapshot.
+                params_ok = True
+                for p in trainable_params:
+                    if not torch.isfinite(p).all():
+                        params_ok = False
+                        break
+                if not params_ok:
+                    nonfinite_events += 1
+                    consecutive_nonfinite += 1
+                    # Parameter corruption is severe: restore immediately (and count as a recovery).
+                    if not _recover("nonfinite_params"):
+                        break
+                    continue
+
+                last_good = _snapshot_trainable_params(model)
+
+                if int(args.log_every_steps) > 0 and global_step % int(args.log_every_steps) == 0:
+                    lr = float(optimizer.param_groups[0].get("lr", 0.0))
+                    print(
+                        f"[sft] step={global_step} epoch={epoch_idx} "
+                        f"loss={float(loss.detach().item()):.4f} grad_norm={float(grad_norm):.4f} "
+                        f"lr={lr:.3g} tokens={tokens_processed:,} flops={forward_flops_processed:,.0f}"
+                    )
+
+                if int(args.save_every_steps) > 0 and global_step % int(args.save_every_steps) == 0:
+                    wall = time.perf_counter() - start_time
+                    _atomic_torch_save(
+                        {
+                            "global_step": global_step,
+                            "epoch": epoch_idx,
+                            "step_in_epoch": step_in_epoch_local,
+                            "tokens_processed": tokens_processed,
+                            "forward_flops_processed": forward_flops_processed,
+                            "elapsed_seconds": wall,
+                            "trainable_state": last_good,
+                            "nonfinite_restarts": nonfinite_restarts,
+                            "optimizer_state": optimizer.state_dict(),
+                            "scheduler_state": scheduler.state_dict(),
+                            "scheduler_max_steps": max_steps,
+                            "scheduler_warmup_steps": warmup_steps,
+                            "scheduler_details": scheduler_details,
+                            "python_random_state": random.getstate(),
+                            "torch_rng_state": torch.get_rng_state(),
+                        },
+                        ckpt_path,
+                    )
+
+            if stop_reason != "max_epochs":
+                break
+            step_in_epoch = 0
+    except KeyboardInterrupt:
+        stop_reason = "keyboard_interrupt"
+        print("[sft] Interrupted; saving resumable checkpoint", flush=True)
+    finally:
+        wall = time.perf_counter() - start_time
+        # Always save a final resumable checkpoint (cheap for LoRA).
+        _atomic_torch_save(
+            {
+                "global_step": global_step,
+                "epoch": epoch,
+                "step_in_epoch": step_in_epoch,
+                "tokens_processed": tokens_processed,
+                "forward_flops_processed": forward_flops_processed,
+                "elapsed_seconds": wall,
+                "trainable_state": last_good,
+                "nonfinite_restarts": nonfinite_restarts,
+                "optimizer_state": optimizer.state_dict(),
+                "scheduler_state": scheduler.state_dict(),
+                "scheduler_max_steps": max_steps,
+                "scheduler_warmup_steps": warmup_steps,
+                "scheduler_details": scheduler_details,
+                "python_random_state": random.getstate(),
+                "torch_rng_state": torch.get_rng_state(),
+            },
+            ckpt_path,
+        )
     return {
         "stop_reason": stop_reason,
         "global_step": global_step,
