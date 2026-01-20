@@ -442,8 +442,8 @@ class PopulationManager:
         def key(genome: Genome) -> tuple[float, float, float]:
             viable = 1.0 if viability.get(genome.organelle_id, False) else 0.0
             roi = self.average_roi(genome.organelle_id)
-            score = self.average_score(genome.organelle_id)
-            return (viable, score, roi)
+            competence = self.average_task_reward(genome.organelle_id)
+            return (viable, competence, roi)
 
         return sorted(
             self.population.values(),

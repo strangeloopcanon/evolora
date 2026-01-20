@@ -102,18 +102,21 @@ class HebbianPEFTOrganelle(Organelle):
             envelope.observation.state["prompt_tokens"] = int(enc["input_ids"].shape[1])
         except Exception:
             envelope.observation.state["prompt_tokens"] = 0
-        outputs = self.model(**enc, output_hidden_states=True)
-        hidden_last = outputs.hidden_states[-1]  # [B, T, H]
-        pre = self.model.get_input_embeddings()(enc["input_ids"])  # [B, T, H]
-        # Store trace as average over sequence
-        self.traces.pre = pre.mean(dim=(0, 1)).detach().to(self.device)
-        self.traces.post = hidden_last[:, -1, :].mean(dim=0).detach().to(self.device)
-        try:
-            activation_scale = float(pre.pow(2).mean().item() + hidden_last.pow(2).mean().item())
-        except Exception:
-            activation_scale = 0.0
-        if math.isfinite(activation_scale):
-            self._last_activation_scale = activation_scale
+
+        # Pre-trace: prefer the host latent (contextual last-token embedding); fall back to prompt embeddings.
+        pre_vec: torch.Tensor | None = None
+        latent = envelope.observation.state.get("latent")
+        if isinstance(latent, list) and latent:
+            try:
+                pre_vec = torch.tensor(latent, device=self.device, dtype=torch.float32)
+            except Exception:
+                pre_vec = None
+        if pre_vec is None:
+            try:
+                prompt_emb = self.model.get_input_embeddings()(enc["input_ids"])  # [B, T, H]
+                pre_vec = prompt_emb.mean(dim=(0, 1)).detach()
+            except Exception:
+                pre_vec = None
 
         # Generate answer; max_new_tokens and sampling knobs come from host config
         host_cfg = self.backbone.host_config
@@ -141,7 +144,13 @@ class HebbianPEFTOrganelle(Organelle):
                 gen_kwargs["temperature"] = temperature
             if 0.0 < top_p < 1.0:
                 gen_kwargs["top_p"] = top_p
-        gen_ids = self.model.generate(**enc, **gen_kwargs)
+        gen_out = self.model.generate(
+            **enc,
+            **gen_kwargs,
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
+        gen_ids = getattr(gen_out, "sequences", gen_out)
         try:
             prompt_len = int(enc["input_ids"].shape[1])
             envelope.observation.state["generated_tokens"] = max(
@@ -149,6 +158,82 @@ class HebbianPEFTOrganelle(Organelle):
             )
         except Exception:
             envelope.observation.state["generated_tokens"] = 0
+
+        # Post-trace: a reward-modulated summary of the generated tokens, weighted by token surprisal
+        # (low-probability tokens get higher credit assignment).
+        post_vec: torch.Tensor | None = None
+        try:
+            prompt_len = int(enc["input_ids"].shape[1])
+            gen_len = max(0, int(gen_ids.shape[1]) - prompt_len)
+        except Exception:
+            prompt_len = 0
+            gen_len = 0
+
+        if gen_len > 0:
+            try:
+                gen_token_ids = gen_ids[:, prompt_len:]
+                gen_emb = self.model.get_input_embeddings()(gen_token_ids)  # [B, gen_len, H]
+            except Exception:
+                gen_token_ids = None
+                gen_emb = None
+
+            weights: torch.Tensor | None = None
+            scores = getattr(gen_out, "scores", None)
+            if (
+                gen_token_ids is not None
+                and isinstance(scores, (list, tuple))
+                and len(scores) >= gen_len
+            ):
+                try:
+                    logprobs: list[torch.Tensor] = []
+                    for step_idx in range(gen_len):
+                        step_scores = scores[step_idx]
+                        if step_scores is None:
+                            continue
+                        step_scores_0 = step_scores[0].float()
+                        token_id = int(gen_token_ids[0, step_idx].item())
+                        token_score = step_scores_0[token_id]
+                        log_denom = torch.logsumexp(step_scores_0, dim=-1)
+                        logprobs.append(token_score - log_denom)
+                    if len(logprobs) == gen_len:
+                        logprobs_t = torch.stack(logprobs)  # [gen_len]
+                        envelope.observation.state["gen_mean_logprob"] = float(
+                            logprobs_t.mean().item()
+                        )
+                        envelope.observation.state["gen_min_logprob"] = float(
+                            logprobs_t.min().item()
+                        )
+                        envelope.observation.state["gen_max_logprob"] = float(
+                            logprobs_t.max().item()
+                        )
+                        surprisal = (-logprobs_t).clamp(min=0.0, max=20.0)
+                        denom = float(surprisal.sum().item())
+                        if denom > 0.0 and math.isfinite(denom):
+                            weights = surprisal / float(denom)
+                except Exception:
+                    weights = None
+
+            if gen_emb is not None:
+                if weights is None:
+                    weights = torch.full((gen_len,), 1.0 / float(gen_len), device=gen_emb.device)
+                w = weights.to(device=gen_emb.device, dtype=gen_emb.dtype).view(1, gen_len, 1)
+                post_vec = (gen_emb * w).sum(dim=1).mean(dim=0).detach()
+
+        if post_vec is None:
+            post_vec = pre_vec
+
+        self.traces.pre = pre_vec.detach().to(self.device) if pre_vec is not None else None
+        self.traces.post = post_vec.detach().to(self.device) if post_vec is not None else None
+        if self.traces.pre is not None and self.traces.post is not None:
+            try:
+                activation_scale = float(
+                    self.traces.pre.pow(2).mean().item() + self.traces.post.pow(2).mean().item()
+                )
+            except Exception:
+                activation_scale = 0.0
+            if math.isfinite(activation_scale):
+                self._last_activation_scale = activation_scale
+
         answer = self.tokenizer.decode(
             gen_ids[0][enc["input_ids"].shape[1] :], skip_special_tokens=True
         )
