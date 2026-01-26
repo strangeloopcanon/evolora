@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -16,6 +16,9 @@ class OrganelleContext:
     organelle_id: str
     hebbian: HebbianConfig
     reward_baseline: float = 0.0
+    progress_baseline: float = 0.0
+    reward_baseline_by_family: dict[str, float] = field(default_factory=dict)
+    progress_baseline_by_family: dict[str, float] = field(default_factory=dict)
     traces: dict[str, torch.Tensor] | None = None
 
 
@@ -35,8 +38,12 @@ class Organelle:
         """Produce actions/plan updates."""
         raise NotImplementedError  # pragma: no cover
 
-    def update(self, envelope: MessageEnvelope, reward: RewardBreakdown) -> None:
-        """Apply plastic update based on reward."""
+    def update(self, envelope: MessageEnvelope, reward: RewardBreakdown) -> bool:
+        """Apply plastic update based on reward.
+
+        Returns:
+            True if weights were updated (count as a training step), else False.
+        """
         raise NotImplementedError  # pragma: no cover
 
     # ------------------------------------------------------------------

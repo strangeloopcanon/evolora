@@ -18,6 +18,8 @@ class MorphogenesisController:
     def apply(self, survivors: list[Genome], population: PopulationManager) -> None:
         if not survivors:
             return
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
         limits = self.config.limits
         backbone_params = max(self.host.total_backbone_params(), 1)
         base_budget = backbone_params * limits.lora_budget_frac
@@ -51,8 +53,8 @@ class MorphogenesisController:
                 roi = population.average_roi(genome.organelle_id, limit=5)
                 if roi >= 1.2:
                     target_rank = min(genome.rank + 1, self.config.host.max_lora_rank)
-                elif roi <= 0.6 and genome.rank > 1:
-                    target_rank = max(1, genome.rank - 1)
+                elif roi <= 0.6 and genome.rank > min_rank:
+                    target_rank = max(min_rank, genome.rank - 1)
                 else:
                     self._tweak_gate_bias(genome, roi)
                     continue
@@ -83,8 +85,8 @@ class MorphogenesisController:
         for idx, (genome, _score, organelle) in enumerate(score_ranked):
             target_rank = genome.rank
             roi = population.average_roi(genome.organelle_id, limit=5)
-            if low_count > 0 and idx < low_count and genome.rank > 1:
-                target_rank = max(1, genome.rank - 1)
+            if low_count > 0 and idx < low_count and genome.rank > min_rank:
+                target_rank = max(min_rank, genome.rank - 1)
             elif low_count > 0 and idx >= high_start:
                 target_rank = min(genome.rank + 1, self.config.host.max_lora_rank)
             else:

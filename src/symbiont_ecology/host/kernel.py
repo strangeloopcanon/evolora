@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import os
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -89,12 +91,21 @@ class HostKernel:
             organelle_id=organelle_id,
             hebbian=hebbian_config or self.config.hebbian,
             reward_baseline=0.0,
+            progress_baseline=0.0,
             traces=None,
         )
-        organelle_cls = peft_hebbian.HebbianPEFTOrganelle
+        plasticity = str(os.getenv("EVOLORA_PLASTICITY", "hebbian") or "hebbian").strip().lower()
+        organelle_cls: type[peft_hebbian.HebbianPEFTOrganelle]
+        if plasticity in {"backprop", "bp", "grad", "gradient"}:
+            organelle_cls = peft_hebbian.BackpropPEFTOrganelle
+        else:
+            organelle_cls = peft_hebbian.HebbianPEFTOrganelle
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
+        rank = max(min_rank, min(int(rank), int(self.config.host.max_lora_rank)))
         organelle = organelle_cls(
             backbone=self.backbone,
-            rank=min(rank, self.config.host.max_lora_rank),
+            rank=rank,
             context=context,
             activation_bias=activation_bias,
         )
@@ -266,15 +277,41 @@ class HostKernel:
             organelle = self.organelles.get(organelle_id)
             if organelle is None:
                 continue
-            organelle.update(envelope, breakdown)
-            if self.compute_budget is not None:
+            did_update = False
+            try:
+                did_update = bool(organelle.update(envelope, breakdown))
+            except Exception:
+                did_update = False
+            if did_update and self.compute_budget is not None:
                 try:
-                    params = self._trainable_params(organelle)
-                    # Estimate: 2 FLOPs per param (scale + add)
-                    hebbian_flops = float(params * 2)
-                    self.compute_budget.record_hebbian_update(
-                        estimated_flops=hebbian_flops, training=training_intent
-                    )
+                    state = {}
+                    try:
+                        state = envelope.observation.state
+                    except Exception:
+                        state = {}
+                    update_tokens = state.get("update_forward_tokens")
+                    update_forward_flops = state.get("update_forward_flops")
+                    if isinstance(update_tokens, int) and isinstance(
+                        update_forward_flops, (int, float)
+                    ):
+                        self.compute_budget.record_forward(
+                            prompt_tokens=update_tokens,
+                            generated_tokens=0,
+                            flops=float(update_forward_flops),
+                            training=training_intent,
+                        )
+                    backward_flops = state.get("update_backward_flops")
+                    if isinstance(backward_flops, (int, float)) and float(backward_flops) > 0.0:
+                        self.compute_budget.record_hebbian_update(
+                            estimated_flops=float(backward_flops), training=training_intent
+                        )
+                    else:
+                        params = self._trainable_params(organelle)
+                        # Estimate: 2 FLOPs per param (scale + add)
+                        hebbian_flops = float(params * 2)
+                        self.compute_budget.record_hebbian_update(
+                            estimated_flops=hebbian_flops, training=training_intent
+                        )
                 except Exception:
                     pass
             # Mint ATP based on total reward (which already subtracts cost_penalty)
@@ -376,6 +413,9 @@ class HostKernel:
         organelle = self.organelles.get(organelle_id)
         if organelle is None:
             return False
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
+        new_rank = max(min_rank, min(int(new_rank), int(self.config.host.max_lora_rank)))
         if hasattr(organelle, "resize_rank"):
             try:
                 changed = bool(organelle.resize_rank(new_rank))
@@ -505,6 +545,8 @@ class HostKernel:
         """
         contributions: dict[str, list[_SoupContribution]] = {}
         normalized_roles: dict[str, int] | None = None
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
         if roles:
             # ensure only include roles for known members
             normalized_roles = {str(k): int(v) for k, v in roles.items() if isinstance(v, int)}
@@ -578,7 +620,7 @@ class HostKernel:
             effective_rank = target_rank
             if noise_total:
                 effective_rank = int(round(target_rank + noise_total))
-            effective_rank = max(1, min(self.config.host.max_lora_rank, effective_rank))
+            effective_rank = max(min_rank, min(self.config.host.max_lora_rank, effective_rank))
             if use_block:
                 try:
                     combined = self._combine_block_diagonal(parts, effective_rank)
@@ -596,9 +638,21 @@ class HostKernel:
                 continue
             if combined.ndim == 2 and effective_rank > 0 and mode != "block":
                 try:
+                    pre_norm = float(combined.norm().item())
                     u, s, vh = torch.linalg.svd(combined, full_matrices=False)
                     rank = min(effective_rank, s.shape[0])
                     combined = (u[:, :rank] * s[:rank]) @ vh[:rank, :]
+                    if rank < s.shape[0]:
+                        post_norm = float(combined.norm().item())
+                        if (
+                            pre_norm > 0.0
+                            and post_norm > 0.0
+                            and math.isfinite(pre_norm)
+                            and math.isfinite(post_norm)
+                        ):
+                            scale = pre_norm / post_norm
+                            scale = max(0.5, min(2.0, scale))
+                            combined = combined * float(scale)
                 except Exception:
                     pass
             soup_state[key] = combined
@@ -635,6 +689,30 @@ class HostKernel:
 
     def get_organelle(self, organelle_id: str) -> Optional[Organelle]:
         return self.organelles.get(organelle_id)
+
+    def measure_adapter_magnitude(self, organelle_id: str) -> float:
+        organelle = self.organelles.get(organelle_id)
+        if organelle is None:
+            return 0.0
+        # If the organelle exposes a direct measurement, use it.
+        if hasattr(organelle, "measure_magnitude"):
+            try:
+                return float(organelle.measure_magnitude())
+            except Exception:
+                pass
+        snapshot = organelle.export_adapter_state()
+        if not snapshot:
+            return 0.0
+        total_mag = 0.0
+        count = 0
+        for key, tensor in snapshot.items():
+            if "lora_B" in key:
+                try:
+                    total_mag += float(tensor.abs().max().item())
+                    count += 1
+                except Exception:
+                    pass
+        return total_mag / max(1, count)
 
     # ------------------------------------------------------------------
     def export_organelle_adapter(self, organelle_id: str, path: str | Path) -> None:

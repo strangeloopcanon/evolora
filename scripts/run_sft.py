@@ -91,8 +91,8 @@ class SFTBudget:
 def estimate_sft_budget_from_checkpoint(
     checkpoint_path: Path,
     *,
-    match_budget_field: str = "total_tokens",
-    backprop_multiplier: float = 2.0,
+    match_budget_field: str = "train_flops",
+    backprop_multiplier: float = 3.0,
 ) -> SFTBudget:
     """Estimate an SFT compute budget from an evolution checkpoint.
 
@@ -471,19 +471,19 @@ def parse_args() -> argparse.Namespace:
             "train_flops",
             "wall_clock_seconds",
         ],
-        default="total_tokens",
+        default="train_flops",
         help=(
             "When using --checkpoint, which evolution compute_budget field to match before applying "
-            "--backprop-multiplier (default: total_tokens)."
+            "--backprop-multiplier (default: train_flops)."
         ),
     )
     parser.add_argument(
         "--backprop-multiplier",
         type=float,
-        default=2.0,
+        default=3.0,
         help=(
             "Approximate relative compute of SFT per token vs forward-only inference "
-            "(default: 2.0). SFT token budget = evolution_tokens / backprop_multiplier."
+            "(default: 3.0). SFT token budget = evolution_tokens / backprop_multiplier."
         ),
     )
     parser.add_argument(

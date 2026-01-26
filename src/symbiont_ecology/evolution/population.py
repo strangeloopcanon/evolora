@@ -438,12 +438,16 @@ class PopulationManager:
             removed.append(genome.organelle_id)
         return removed
 
-    def rank_for_selection(self, viability: dict[str, bool]) -> list[Genome]:
-        def key(genome: Genome) -> tuple[float, float, float]:
+    def rank_for_selection(
+        self, viability: dict[str, bool], magnitudes: dict[str, float] | None = None
+    ) -> list[Genome]:
+        def key(genome: Genome) -> tuple[float, float, float, float]:
             viable = 1.0 if viability.get(genome.organelle_id, False) else 0.0
             roi = self.average_roi(genome.organelle_id)
             competence = self.average_task_reward(genome.organelle_id)
-            return (viable, competence, roi)
+            # Tie-break: prefer adapters with non-zero magnitude (avoid no-ops).
+            mag = magnitudes.get(genome.organelle_id, 0.0) if magnitudes else 0.0
+            return (viable, competence, mag, roi)
 
         return sorted(
             self.population.values(),

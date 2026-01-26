@@ -461,8 +461,23 @@ def _select_best_organelle_by_selection_tasks(
     candidate_ids: list[str] | None = None,
     max_new_tokens: int = 96,
 ) -> tuple[str | None, dict[str, Any]]:
+    def _abs_max_lora_b(state: dict[str, torch.Tensor]) -> float:
+        abs_max = 0.0
+        for key, tensor in state.items():
+            if "lora_B" not in key:
+                continue
+            if not isinstance(tensor, torch.Tensor) or tensor.numel() <= 0:
+                continue
+            try:
+                value = float(tensor.detach().abs().max().item())
+            except Exception:
+                continue
+            if value > abs_max:
+                abs_max = value
+        return abs_max
+
     best_id: str | None = None
-    best_score: tuple[float, float, float] = (-1.0, -1.0, -1.0)
+    best_score: tuple[float, float, float, float] = (-1.0, -1.0, -1.0, -1.0)
     best_details: dict[str, Any] = {}
     if not tasks:
         return None, {"error": "no selection tasks"}
@@ -471,11 +486,30 @@ def _select_best_organelle_by_selection_tasks(
     candidate_ids = [cid for cid in candidate_ids if cid in adapter_states]
     if not candidate_ids:
         return None, {"error": "no candidate organelles"}
+
+    abs_max_by_id: dict[str, float] = {}
+    for oid in candidate_ids:
+        state = adapter_states.get(oid)
+        if not isinstance(state, dict) or not state:
+            continue
+        abs_max_by_id[oid] = _abs_max_lora_b(state)
+
+    # If any organelles actually diverged from the base adapter (non-zero LoRA-B), restrict
+    # selection to those. This avoids picking a no-op adapter just because it preserves a
+    # slightly higher geometric mean on an unrelated selection set.
+    nonzero_ids = [oid for oid in candidate_ids if abs_max_by_id.get(oid, 0.0) > 0.0]
+    if nonzero_ids:
+        skipped = len(candidate_ids) - len(nonzero_ids)
+        if skipped:
+            print(f"  [select] Skipping {skipped} zero-magnitude adapters")
+        candidate_ids = nonzero_ids
+
     total = len(candidate_ids)
     for idx, oid in enumerate(candidate_ids, 1):
         state = adapter_states.get(oid)
         if not isinstance(state, dict) or not state:
             continue
+        abs_max_b = float(abs_max_by_id.get(oid, 0.0))
         if _apply_adapter_state_to_peft_model(peft_model, state) <= 0:
             continue
         metrics = _evaluate_selection_tasks(
@@ -485,6 +519,7 @@ def _select_best_organelle_by_selection_tasks(
             float(metrics.get("geometric_mean_accuracy", 0.0) or 0.0),
             float(metrics.get("accuracy", 0.0) or 0.0),
             float(metrics.get("case_accuracy", 0.0) or 0.0),
+            float(abs_max_b),
         )
         if score > best_score:
             best_score = score
@@ -493,6 +528,7 @@ def _select_best_organelle_by_selection_tasks(
                 "selection_geometric_mean_accuracy": score[0],
                 "selection_accuracy": score[1],
                 "selection_case_accuracy": score[2],
+                "selection_abs_max_lora_b": score[3],
                 "selection_correct": metrics.get("correct", 0),
                 "selection_total": metrics.get("total", 0),
                 "selection_cases_passed": metrics.get("cases_passed", 0),
@@ -502,7 +538,7 @@ def _select_best_organelle_by_selection_tasks(
         if total > 1:
             print(
                 f"  [select] {idx}/{total} organelle={oid} gm_acc={score[0]:.3f} "
-                f"acc={score[1]:.3f} cases={score[2]:.3f}"
+                f"acc={score[1]:.3f} cases={score[2]:.3f} abs_max_B={score[3]:.3g}"
             )
     return best_id, best_details
 

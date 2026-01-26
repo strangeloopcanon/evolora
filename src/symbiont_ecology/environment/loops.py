@@ -647,7 +647,12 @@ class EcologyLoop:
                 if human_feedback:
                     blended = self._blend_rewards({organelle_id: reward}, human_feedback)
                     reward = blended.get(organelle_id, reward)
-                self.environment.register_result(organelle_id, task, success)
+                try:
+                    progress = float(reward.task_reward)
+                except Exception:
+                    progress = 0.0
+                progress = max(0.0, min(1.0, progress))
+                self.environment.register_result(organelle_id, task, success, progress=progress)
                 settlement = self._settle_episode(organelle_id, task, reward, metrics)
                 reward = reward.model_copy(update={"cost_penalty": settlement["cost"]})
                 task_cell_family, task_cell_depth = task.cell
@@ -677,6 +682,22 @@ class EcologyLoop:
                 self._record_episode(
                     task, organelle_id, reward, metrics, settlement, success, utilisation_snapshot
                 )
+                # Attach task metadata for plasticity rules (e.g., per-family baselines).
+                try:
+                    state = result.envelope.observation.state
+                    state["task_prompt"] = str(prompt_text)
+                    state["task_family"] = str(task.family)
+                    state["task_depth"] = str(task.depth)
+                    state["task_cell"] = {
+                        "family": str(task_cell_family),
+                        "depth": str(task_cell_depth),
+                    }
+                    state["task_id"] = str(getattr(task, "task_id", "") or "")
+                    completion = task.supervised_completion()
+                    if completion:
+                        state["supervised_completion"] = str(completion)
+                except Exception:
+                    pass
                 self.host.apply_reward(result.envelope, {organelle_id: reward})
                 # C2C: post latent capsule from this step
                 if c2c_enabled:  # pragma: no cover - integration exercised in long runs
@@ -3591,7 +3612,9 @@ class EcologyLoop:
                 if organelle is not None
                 else self.config.host.max_lora_rank
             )
-            target_rank = max(1, min(target_rank, self.config.host.max_lora_rank))
+            min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+            min_rank = max(1, min_rank)
+            target_rank = max(min_rank, min(target_rank, self.config.host.max_lora_rank))
             # weights based on roi*ema, same as merge
             weights: list[float] = []
             for oid in soup_ids:
@@ -5766,7 +5789,16 @@ class EcologyLoop:
 
     def _mu_lambda_selection(self, viability: Dict[str, bool]) -> list[Genome]:
         strategy = self.config.population_strategy
-        ranked = self.population.rank_for_selection(viability)
+        magnitudes: dict[str, float] | None = None
+        try:
+            magnitudes = {}
+            for organelle_id in self.host.list_organelle_ids():
+                if organelle_id not in self.population.population:
+                    continue
+                magnitudes[organelle_id] = float(self.host.measure_adapter_magnitude(organelle_id))
+        except Exception:
+            magnitudes = None
+        ranked = self.population.rank_for_selection(viability, magnitudes=magnitudes)
         if not ranked:
             return []
         mu = max(1, min(strategy.mu, len(ranked)))
@@ -5854,6 +5886,13 @@ class EcologyLoop:
         passes += len(focus_tasks)
 
         other_cells = [other for other in self.environment.iter_cells() if other != cell]
+        try:
+            rng = getattr(self.environment, "rng", None)
+            if rng is None:
+                rng = random.Random(self.generation_index)
+            rng.shuffle(other_cells)
+        except Exception:
+            pass
         max_others = self.config.assimilation_tuning.probe_max_other_cells
         if max_others is not None:
             max_others = max(0, max_others)
@@ -5892,8 +5931,14 @@ class EcologyLoop:
         metrics = result.responses.get(organelle_id)
         if metrics is None:
             return False
-        success, _reward = task.evaluate(metrics.answer)
-        return success
+        success, reward = task.evaluate(metrics.answer)
+        try:
+            progress = float(reward.task_reward)
+        except Exception:
+            progress = 1.0 if success else 0.0
+        progress = max(0.0, min(1.0, progress))
+        # Use progress (dense rewards) instead of strict success to avoid blocking merges on near-misses.
+        return progress >= 0.7
 
     def _select_soup_members(
         self, cell: GridKey, candidate_id: str
@@ -6051,7 +6096,9 @@ class EcologyLoop:
             if organelle is not None
             else self.config.host.max_lora_rank
         )
-        target_rank = max(1, min(target_rank, self.config.host.max_lora_rank))
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
+        target_rank = max(min_rank, min(target_rank, self.config.host.max_lora_rank))
         block_roles: dict[str, int] | None = None
         block_mode = False
         block_rank = target_rank

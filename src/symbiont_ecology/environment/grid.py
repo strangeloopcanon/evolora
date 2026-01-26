@@ -342,6 +342,59 @@ class GridTask:
         )
         return success, reward
 
+    def supervised_completion(self) -> str | None:
+        """Return a canonical supervised target string for this task (if available)."""
+        family = str(self.family)
+        target = self.target
+
+        if family in {"regex", "regex.synthesis", "regex.debugging", "regex.refactoring"}:
+            if isinstance(target, dict):
+                pattern = target.get("pattern")
+                pattern_str = str(pattern).strip() if pattern is not None else ""
+                return pattern_str or None
+            return None
+
+        if family == "regex.recognition":
+            expected_bool: bool | None = None
+            if isinstance(target, dict):
+                expected = target.get("expected")
+                if isinstance(expected, bool):
+                    expected_bool = expected
+                elif expected is not None:
+                    expected_bool = bool(expected)
+            elif isinstance(target, bool):
+                expected_bool = target
+            if expected_bool is None:
+                return None
+            return "yes" if expected_bool else "no"
+
+        if family == "regex.explanation":
+            if isinstance(target, dict):
+                keywords_raw = target.get("required_keywords") or target.get("keywords") or []
+                keywords: list[str] = []
+                if isinstance(keywords_raw, list):
+                    for kw in keywords_raw:
+                        kw_str = str(kw).strip()
+                        if kw_str and kw_str not in keywords:
+                            keywords.append(kw_str)
+                # Align supervised target with evaluation (keyword coverage) and keep it short
+                # to avoid truncation dropping all completion tokens.
+                if keywords:
+                    return " ".join(keywords)
+                reference = target.get("reference_answer")
+                ref_str = str(reference).strip() if reference is not None else ""
+                return ref_str or None
+            return None
+
+        if family == "regex.mutation_effect":
+            if isinstance(target, dict):
+                reference = target.get("reference_answer")
+                ref_str = str(reference).strip() if reference is not None else ""
+                return ref_str or None
+            return None
+
+        return None
+
 
 @dataclass
 class GridCellState:
@@ -411,22 +464,28 @@ class EnvironmentController:
         self.bandit_counts[best_cell] += 1
         return best_cell
 
-    def update(self, cell: GridKey, success: bool) -> None:
+    def update(self, cell: GridKey, progress: float) -> None:
         state = self.cells[cell]
         beta = self.ctrl.beta
         tau = self.ctrl.tau
         eta = self.ctrl.eta
         prev = state.success_ema
-        state.success_ema = (1 - beta) * prev + beta * (1.0 if success else 0.0)
+        if not math.isfinite(progress):
+            progress = 0.0
+        progress = max(0.0, min(1.0, float(progress)))
+        state.success_ema = (1 - beta) * prev + beta * progress
         difficulty_delta = eta * (state.success_ema - tau)
         state.difficulty = min(0.85, max(0.15, state.difficulty + difficulty_delta))
-        if not success:
-            state.difficulty = max(0.15, state.difficulty - eta * 0.5)
+        # Provide additional difficulty relief proportional to failure magnitude, so tasks that
+        # rarely reach binary "success" (e.g., regex debugging) can still make measurable progress.
+        failure_mass = 1.0 - progress
+        if failure_mass > 0.0:
+            state.difficulty = max(0.15, state.difficulty - eta * 0.5 * failure_mass)
         state.price = min(
             self.pricing.max,
             max(self.pricing.min, self.pricing.base + self.pricing.k * (tau - state.success_ema)),
         )
-        self.bandit_success[cell] = self.bandit_success.get(cell, 0.0) + (1.0 if success else 0.0)
+        self.bandit_success[cell] = self.bandit_success.get(cell, 0.0) + progress
         # learning progress EMA
         delta = abs(state.success_ema - self.lp_prev_ema.get(cell, prev))
         self.lp_prev_ema[cell] = state.success_ema
@@ -2061,30 +2120,46 @@ class GridEnvironment:
                     continue
                 try:
                     compiled = re.compile(mutated)
-                    compiled_orig = re.compile(pattern)
                 except re.error:
                     continue
                 # Keep positives matching.
                 positives_ok = True
                 new_matches: list[str] = []
+                old_matches: list[str] = []
+                non_matches: list[str] = []
                 for tc in test_strings:
                     test_str = str(tc.get("string", ""))
                     should_match = bool(tc.get("should_match", False))
-                    orig_match = bool(compiled_orig.fullmatch(test_str))
                     mut_match = bool(compiled.fullmatch(test_str))
-                    if should_match and not mut_match:
-                        positives_ok = False
-                        break
-                    if (not should_match) and (not orig_match) and mut_match:
-                        new_matches.append(test_str)
+                    if should_match:
+                        if not mut_match:
+                            positives_ok = False
+                            break
+                        old_matches.append(test_str)
+                    else:
+                        if mut_match:
+                            new_matches.append(test_str)
+                        else:
+                            non_matches.append(test_str)
                 if not positives_ok or not new_matches:
                     continue
-                required = list(dict.fromkeys(new_matches))[:6]
+
+                targets = list(dict.fromkeys(new_matches))[:3]
+                distractors_1 = list(dict.fromkeys(old_matches))[:3]
+                distractors_2 = list(dict.fromkeys(non_matches))[:3]
+                pool = targets + distractors_1 + distractors_2
+                self.rng.shuffle(pool)
+                pool_str = ", ".join(f'"{s}"' for s in pool)
+
+                required = targets
                 reference = ", ".join(required)
                 prompt = (
                     f"Original regex: {pattern}\n"
                     f"Mutated regex: {mutated}\n\n"
-                    f"The regex was changed ({note}). What new strings will now match that didn't before?"
+                    f"The regex was changed ({note}).\n"
+                    f"Consider these strings: {pool_str}\n"
+                    "Which of these strings match the NEW regex but did NOT match the OLD regex? "
+                    "Respond with a comma-separated list of the strings (verbatim)."
                 )
                 return prompt, {
                     "required_keywords": required,
@@ -2094,7 +2169,9 @@ class GridEnvironment:
                 }
         prompt = (
             "Original regex: ^\\d{3}$\nMutated regex: ^\\d+$\n\n"
-            "The quantifier was changed from {3} to +. What new strings will now match?"
+            'The quantifier was changed from {3} to +. Consider these strings: "1", "12", "123", "1234".\n'
+            "Which of these strings match the NEW regex but did NOT match the OLD regex? "
+            "Respond with a comma-separated list of the strings (verbatim)."
         )
         return prompt, {
             "required_keywords": ["1", "12", "1234"],
@@ -2104,11 +2181,25 @@ class GridEnvironment:
         }
 
     # ------------------------------------------------------------------
-    def register_result(self, organelle_id: str, task: GridTask, success: bool) -> None:
-        self.controller.update(task.cell, success)
+    def register_result(
+        self, organelle_id: str, task: GridTask, success: bool, progress: float | None = None
+    ) -> None:
+        # Thread fractional progress (dense rewards) into the controller so it can adapt even when
+        # strict success is sparse (e.g., regex debugging rarely hits 100% test pass early on).
+        if progress is not None:
+            try:
+                value = float(progress)
+            except Exception:
+                value = 1.0 if success else 0.0
+        else:
+            value = 1.0 if success else 0.0
+        if not math.isfinite(value):
+            value = 0.0
+        value = max(0.0, min(1.0, float(value)))
+        self.controller.update(task.cell, value)
         stats = self.organism_stats.setdefault(organelle_id, {})
         ema = stats.get(task.cell, self.tau)
-        stats[task.cell] = (1 - self.beta) * ema + self.beta * (1.0 if success else 0.0)
+        stats[task.cell] = (1 - self.beta) * ema + self.beta * value
         if task.canary and not success:
             self.organism_canary_fail[organelle_id] = True
         elif task.canary and success:
