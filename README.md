@@ -82,11 +82,11 @@ make regex-evo-vs-sft REGEX_FULL_GENS=10 REGEX_CALIB_GENS=2 REGEX_CHECKPOINT_EVE
 
 2. **Run SFT with matched budget**:
    ```bash
-   # Recommended: match evo "training" compute via tokens + multiplier
+   # Recommended: match evo "training" compute via FLOPs (more stable than tokens)
    python scripts/run_sft.py \
        --checkpoint artifacts_evo/checkpoint.pt \
-       --match-budget-field train_tokens \
-       --backprop-multiplier 2.0 \
+       --match-budget-field train_flops \
+       --backprop-multiplier 3.0 \
        --attn-implementation eager \
        --engine manual \
        --resume \
@@ -143,7 +143,7 @@ make regex-evo-vs-sft REGEX_FULL_GENS=10 REGEX_CALIB_GENS=2 REGEX_CHECKPOINT_EVE
 
 - **Model compatibility**: The evolution checkpoint and evaluation must use the same base model (check tensor shapes match)
 - **Token tracking**: Tokens are tracked in `observations.metrics.tokens` in episodes.jsonl
-- **Best organelle selection**: `evaluate_holdout.py` selects the best organelle by scoring candidates on a separate selection/validation set (configurable via `--evo-selection-tasks`), with ROI-based fallback
+- **Best organelle selection**: `evaluate_holdout.py` selects the best organelle by scoring candidates on a separate selection/validation set (configurable via `--evo-selection-tasks`), with ROI-based fallback. If any adapters have non-zero LoRA weights, selection ignores no-op (zero-magnitude) adapters to avoid picking a “base-like” organelle.
 
 This enables fair comparison: evolutionary adaptation (many small adapters + population dynamics) vs traditional gradient-based fine-tuning (single adapter, supervised loss).
 
