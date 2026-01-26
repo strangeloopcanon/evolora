@@ -6,10 +6,16 @@ In real evo runs, it’s possible to end up with a mixed population where many o
 their LoRA weights (effectively behaving like the base model). When evaluating “best evo organelle” via a
 separate selection/validation set, make sure selection does not accidentally choose a no-op adapter.
 
+Also note that the SFT baseline trains on gold prompt→completion targets, while evolution must discover
+those behaviors via rollouts + reward. Under a fixed training compute budget, SFT is expected to be much
+more sample-efficient unless the environment provides dense learning signal.
+
 ### Empirical snapshot (single run; Qwen/Qwen2.5-0.5B)
 
 - Base OOD holdout: `2/19` on `config/evaluation/regex_generalization.jsonl`
+- Compute-matched SFT (LoRA rank=7; matched to evo `train_flops`): `12/19` (63.2%)
 - Best evolved organelles (backprop plasticity, 50 generations): `5/19` (26.3%)
+- In-distribution holdout (512 generated tasks): base `94/512` (18.4%), SFT `354/512` (69.1%), evo `148/512` (28.9%)
 - Failure mode: selection initially picked a zero-magnitude adapter and reported `2/19`; evaluation now skips no-op adapters when any non-zero adapters exist.
 
 ## Prologue: What This Is For
