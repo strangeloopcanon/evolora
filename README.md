@@ -66,6 +66,20 @@ A key question: does evolutionary adaptation actually outperform standard superv
 
 Note: `scripts/run_sft.py` depends on `datasets` (in `requirements.txt`). If you see `ModuleNotFoundError: No module named 'datasets'`, run `.venv/bin/pip install -r requirements.txt`.
 
+### What We Found (Regex Generalization Snapshot)
+
+In a single compute-matched run on **Qwen/Qwen2.5-0.5B** (LoRA rank=7; evo organelles trained with `EVOLORA_PLASTICITY=backprop`):
+
+- **OOD holdout** (`config/evaluation/regex_generalization.jsonl`, 19 tasks): base **2/19** (10.5%), SFT **12/19** (63.2%), evo **5/19** (26.3%)
+- **ID holdout** (512 generated tasks from the same task mix): base **94/512** (18.4%), SFT **354/512** (69.1%), evo **148/512** (28.9%)
+
+Interpretation:
+- **Signal density matters:** under a fixed *training compute* budget, SFT (gold targets + dense token-level gradients) is far more sample-efficient than evo (rollouts + sparse scalar rewards).
+- **Evo > base, but ≪ SFT:** the best evolved organelle reliably improves over base, but remains well behind compute-matched SFT in this setting.
+- **No-op adapter pitfall:** mixed populations can include adapters with effectively zero LoRA weights; `evaluate_holdout.py` skips these when any non-zero adapters exist.
+
+See `docs/regex_generalization.md` for the task mix, evaluation details, and additional context.
+
 ### Quick E2E Example
 
 ```bash
