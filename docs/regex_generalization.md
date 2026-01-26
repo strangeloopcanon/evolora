@@ -1,5 +1,11 @@
 # Regex Generalizability Evaluation Framework
 
+## So what (practical note)
+
+In real evo runs, it’s possible to end up with a mixed population where many organelles never actually update
+their LoRA weights (effectively behaving like the base model). When evaluating “best evo organelle” via a
+separate selection/validation set, make sure selection does not accidentally choose a no-op adapter.
+
 ## Prologue: What This Is For
 
 This framework is intended to **measure the generalizability of regex-related skills** in language models, rather than raw task performance on a fixed set of examples.

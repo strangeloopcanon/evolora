@@ -279,6 +279,31 @@ class PopulationManager:
             return 0.0
         return sum(scores) / len(scores)
 
+    def average_task_reward(self, organelle_id: str, limit: int = 10) -> float:
+        """Calculate average raw task reward (competence) from metadata."""
+        records = self.recent_score_records(organelle_id, limit)
+        if not records:
+            return 0.0
+        # If task_reward is missing (old records), fall back to the recorded score.
+        values: list[float] = []
+        for record in records:
+            task_reward = record.get("task_reward")
+            if isinstance(task_reward, (int, float)):
+                values.append(float(task_reward))
+                continue
+            score = record.get("score")
+            if isinstance(score, (int, float)):
+                values.append(float(score))
+                continue
+            if isinstance(score, str):
+                try:
+                    values.append(float(score))
+                except Exception:
+                    continue
+        if not values:
+            return 0.0
+        return sum(values) / len(values)
+
     def average_energy(self, organelle_id: str, limit: int = 10) -> float:
         values = self.energy.get(organelle_id, [])[-limit:]
         if not values:
@@ -413,12 +438,16 @@ class PopulationManager:
             removed.append(genome.organelle_id)
         return removed
 
-    def rank_for_selection(self, viability: dict[str, bool]) -> list[Genome]:
-        def key(genome: Genome) -> tuple[float, float, float]:
+    def rank_for_selection(
+        self, viability: dict[str, bool], magnitudes: dict[str, float] | None = None
+    ) -> list[Genome]:
+        def key(genome: Genome) -> tuple[float, float, float, float]:
             viable = 1.0 if viability.get(genome.organelle_id, False) else 0.0
             roi = self.average_roi(genome.organelle_id)
-            score = self.average_score(genome.organelle_id)
-            return (viable, roi, score)
+            competence = self.average_task_reward(genome.organelle_id)
+            # Tie-break: prefer adapters with non-zero magnitude (avoid no-ops).
+            mag = magnitudes.get(genome.organelle_id, 0.0) if magnitudes else 0.0
+            return (viable, competence, mag, roi)
 
         return sorted(
             self.population.values(),

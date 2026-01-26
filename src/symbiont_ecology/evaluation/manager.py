@@ -22,7 +22,22 @@ class EvaluationTask:
     depth: str
 
     def to_grid_task(self, environment: GridEnvironment, task_id: str) -> GridTask:
-        cell = (self.family, self.depth)
+        family = self.family
+        cell = (family, self.depth)
+        # Backwards/forwards compatibility for renames like regex ↔ regex.synthesis.
+        if cell not in environment.controller.cells:
+            if (
+                family == "regex"
+                and ("regex.synthesis", self.depth) in environment.controller.cells
+            ):
+                family = "regex.synthesis"
+                cell = (family, self.depth)
+            elif (
+                family == "regex.synthesis"
+                and ("regex", self.depth) in environment.controller.cells
+            ):
+                family = "regex"
+                cell = (family, self.depth)
         state = environment.controller.get_state(cell)
         return GridTask(
             task_id=task_id,
@@ -30,7 +45,7 @@ class EvaluationTask:
             prompt=self.prompt,
             price=state.price,
             target=self.target,
-            family=self.family,
+            family=family,
             depth=self.depth,
             difficulty=state.difficulty,
             canary=False,

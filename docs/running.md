@@ -91,16 +91,30 @@ PYTHONPATH=src MPLCONFIGDIR="$(mktemp -d)" AGENT_MODE=baseline .venv/bin/python 
 
 ## SFT baseline (compute-matched)
 
-Train a standard SFT LoRA with the same token budget as an evolution run for fair comparison:
+Train a standard SFT LoRA with a compute-matched budget from an evolution run for fair comparison:
 
 ```bash
-# Match compute to an evolution checkpoint
+# Recommended: match evo "training" compute via FLOPs (more stable than tokens)
 .venv/bin/python scripts/run_sft.py \
   --checkpoint <run_dir>/checkpoint.pt \
+  --match-budget-field train_flops \
+  --backprop-multiplier 3.0 \
+  --attn-implementation eager \
+  --engine manual \
+  --resume \
   --data training_data.jsonl \
   --output sft_baseline_matched
 
-# Or specify token budget directly
+# Alternatives: wall-clock match or an explicit token budget
+.venv/bin/python scripts/run_sft.py \
+  --checkpoint <run_dir>/checkpoint.pt \
+  --match-budget-field wall_clock_seconds \
+  --attn-implementation eager \
+  --engine manual \
+  --resume \
+  --data training_data.jsonl \
+  --output sft_baseline_wallclock
+
 .venv/bin/python scripts/run_sft.py \
   --token-budget 100000 \
   --data training_data.jsonl \
@@ -123,6 +137,16 @@ MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/analyze_ecology_run.py <run
 MPLCONFIGDIR="$(mktemp -d)" .venv/bin/python scripts/evoscope.py <run_dir>
 ```
 
+## Backprop plasticity (optional)
+
+The default ecology uses Hebbian-like updates inside each organelle. For regex generalization experiments,
+you can switch organelles to per-organelle backprop updates:
+
+```bash
+EVOLORA_PLASTICITY=backprop scripts/run_regex_generalization_evo_vs_sft.sh --no-sft --no-eval-id
+```
+
 ## macOS stability notes
 - Always set `MPLCONFIGDIR="$(mktemp -d)"` for analysis/plots.
 - If Metal/MPS memory pressure is still a problem, try `export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0` before starting a long run.
+- If SFT training hits NaNs on MPS, use `--engine manual` (default on MPS) and `--attn-implementation eager` (SDPA backward can be unstable on some setups).

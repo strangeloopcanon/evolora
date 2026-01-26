@@ -22,6 +22,11 @@ class HostConfig(BaseModel):
     revision: Optional[str] = None
     dtype: Literal["float16", "bfloat16", "float32"] = "bfloat16"
     device: str = Field("auto", description="torch device string")
+    min_lora_rank: int = Field(
+        1,
+        ge=1,
+        description="Minimum LoRA rank floor (prevents rank collapse under selection pressure).",
+    )
     max_lora_rank: int = Field(8, ge=1)
     cache_dir: Optional[Path] = None
     max_sequence_length: int = Field(256, ge=8)

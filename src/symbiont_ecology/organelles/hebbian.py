@@ -124,7 +124,7 @@ class HebbianLoRAOrganelle(Organelle):
             envelope.plan.steps.append(f"answer::{answer}")
         return envelope
 
-    def update(self, envelope: MessageEnvelope, reward: RewardBreakdown) -> None:
+    def update(self, envelope: MessageEnvelope, reward: RewardBreakdown) -> bool:
         latent_values = envelope.observation.state.get("latent")
         if latent_values is None:
             latent = torch.randn(1, self.adapter.lora_A.shape[0], device=self.device)
@@ -137,6 +137,7 @@ class HebbianLoRAOrganelle(Organelle):
         self.adapter.update_traces(latent, post)
         self.adapter.apply_reward(reward.total)
         self.step()
+        return True
 
     # ------------------------------------------------------------------
     def get_rank(self) -> int:

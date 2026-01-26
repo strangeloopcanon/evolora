@@ -11,6 +11,7 @@ import os
 import pickle
 import random
 import re
+import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -192,24 +193,13 @@ def _holdout_success(family: str, target: Any, answer: str) -> bool:
 def _select_best_organelle_for_cell(
     population: PopulationManager, cell: tuple[str, str], candidates: list[str]
 ) -> tuple[str, float]:
-    best_id = candidates[0]
-    best_score = float("-inf")
-    for oid in candidates:
-        score = population.cell_values.get(oid, {}).get(cell)
-        if score is None:
-            continue
-        try:
-            val = float(score)
-        except Exception:
-            continue
-        if val > best_score:
-            best_score = val
-            best_id = oid
-    if best_score == float("-inf"):
-        scored = [(oid, float(population.average_roi(oid, limit=10))) for oid in candidates]
-        scored.sort(key=lambda kv: kv[1], reverse=True)
-        best_id, best_score = scored[0][0], scored[0][1]
-    return best_id, best_score
+    # Select based on global task reward (competence) to find the most accurate model.
+    # We ignore cell-specific ROI because it includes energy penalties that disadvantage high-rank models.
+    scored = [(oid, float(population.average_task_reward(oid, limit=10))) for oid in candidates]
+    scored.sort(key=lambda kv: kv[1], reverse=True)
+    if scored:
+        return scored[0][0], scored[0][1]
+    return candidates[0], 0.0
 
 
 def _format_holdout_markdown(payload: dict[str, Any]) -> str:
@@ -575,7 +565,9 @@ def _save_checkpoint(
         "compute_budget": compute_budget.model_dump() if compute_budget else None,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(pickle.dumps(state))
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_bytes(pickle.dumps(state))
+    os.replace(tmp_path, path)
 
 
 def _truncate_file_to_bytes(path: Path, size_bytes: int | None) -> None:
@@ -647,13 +639,13 @@ def main() -> None:
     elif config.host.device == "cpu":
         config.host.device = "auto"
 
+    compute_budget = ComputeBudget()
     ledger = ATPLedger()
     router = BanditRouter()
-    host = HostKernel(config=config, router=router, ledger=ledger)
+    host = HostKernel(config=config, router=router, ledger=ledger, compute_budget=compute_budget)
     host.freeze_host()
 
     population = PopulationManager(config.evolution, config.foraging)
-    compute_budget = ComputeBudget()
 
     start_generation = 0
     prev_n = 0
@@ -703,6 +695,7 @@ def main() -> None:
         saved_compute = state.get("compute_budget")
         if saved_compute is not None:
             compute_budget = ComputeBudget(**saved_compute)
+            host.compute_budget = compute_budget
         # environment state
         env_state = state.get("environment_state", {})
         environment = GridEnvironment(
@@ -813,32 +806,25 @@ def main() -> None:
             sink=sink,
         )
 
-    assim = AssimilationTester(
-        uplift_threshold=config.evolution.assimilation_threshold,
-        p_value_threshold=config.evolution.assimilation_p_value,
-        safety_budget=0,
-    )
-    # bootstrap uplift configuration
-    try:
-        tuning = config.assimilation_tuning
-        assim.bootstrap_enabled = bool(getattr(tuning, "bootstrap_uplift_enabled", False))
-        assim.bootstrap_n = int(getattr(tuning, "bootstrap_samples", 0))
-        assim.permutation_n = int(getattr(tuning, "permutation_samples", 0))
-        assim.min_samples = int(getattr(tuning, "min_uplift_samples", 2))
-        assim.dr_enabled = bool(getattr(tuning, "dr_enabled", False))
-        assim.dr_strata = list(getattr(tuning, "dr_strata", assim.dr_strata))
-        assim.dr_min_stratum = int(getattr(tuning, "dr_min_stratum_size", assim.dr_min_stratum))
-        assim.dr_min_power = float(getattr(tuning, "dr_min_power", assim.dr_min_power))
-    except Exception:
-        pass
-
     episodes_path = config.metrics.root / config.metrics.episodes_file
     if start_generation > 0 and episodes_path.exists():
         with episodes_path.open() as f:
             prev_n = sum(1 for _ in f)
     total_generations = start_generation + args.generations
     for gen in range(start_generation, total_generations):
+        total_before = compute_budget.total_tokens
+        total_generated_before = compute_budget.total_generated_tokens
+        total_forwards_before = compute_budget.total_forward_passes
+        total_updates_before = compute_budget.total_hebbian_updates
+        train_before = compute_budget.train_tokens
+        train_generated_before = compute_budget.train_generated_tokens
+        train_forwards_before = compute_budget.train_forward_passes
+        train_updates_before = compute_budget.train_hebbian_updates
+
+        t_gen0 = time.time()
         summary = loop.run_generation(batch_size=config.environment.synthetic_batch_size)
+        gen_wall = float(time.time() - t_gen0)
+        compute_budget.add_wall_clock(gen_wall)
         if summary is None:
             summary = {}
         # summarize this generation's episodes
@@ -859,16 +845,44 @@ def main() -> None:
                 "slice_hebbian_updates": 0,
             }
         )
-        # Update cumulative compute budget
-        compute_budget.total_tokens += episode_slice.get("slice_tokens", 0)
-        compute_budget.total_forward_passes += episode_slice.get("slice_forward_passes", 0)
-        compute_budget.total_hebbian_updates += episode_slice.get("slice_hebbian_updates", 0)
         generation_record: dict[str, object] = {
             "generation": gen + 1,
             "population": len(population.population),
         }
         generation_record.update(summary)
-        generation_record.update(episode_slice)
+        generation_record.update(
+            {
+                "episodes": int(episode_slice.get("episodes", 0)),
+                "avg_total": float(episode_slice.get("avg_total", 0.0)),
+                "avg_task_reward": float(episode_slice.get("avg_task_reward", 0.0)),
+                "avg_cost_penalty": float(episode_slice.get("avg_cost_penalty", 0.0)),
+            }
+        )
+        generation_record.update(
+            {
+                "slice_tokens": int(compute_budget.train_tokens - train_before),
+                "slice_generated_tokens": int(
+                    compute_budget.train_generated_tokens - train_generated_before
+                ),
+                "slice_forward_passes": int(
+                    compute_budget.train_forward_passes - train_forwards_before
+                ),
+                "slice_hebbian_updates": int(
+                    compute_budget.train_hebbian_updates - train_updates_before
+                ),
+                "slice_total_tokens": int(compute_budget.total_tokens - total_before),
+                "slice_total_generated_tokens": int(
+                    compute_budget.total_generated_tokens - total_generated_before
+                ),
+                "slice_total_forward_passes": int(
+                    compute_budget.total_forward_passes - total_forwards_before
+                ),
+                "slice_total_hebbian_updates": int(
+                    compute_budget.total_hebbian_updates - total_updates_before
+                ),
+                "gen_wall_clock_seconds": gen_wall,
+            }
+        )
         generation_record["compute_budget"] = compute_budget.summary()
         gen_summaries.append(generation_record)
         try:
@@ -944,7 +958,10 @@ def main() -> None:
 
     config.metrics.root.mkdir(parents=True, exist_ok=True)
     json_path = config.metrics.root / "gen_summaries.jsonl"
-    json_path.write_text("\n".join(json.dumps(s) for s in gen_summaries))
+    jsonl = "\n".join(json.dumps(s) for s in gen_summaries)
+    if jsonl:
+        jsonl += "\n"
+    json_path.write_text(jsonl, encoding="utf-8")
 
     fieldnames = sorted({key for record in gen_summaries for key in record.keys()})
     with (config.metrics.root / "gen_summaries.csv").open("w", newline="") as handle:

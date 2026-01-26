@@ -69,27 +69,9 @@ Note: `scripts/run_sft.py` depends on `datasets` (in `requirements.txt`). If you
 ### Quick E2E Example
 
 ```bash
-# 1. Run evolution (e.g., 10 generations with regex tasks)
-python scripts/run_evolution.py \
-    --config config/experiments/qwen3_regex_simple.yaml \
-    --generations 10 \
-    --output artifacts_evo_run \
-    --checkpoint-every 1 \
-    --disable-human
-
-# 2. Run SFT with matched token budget from the evolution checkpoint
-python scripts/run_sft.py \
-    --checkpoint artifacts_evo_run/checkpoint.pt \
-    --data config/training/regex_sft_data.jsonl \
-    --output artifacts_sft_run
-
-# 3. Evaluate both on holdout tasks
-python scripts/evaluate_holdout.py \
-    --holdout config/evaluation/regex_generalization.jsonl \
-    --sft-adapter artifacts_sft_run/peft_adapter \
-    --evo-checkpoint artifacts_evo_run/checkpoint.pt \
-    --output comparison_results.json \
-    --verbose
+# End-to-end runner (calibration → resume → compute-matched SFT → eval).
+# Generates distribution-matched regex datasets into <run_dir>/datasets/.
+make regex-evo-vs-sft REGEX_FULL_GENS=10 REGEX_CALIB_GENS=2 REGEX_CHECKPOINT_EVERY=1
 ```
 
 ### How It Works
@@ -100,33 +82,54 @@ python scripts/evaluate_holdout.py \
 
 2. **Run SFT with matched budget**:
    ```bash
-   # Match token budget from evolution checkpoint
+   # Recommended: match evo "training" compute via FLOPs (more stable than tokens)
    python scripts/run_sft.py \
        --checkpoint artifacts_evo/checkpoint.pt \
-       --data config/training/regex_sft_data.jsonl \
+       --match-budget-field train_flops \
+       --backprop-multiplier 3.0 \
+       --attn-implementation eager \
+       --engine manual \
+       --resume \
+       --data artifacts_evo/datasets/sft_train.jsonl \
        --output artifacts_sft
 
-   # Or specify explicit budget
+   # Alternatives: wall-clock match or an explicit token budget
+   python scripts/run_sft.py \
+       --match-budget-field wall_clock_seconds \
+       --attn-implementation eager \
+       --engine manual \
+       --resume \
+       --data artifacts_evo/datasets/sft_train.jsonl \
+       --output artifacts_sft
+
    python scripts/run_sft.py \
        --token-budget 500000 \
-       --data config/training/regex_sft_data.jsonl \
+       --data artifacts_evo/datasets/sft_train.jsonl \
        --output artifacts_sft
    ```
-   - `TokenBudgetCallback` stops training when budget exhausted
+   - On macOS/MPS, the default engine uses a manual training loop with NaN guards and resumable checkpoints
    - Exports LoRA compatible with `HostKernel.load_organelle_adapter()`
 
 3. **Evaluate both** on the same holdout tasks:
    ```bash
+   # In-distribution regex holdout (and selection set for evo organelle picking)
    python scripts/evaluate_holdout.py \
-       --holdout config/evaluation/regex_generalization.jsonl \
+       --holdout artifacts_evo/datasets/holdout_tasks.jsonl \
+       --evo-selection-tasks artifacts_evo/datasets/selection_tasks.jsonl \
        --sft-adapter artifacts_sft/peft_adapter \
        --evo-checkpoint artifacts_evo/checkpoint.pt \
-       --output comparison_results.json \
-       --verbose
+       --output comparison_results_id.json
+
+   # OOD / mixed holdout (optional)
+   python scripts/evaluate_holdout.py \
+       --holdout config/evaluation/regex_generalization.jsonl \
+       --evo-selection-tasks artifacts_evo/datasets/selection_tasks.jsonl \
+       --sft-adapter artifacts_sft/peft_adapter \
+       --evo-checkpoint artifacts_evo/checkpoint.pt \
+       --output comparison_results_ood.json
    ```
    - Compares base model, SFT, and best evolution organelle
-   - Auto-selects the best organelle by ROI from `gen_summaries.jsonl`
-   - Reports accuracy on held-out tasks
+   - Picks the best evolved organelle on `--evo-selection-tasks` (to avoid test leakage)
 
 ### Key Scripts
 
@@ -140,7 +143,7 @@ python scripts/evaluate_holdout.py \
 
 - **Model compatibility**: The evolution checkpoint and evaluation must use the same base model (check tensor shapes match)
 - **Token tracking**: Tokens are tracked in `observations.metrics.tokens` in episodes.jsonl
-- **Best organelle selection**: `evaluate_holdout.py` automatically picks the organelle with highest ROI
+- **Best organelle selection**: `evaluate_holdout.py` selects the best organelle by scoring candidates on a separate selection/validation set (configurable via `--evo-selection-tasks`), with ROI-based fallback. If any adapters have non-zero LoRA weights, selection ignores no-op (zero-magnitude) adapters to avoid picking a “base-like” organelle.
 
 This enables fair comparison: evolutionary adaptation (many small adapters + population dynamics) vs traditional gradient-based fine-tuning (single adapter, supervised loss).
 

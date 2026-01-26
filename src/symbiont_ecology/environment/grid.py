@@ -17,8 +17,56 @@ from symbiont_ecology.config import (
     PricingConfig,
 )
 from symbiont_ecology.metrics.telemetry import RewardBreakdown
+from symbiont_ecology.utils.regex_extract import pick_best_regex_candidate
 
 GridKey = Tuple[str, str]
+
+
+def _regex_complexity_score(pattern: str) -> float:
+    """Compute a lightweight regex complexity score (lower is simpler).
+
+    Kept local to avoid circular imports between environment and evaluation modules.
+    """
+    char_length = len(pattern)
+    alternation_count = pattern.count("|")
+    group_count = len(re.findall(r"\((?!\?:)", pattern))
+    group_count += len(re.findall(r"\(\?:", pattern))
+    quantifier_count = len(re.findall(r"[+*?]|\{\d+(?:,\d*)?\}", pattern))
+    node_patterns = [
+        r"\[(?:\^)?[^\]]+\]",
+        r"\\[dDwWsS]",
+        r"\\.",
+        r"[+*?]",
+        r"\{\d+(?:,\d*)?\}",
+        r"\|",
+        r"\((?:\?:)?",
+        r"\)",
+        r"\^|\$",
+        r"[^\\[\]{}()+*?|^$]",
+    ]
+    ast_node_count = sum(len(re.findall(p, pattern)) for p in node_patterns)
+    max_depth = 0
+    current_depth = 0
+    for char in pattern:
+        if char == "(":
+            current_depth += 1
+            max_depth = max(max_depth, current_depth)
+        elif char == ")":
+            current_depth = max(0, current_depth - 1)
+    has_backtracking_risk = bool(
+        re.search(r"\.\*.*\.\*", pattern)
+        or re.search(r"\([^)]*[+*][^)]*\)[+*]", pattern)
+        or re.search(r"(?<!\?)\*\*", pattern)
+    )
+    return float(
+        char_length * 0.1
+        + ast_node_count * 1.0
+        + max_depth * 2.0
+        + alternation_count * 1.5
+        + group_count * 0.5
+        + quantifier_count * 0.3
+        + (5.0 if has_backtracking_risk else 0.0)
+    )
 
 
 @dataclass
@@ -145,78 +193,207 @@ class GridTask:
             success = normalized == str(self.target)
             task_reward = 1.0 if success else 0.0
 
-        elif self.family == "regex":
-            # Extract the regex pattern from the response
-            import re as regex_module
-
-            # Clean up the response - remove markdown, quotes, etc.
-            pattern_text = clean.strip()
-            if pattern_text.startswith("```"):
-                stripped = pattern_text.strip("`")
-                lines = [line.strip() for line in stripped.splitlines() if line.strip()]
-                if lines and lines[0].lower() in ["regex", "regexp", "re"]:
-                    lines = lines[1:]
-                pattern_text = lines[0] if lines else ""
-
-            # Remove common delimiters if present
-            pattern_text = pattern_text.strip("'\"` /")
-
+        elif self.family in {"regex", "regex.debugging", "regex.synthesis"}:
             # The target is a dict containing the correct pattern and test strings
             if isinstance(self.target, dict):
-                correct_pattern = self.target.get("pattern", "")
                 test_strings = self.target.get("test_strings", [])
             else:
-                # Fallback: treat target as the pattern string directly
-                correct_pattern = str(self.target)
                 test_strings = []
 
-            # Evaluate by testing if the pattern works correctly on test cases
-            success = False
-            try:
-                # Compile the user's pattern
-                user_regex = regex_module.compile(pattern_text)
-
-                # If we have test strings, check if pattern behaves correctly
-                if test_strings:
-                    all_correct = True
-                    for test_case in test_strings:
-                        test_str = test_case.get("string", "")
-                        should_match = test_case.get("should_match", False)
-                        does_match = bool(user_regex.fullmatch(test_str))
-
-                        if does_match != should_match:
-                            all_correct = False
-                            break
-
-                    success = all_correct
+            picked, details = pick_best_regex_candidate(clean, test_cases=test_strings)
+            if (
+                picked
+                and isinstance(details.get("passed"), int)
+                and isinstance(details.get("total"), int)
+            ):
+                passed = int(details["passed"])
+                total = int(details["total"])
+                if total > 0:
+                    task_reward = float(passed) / float(total)
+                    success = passed >= total
                 else:
-                    # No test strings - just check if patterns are equivalent
-                    # This is a simplified check
-                    success = pattern_text == correct_pattern
-
-            except (regex_module.error, Exception):
-                # Invalid regex pattern
+                    task_reward = 0.0
+                    success = False
+            elif picked:
+                try:
+                    re.compile(picked)
+                    success = True
+                except re.error:
+                    success = False
+            else:
                 success = False
 
+            if task_reward <= 0.0:
+                task_reward = 1.0 if success else 0.0
+
+        elif self.family == "regex.recognition":
+            expected_bool: bool | None = None
+            if isinstance(self.target, dict):
+                expected = self.target.get("expected")
+                if isinstance(expected, bool):
+                    expected_bool = expected
+                elif expected is not None:
+                    expected_bool = bool(expected)
+            elif isinstance(self.target, bool):
+                expected_bool = self.target
+            else:
+                expected_bool = None
+
+            # Extract first boolean token ignoring markdown or prose
+            text = clean.strip().lower()
+            m = re.search(r"\b(true|false|yes|no)\b", text)
+            if m:
+                token = m.group(1)
+                if token in {"true", "false"}:
+                    predicted_bool = token == "true"
+                else:
+                    predicted_bool = token == "yes"
+            else:
+                predicted_bool = None
+
+            success = (
+                predicted_bool is not None
+                and expected_bool is not None
+                and predicted_bool == expected_bool
+            )
             task_reward = 1.0 if success else 0.0
 
+        elif self.family in {"regex.explanation", "regex.mutation_effect"}:
+            keywords: list[str] = []
+            if isinstance(self.target, dict):
+                raw = self.target.get("required_keywords") or self.target.get("keywords") or []
+                if isinstance(raw, list):
+                    keywords = [str(kw) for kw in raw if kw]
+            elif isinstance(self.target, list):
+                keywords = [str(kw) for kw in self.target if kw]
+
+            response_lower = clean.lower()
+            found_keywords = [kw for kw in keywords if kw.lower() in response_lower]
+            score = len(found_keywords) / len(keywords) if keywords else 1.0
+            success = score >= 0.7
+            task_reward = float(score)
+
+        elif self.family == "regex.refactoring":
+            test_strings: list[dict[str, object]] = []
+            original_pattern = ""
+            if isinstance(self.target, dict):
+                test_strings = self.target.get("test_strings", []) or []
+                original_pattern = str(self.target.get("original_pattern") or "")
+            picked, _pick_details = pick_best_regex_candidate(clean, test_cases=test_strings)
+            if not picked:
+                success = False
+                task_reward = 0.0
+            else:
+                try:
+                    compiled = re.compile(picked)
+                except re.error:
+                    compiled = None
+                if compiled is None:
+                    success = False
+                    task_reward = 0.0
+                else:
+                    passed = 0
+                    total = 0
+                    ok = True
+                    for tc in test_strings:
+                        test_str = str(tc.get("string", ""))
+                        should_match = bool(tc.get("should_match", False))
+                        matched = bool(compiled.fullmatch(test_str))
+                        if matched == should_match:
+                            passed += 1
+                        else:
+                            ok = False
+                        total += 1
+                    if total <= 0:
+                        success = False
+                        task_reward = 0.0
+                    else:
+                        case_ratio = float(passed) / float(total)
+                        if original_pattern:
+                            try:
+                                complexity_ok = _regex_complexity_score(
+                                    picked
+                                ) <= _regex_complexity_score(original_pattern)
+                            except Exception:
+                                complexity_ok = True
+                        else:
+                            complexity_ok = True
+                        success = bool(ok and complexity_ok)
+                        if case_ratio < 1.0:
+                            task_reward = case_ratio * 0.5
+                        else:
+                            task_reward = 1.0 if complexity_ok else 0.5
+
         novelty = min(0.1, self.difficulty * 0.1)
-        competence = 0.05 if success else 0.0
         helper = 0.0
-        risk_penalty = 0.0 if success else 0.1 * max(self.failure_cost_scale, 0.0)
         if success:
-            task_reward = 1.0 + max(self.reward_bonus, 0.0)
-        else:
-            task_reward = 0.0
+            task_reward = float(task_reward) + max(self.reward_bonus, 0.0)
+        progress = max(0.0, min(1.0, float(task_reward)))
+        competence = 0.05 * progress
+        risk_penalty = (1.0 - progress) * 0.1 * max(self.failure_cost_scale, 0.0)
+        cost_penalty = (1.0 - progress) * 0.05 * max(self.failure_cost_scale, 0.0)
         reward = RewardBreakdown(
             task_reward=task_reward,
             novelty_bonus=novelty,
             competence_bonus=competence,
             helper_bonus=helper,
             risk_penalty=risk_penalty,
-            cost_penalty=0.05 * max(self.failure_cost_scale, 0.0) if not success else 0.0,
+            cost_penalty=cost_penalty,
         )
         return success, reward
+
+    def supervised_completion(self) -> str | None:
+        """Return a canonical supervised target string for this task (if available)."""
+        family = str(self.family)
+        target = self.target
+
+        if family in {"regex", "regex.synthesis", "regex.debugging", "regex.refactoring"}:
+            if isinstance(target, dict):
+                pattern = target.get("pattern")
+                pattern_str = str(pattern).strip() if pattern is not None else ""
+                return pattern_str or None
+            return None
+
+        if family == "regex.recognition":
+            expected_bool: bool | None = None
+            if isinstance(target, dict):
+                expected = target.get("expected")
+                if isinstance(expected, bool):
+                    expected_bool = expected
+                elif expected is not None:
+                    expected_bool = bool(expected)
+            elif isinstance(target, bool):
+                expected_bool = target
+            if expected_bool is None:
+                return None
+            return "yes" if expected_bool else "no"
+
+        if family == "regex.explanation":
+            if isinstance(target, dict):
+                keywords_raw = target.get("required_keywords") or target.get("keywords") or []
+                keywords: list[str] = []
+                if isinstance(keywords_raw, list):
+                    for kw in keywords_raw:
+                        kw_str = str(kw).strip()
+                        if kw_str and kw_str not in keywords:
+                            keywords.append(kw_str)
+                # Align supervised target with evaluation (keyword coverage) and keep it short
+                # to avoid truncation dropping all completion tokens.
+                if keywords:
+                    return " ".join(keywords)
+                reference = target.get("reference_answer")
+                ref_str = str(reference).strip() if reference is not None else ""
+                return ref_str or None
+            return None
+
+        if family == "regex.mutation_effect":
+            if isinstance(target, dict):
+                reference = target.get("reference_answer")
+                ref_str = str(reference).strip() if reference is not None else ""
+                return ref_str or None
+            return None
+
+        return None
 
 
 @dataclass
@@ -287,22 +464,28 @@ class EnvironmentController:
         self.bandit_counts[best_cell] += 1
         return best_cell
 
-    def update(self, cell: GridKey, success: bool) -> None:
+    def update(self, cell: GridKey, progress: float) -> None:
         state = self.cells[cell]
         beta = self.ctrl.beta
         tau = self.ctrl.tau
         eta = self.ctrl.eta
         prev = state.success_ema
-        state.success_ema = (1 - beta) * prev + beta * (1.0 if success else 0.0)
+        if not math.isfinite(progress):
+            progress = 0.0
+        progress = max(0.0, min(1.0, float(progress)))
+        state.success_ema = (1 - beta) * prev + beta * progress
         difficulty_delta = eta * (state.success_ema - tau)
         state.difficulty = min(0.85, max(0.15, state.difficulty + difficulty_delta))
-        if not success:
-            state.difficulty = max(0.15, state.difficulty - eta * 0.5)
+        # Provide additional difficulty relief proportional to failure magnitude, so tasks that
+        # rarely reach binary "success" (e.g., regex debugging) can still make measurable progress.
+        failure_mass = 1.0 - progress
+        if failure_mass > 0.0:
+            state.difficulty = max(0.15, state.difficulty - eta * 0.5 * failure_mass)
         state.price = min(
             self.pricing.max,
             max(self.pricing.min, self.pricing.base + self.pricing.k * (tau - state.success_ema)),
         )
-        self.bandit_success[cell] = self.bandit_success.get(cell, 0.0) + (1.0 if success else 0.0)
+        self.bandit_success[cell] = self.bandit_success.get(cell, 0.0) + progress
         # learning progress EMA
         delta = abs(state.success_ema - self.lp_prev_ema.get(cell, prev))
         self.lp_prev_ema[cell] = state.success_ema
@@ -824,6 +1007,103 @@ class GridEnvironment:
                 failure_cost_scale=self.failure_cost_multiplier,
             )
 
+        if family == "regex.synthesis":
+            prompt_regex, target_pattern, test_strings = self._make_regex_task(depth)
+            target_dict = {"pattern": target_pattern, "test_strings": test_strings}
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_regex,
+                price=price,
+                target=target_dict,
+                family="regex.synthesis",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.recognition":
+            prompt_recog, recog_target = self._make_regex_recognition_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_recog,
+                price=price,
+                target=recog_target,
+                family="regex.recognition",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.explanation":
+            prompt_explain, explain_target = self._make_regex_explanation_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_explain,
+                price=price,
+                target=explain_target,
+                family="regex.explanation",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.debugging":
+            prompt_debug, debug_target = self._make_regex_debugging_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_debug,
+                price=price,
+                target=debug_target,
+                family="regex.debugging",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.refactoring":
+            prompt_refactor, refactor_target = self._make_regex_refactoring_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_refactor,
+                price=price,
+                target=refactor_target,
+                family="regex.refactoring",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
+        if family == "regex.mutation_effect":
+            prompt_mut, mut_target = self._make_regex_mutation_effect_task(depth)
+            return GridTask(
+                task_id=task_id,
+                cell=cell,
+                prompt=prompt_mut,
+                price=price,
+                target=mut_target,
+                family="regex.mutation_effect",
+                depth=depth,
+                difficulty=difficulty,
+                canary=canary,
+                reward_bonus=self.reward_bonus,
+                failure_cost_scale=self.failure_cost_multiplier,
+            )
+
         # fallback: math task
         return self._make_task(("math", depth), canary)
 
@@ -983,96 +1263,596 @@ class GridEnvironment:
 
     def _make_regex_task(self, depth: str) -> tuple[str, str, list[dict[str, object]]]:
         """Generate a regex pattern task with matching and non-matching examples."""
-        if depth == "short":
-            # Simple patterns: exact strings, character classes, basic quantifiers
-            templates = [
-                {
-                    "desc": "match emails starting with 'admin'",
-                    "pattern": r"admin\w*@\w+\.\w+",
-                    "matches": ["admin@example.com", "admin123@test.org"],
-                    "non_matches": ["user@example.com", "admin@"],
-                },
-                {
-                    "desc": "match 3-digit numbers",
-                    "pattern": r"\b\d{3}\b",
-                    "matches": ["123", "456", "789"],
-                    "non_matches": ["12", "1234", "abc"],
-                },
-                {
-                    "desc": "match words starting with 'test'",
-                    "pattern": r"\btest\w*",
-                    "matches": ["test", "testing", "tester"],
-                    "non_matches": ["contest", "attest", "rest"],
-                },
-                {
-                    "desc": "match hex colors",
-                    "pattern": r"#[0-9a-fA-F]{6}",
-                    "matches": ["#FF5733", "#00ff00", "#123ABC"],
-                    "non_matches": ["#FFF", "#GGGGGG", "FF5733"],
-                },
-            ]
-        elif depth == "medium":
-            # Medium patterns: alternation, groups, more complex quantifiers
-            templates = [
-                {
-                    "desc": "match phone numbers in format XXX-XXX-XXXX or (XXX) XXX-XXXX",
-                    "pattern": r"(\d{3}-\d{3}-\d{4}|\(\d{3}\) \d{3}-\d{4})",
-                    "matches": ["123-456-7890", "(123) 456-7890"],
-                    "non_matches": ["123.456.7890", "12-345-6789", "123-45-6789"],
-                },
-                {
-                    "desc": "match URLs starting with http:// or https://",
-                    "pattern": r"https?://[\w\.-]+\.\w+",
-                    "matches": ["http://example.com", "https://test.org"],
-                    "non_matches": ["ftp://example.com", "example.com", "http://"],
-                },
-                {
-                    "desc": "match variable names (letters, numbers, underscore, must start with letter)",
-                    "pattern": r"\b[a-zA-Z][a-zA-Z0-9_]*\b",
-                    "matches": ["var1", "test_var", "myVariable"],
-                    "non_matches": ["1var", "_test", "123"],
-                },
-                {
-                    "desc": "match dates in MM/DD/YYYY format",
-                    "pattern": r"\b(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])/\d{4}\b",
-                    "matches": ["01/15/2024", "12/31/2023"],
-                    "non_matches": ["13/01/2024", "1/5/2024", "01-15-2024"],
-                },
-            ]
-        else:  # long
-            # Complex patterns: lookaheads, nested groups, complex alternation
-            templates = [
-                {
-                    "desc": "match valid IPv4 addresses",
-                    "pattern": r"\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b",
-                    "matches": ["192.168.1.1", "10.0.0.255", "8.8.8.8"],
-                    "non_matches": ["256.1.1.1", "192.168.1", "192.168.1.1.1"],
-                },
-                {
-                    "desc": "match JSON-like key-value pairs with quoted strings",
-                    "pattern": r'"\w+"\s*:\s*"[^"]*"',
-                    "matches": ['"name": "John"', '"id": "123"'],
-                    "non_matches": ["name: John", '"name":"', 'name: "John"'],
-                },
-                {
-                    "desc": "match Python function definitions",
-                    "pattern": r"def\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*:",
-                    "matches": ["def foo():", "def bar(x, y):", "def _helper(data):"],
-                    "non_matches": ["def 123():", "def foo()", "function foo():"],
-                },
-                {
-                    "desc": "match email addresses with common TLDs",
-                    "pattern": r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|org|net|edu|gov)\b",
-                    "matches": ["user@example.com", "test.user@sub.domain.org"],
-                    "non_matches": ["user@example", "@example.com", "user@.com"],
-                },
-            ]
+        rng = self.rng
+        alphabet = "abcdefghijklmnopqrstuvwxyz"
 
-        choice = self.rng.choice(templates)
-        desc = choice["desc"]
-        pattern = choice["pattern"]
-        matches = choice["matches"]
-        non_matches = choice["non_matches"]
+        def random_word(min_len: int = 3, max_len: int = 8) -> str:
+            length = rng.randint(int(min_len), int(max_len))
+            return "".join(rng.choice(alphabet) for _ in range(max(1, length)))
+
+        def random_identifier(
+            min_len: int = 3,
+            max_len: int = 12,
+            *,
+            allow_leading_underscore: bool = True,
+        ) -> str:
+            first_pool = alphabet + alphabet.upper()
+            if allow_leading_underscore:
+                first_pool += "_"
+            first = rng.choice(first_pool)
+            rest_chars = alphabet + alphabet.upper() + "0123456789_"
+            length = rng.randint(max(1, int(min_len)), max(1, int(max_len)))
+            rest = "".join(rng.choice(rest_chars) for _ in range(max(0, length - 1)))
+            return first + rest
+
+        def random_domain(tlds: list[str] | None = None) -> str:
+            host = random_word(4, 10)
+            tld = rng.choice(list(tlds) if tlds else ["com", "org", "net", "io", "dev"])
+            if rng.random() < 0.25:
+                return f"{random_word(3, 6)}.{host}.{tld}"
+            return f"{host}.{tld}"
+
+        def _mmdd(value: int) -> str:
+            return f"{int(value):02d}"
+
+        def _yyyy(value: int) -> str:
+            return f"{int(value):04d}"
+
+        def task_day_01_31() -> dict[str, object]:
+            pattern = r"^(0[1-9]|[12]\d|3[01])$"
+            matches_set: set[str] = set()
+            while len(matches_set) < 4:
+                matches_set.add(_mmdd(rng.randint(1, 31)))
+            matches = sorted(matches_set)
+            non_matches = [
+                "00",
+                "32",
+                str(rng.randint(1, 9)),
+                str(rng.randint(32, 99)),
+            ]
+            return {
+                "desc": "match day numbers 01-31 where days 1-9 must have leading zero",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def task_date_ymd() -> dict[str, object]:
+            pattern = r"^(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$"
+            matches_set: set[str] = set()
+            while len(matches_set) < 3:
+                y = _yyyy(rng.randint(1900, 2099))
+                m = _mmdd(rng.randint(1, 12))
+                d = _mmdd(rng.randint(1, 31))
+                matches_set.add(f"{y}-{m}-{d}")
+            matches = sorted(matches_set)
+
+            y_bad = _yyyy(rng.choice([1899, 2100]))
+            y_ok = _yyyy(rng.randint(1900, 2099))
+            m_bad = _mmdd(rng.choice([0, 13]))
+            d_bad = _mmdd(rng.choice([0, 32]))
+            m_ok_int = rng.randint(1, 9)
+            d_ok_int = rng.randint(1, 9)
+            non_matches = [
+                f"{y_bad}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))}",
+                f"{y_ok}-{m_bad}-{_mmdd(rng.randint(1, 31))}",
+                f"{y_ok}-{_mmdd(rng.randint(1, 12))}-{d_bad}",
+                f"{y_ok}/{_mmdd(rng.randint(1, 12))}/{_mmdd(rng.randint(1, 31))}",
+                f"{y_ok}-{m_ok_int}-{d_ok_int}",
+            ]
+            return {
+                "desc": "match dates in YYYY-MM-DD format (years 1900-2099, months 01-12, days 01-31) with no extra characters",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def task_date_dot() -> dict[str, object]:
+            pattern = r"^(20\d{2})\.(0[1-9]|1[0-2])\.(0[1-9]|[12]\d|3[01])$"
+            matches_set: set[str] = set()
+            while len(matches_set) < 2:
+                y = _yyyy(rng.randint(2000, 2099))
+                m = _mmdd(rng.randint(1, 12))
+                d = _mmdd(rng.randint(1, 31))
+                matches_set.add(f"{y}.{m}.{d}")
+            matches = sorted(matches_set)
+            non_matches = [
+                f"{_yyyy(rng.randint(2000, 2099))}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))}",
+                f"{_yyyy(rng.randint(2000, 2099))}.{_mmdd(rng.choice([0, 13]))}.{_mmdd(rng.randint(1, 31))}",
+                f"{_yyyy(rng.choice([1999, 2100]))}.{_mmdd(rng.randint(1, 12))}.{_mmdd(rng.randint(1, 31))}",
+            ]
+            return {
+                "desc": "match dates in YYYY.MM.DD format (using dots as separators) with no extra characters",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def _hh(value: int) -> str:
+            return f"{int(value):02d}"
+
+        def _time_hms(*, valid: bool) -> str:
+            if valid:
+                hh = _hh(rng.randint(0, 23))
+                mm = _hh(rng.randint(0, 59))
+                ss = _hh(rng.randint(0, 59))
+            else:
+                hh = _hh(rng.choice([24, 25, 29]))
+                mm = _hh(rng.choice([60, 61, 99]))
+                ss = _hh(rng.choice([60, 61, 99]))
+                # Randomly pick which field to break (avoid always breaking all of them).
+                pick = rng.choice(["hh", "mm", "ss"])
+                if pick == "hh":
+                    mm = _hh(rng.randint(0, 59))
+                    ss = _hh(rng.randint(0, 59))
+                elif pick == "mm":
+                    hh = _hh(rng.randint(0, 23))
+                    ss = _hh(rng.randint(0, 59))
+                else:
+                    hh = _hh(rng.randint(0, 23))
+                    mm = _hh(rng.randint(0, 59))
+            return f"{hh}:{mm}:{ss}"
+
+        def task_datetime_iso_t() -> dict[str, object]:
+            pattern = (
+                r"^(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T"
+                r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$"
+            )
+            matches_set: set[str] = set()
+            while len(matches_set) < 2:
+                y = _yyyy(rng.randint(1900, 2099))
+                m = _mmdd(rng.randint(1, 12))
+                d = _mmdd(rng.randint(1, 31))
+                matches_set.add(f"{y}-{m}-{d}T{_time_hms(valid=True)}")
+            matches = sorted(matches_set)
+            y = _yyyy(rng.randint(1900, 2099))
+            m = _mmdd(rng.randint(1, 12))
+            d = _mmdd(rng.randint(1, 31))
+            non_matches = [
+                f"{y}-{m}-{d} {_time_hms(valid=True)}",
+                f"{y}-{m}-{d}T{_time_hms(valid=False)}",
+                f"{y}-{m}-{d}T{_hh(rng.randint(0, 23))}:{_hh(rng.randint(0, 59))}",
+            ]
+            return {
+                "desc": "match ISO 8601 datetimes in YYYY-MM-DDTHH:MM:SS format (years 1900-2099) with no extra characters",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def task_timestamp_ymd_hms() -> dict[str, object]:
+            pattern = (
+                r"^(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]) "
+                r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$"
+            )
+            matches_set: set[str] = set()
+            while len(matches_set) < 3:
+                y = _yyyy(rng.randint(1900, 2099))
+                m = _mmdd(rng.randint(1, 12))
+                d = _mmdd(rng.randint(1, 31))
+                matches_set.add(f"{y}-{m}-{d} {_time_hms(valid=True)}")
+            matches = sorted(matches_set)
+            y = _yyyy(rng.randint(1900, 2099))
+            non_matches = [
+                f"{y}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))} {_time_hms(valid=False)}",
+                f"{y}-{_mmdd(rng.choice([0, 13]))}-{_mmdd(rng.randint(1, 31))} {_time_hms(valid=True)}",
+                f"{y}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.choice([0, 32]))} {_time_hms(valid=True)}",
+                f"{y}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))}T{_time_hms(valid=True)}",
+                f"{y}-{_mmdd(rng.randint(1, 12))}-{_mmdd(rng.randint(1, 31))}{_time_hms(valid=True)}",
+            ]
+            return {
+                "desc": "match timestamps in YYYY-MM-DD HH:MM:SS format (years 1900-2099, 24-hour time) with exactly one space between date and time",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        def pick_task() -> dict[str, object]:
+            if depth == "short":
+                kind = rng.choice(
+                    [
+                        "email_prefix",
+                        "n_digit",
+                        "word_prefix",
+                        "literal",
+                        "hex_color",
+                        "alpha_len",
+                    ]
+                )
+                if kind == "email_prefix":
+                    prefix = rng.choice(["admin", "root", "support", "sales", "team"]) + rng.choice(
+                        ["", "1", "42", "_bot"]
+                    )
+                    pattern = rf"{re.escape(prefix)}\w*@\w+(?:\.\w+)+"
+                    matches = [
+                        f"{prefix}@example.com",
+                        f"{prefix}123@{random_domain()}",
+                    ]
+                    non_matches = [
+                        f"user@{random_domain()}",
+                        f"{prefix}@",
+                        f"{prefix}.user@{random_domain()}",
+                    ]
+                    return {
+                        "desc": f"match emails starting with '{prefix}'",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "n_digit":
+                    digits = int(rng.randint(2, 6))
+                    pattern = rf"\b\d{{{digits}}}\b"
+                    matches = [
+                        "".join(str(rng.randint(0, 9)) for _ in range(digits)),
+                        "".join(str(rng.randint(0, 9)) for _ in range(digits)),
+                        "".join(str(rng.randint(0, 9)) for _ in range(digits)),
+                    ]
+                    non_matches = [
+                        "".join(str(rng.randint(0, 9)) for _ in range(max(1, digits - 1))),
+                        "".join(str(rng.randint(0, 9)) for _ in range(digits + 1)),
+                        random_word(3, 6),
+                    ]
+                    return {
+                        "desc": f"match exactly {digits}-digit numbers",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "word_prefix":
+                    prefix = rng.choice(["test", "pre", "bio", "micro", "sym", "eco"])
+                    pattern = rf"\b{re.escape(prefix)}\w*\b"
+                    matches = [
+                        prefix,
+                        prefix + random_word(2, 5),
+                        prefix + random_word(2, 5),
+                    ]
+                    non_matches = [
+                        random_word(2, 5) + prefix,
+                        random_word(2, 5) + prefix + random_word(2, 5),
+                        random_word(4, 8),
+                    ]
+                    return {
+                        "desc": f"match words starting with '{prefix}'",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "literal":
+                    literal = rng.choice(
+                        [
+                            "C++",
+                            "file.txt",
+                            "[URGENT]",
+                            "a|b",
+                            "x^2",
+                            "hello.world",
+                            "(test)",
+                        ]
+                    )
+                    pattern = re.escape(literal)
+                    matches = [literal]
+                    non_matches = [literal + random_word(1, 2), random_word(1, 2) + literal]
+                    return {
+                        "desc": f"match the literal string '{literal}' exactly",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "hex_color":
+                    digits = int(rng.choice([3, 6]))
+                    pattern = rf"#[0-9a-fA-F]{{{digits}}}"
+                    matches = ["#" + "".join(rng.choice("0123456789ABCDEF") for _ in range(digits))]
+                    non_matches = [
+                        "#"
+                        + "".join(
+                            rng.choice("0123456789ABCDEF") for _ in range(max(1, digits - 1))
+                        ),
+                        "#GGG" if digits == 3 else "#GGGGGG",
+                        random_word(3, 8),
+                    ]
+                    return {
+                        "desc": f"match hex colors with exactly {digits} hex digits",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                # alpha_len
+                length = int(rng.randint(4, 8))
+                pattern = rf"[A-Za-z]{{{length}}}"
+                matches = ["".join(rng.choice(alphabet) for _ in range(length))]
+                non_matches = [
+                    "".join(rng.choice(alphabet) for _ in range(length - 1)),
+                    "".join(rng.choice(alphabet) for _ in range(length + 1)),
+                    "".join(rng.choice("0123456789") for _ in range(length)),
+                ]
+                return {
+                    "desc": f"match exactly {length}-letter words (letters only)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if depth == "medium":
+                kind = rng.choice(
+                    [
+                        "phone",
+                        "url",
+                        "identifier",
+                        "date_mdy",
+                        "time_hm",
+                        "day_01_31",
+                        "date_ymd",
+                        "date_dot",
+                        "datetime_iso_t",
+                        "timestamp_ymd_hms",
+                        "github",
+                    ]
+                )
+                if kind == "phone":
+                    pattern = r"(\d{3}-\d{3}-\d{4}|\(\d{3}\) \d{3}-\d{4})"
+                    matches = ["123-456-7890", "(123) 456-7890"]
+                    non_matches = ["123.456.7890", "12-345-6789", "123-45-6789"]
+                    return {
+                        "desc": "match phone numbers in format XXX-XXX-XXXX or (XXX) XXX-XXXX",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "url":
+                    domain = random_domain()
+                    pattern = r"https?://[\w\.-]+\.\w+(?:/[^\s]*)?"
+                    matches = [f"http://{domain}", f"https://{domain}/path/to/file"]
+                    non_matches = [f"ftp://{domain}", domain, "http://"]
+                    return {
+                        "desc": "match URLs starting with http:// or https://",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "identifier":
+                    pattern = r"\b[a-zA-Z][a-zA-Z0-9_]*\b"
+                    matches = [
+                        random_identifier(allow_leading_underscore=False),
+                        random_identifier(allow_leading_underscore=False),
+                        random_identifier(allow_leading_underscore=False),
+                    ]
+                    non_matches = [
+                        "1" + random_word(2, 4),
+                        "_" + random_word(2, 4),
+                        "123",
+                    ]
+                    return {
+                        "desc": "match variable names (letters, numbers, underscore, must start with letter)",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "date_mdy":
+                    pattern = r"\b(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])/\d{4}\b"
+                    matches = ["01/15/2024", "12/31/2023"]
+                    non_matches = ["13/01/2024", "1/5/2024", "01-15-2024"]
+                    return {
+                        "desc": "match dates in MM/DD/YYYY format",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "time_hm":
+                    pattern = r"\b([01]\d|2[0-3]):[0-5]\d\b"
+                    matches = ["00:00", "14:30", "23:59"]
+                    non_matches = ["24:00", "9:30", "14:60"]
+                    return {
+                        "desc": "match time in HH:MM format (24-hour clock)",
+                        "pattern": pattern,
+                        "matches": matches,
+                        "non_matches": non_matches,
+                    }
+
+                if kind == "day_01_31":
+                    return task_day_01_31()
+
+                if kind == "date_ymd":
+                    return task_date_ymd()
+
+                if kind == "date_dot":
+                    return task_date_dot()
+
+                if kind == "datetime_iso_t":
+                    return task_datetime_iso_t()
+
+                if kind == "timestamp_ymd_hms":
+                    return task_timestamp_ymd_hms()
+
+                # github
+                pattern = r"[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*"
+                matches = ["john-doe", "user123", "a-b-c"]
+                non_matches = ["-invalid", "user-", "bad--name"]
+                return {
+                    "desc": "match GitHub-style usernames (alphanumeric + hyphens, no leading/trailing hyphen)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            # long
+            kind = rng.choice(
+                [
+                    "ipv4",
+                    "json_kv",
+                    "py_def",
+                    "email_tld",
+                    "mac",
+                    "semver",
+                    "date_iso",
+                    "day_01_31",
+                    "date_ymd",
+                    "date_dot",
+                    "datetime_iso_t",
+                    "timestamp_ymd_hms",
+                    "uuid",
+                    "log_level",
+                    "file_path",
+                ]
+            )
+            if kind == "day_01_31":
+                return task_day_01_31()
+
+            if kind == "date_ymd":
+                return task_date_ymd()
+
+            if kind == "date_dot":
+                return task_date_dot()
+
+            if kind == "datetime_iso_t":
+                return task_datetime_iso_t()
+
+            if kind == "timestamp_ymd_hms":
+                return task_timestamp_ymd_hms()
+
+            if kind == "date_iso":
+                pattern = r"\b\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b"
+                matches = ["2024-01-15", "1999-12-31"]
+                non_matches = ["2024/01/15", "15-01-2024", "2024-13-01"]
+                return {
+                    "desc": "match ISO 8601 dates (YYYY-MM-DD)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "uuid":
+                pattern = r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+                matches = [
+                    "123e4567-e89b-12d3-a456-426614174000",
+                    "00000000-0000-0000-0000-000000000000",
+                ]
+                non_matches = ["123e4567-e89b-12d3-a456", "123e4567-e89b-12d3-a456-4266141740000"]
+                return {
+                    "desc": "match UUIDs (standard 8-4-4-4-12 hex format)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "log_level":
+                pattern = r"^\[(INFO|WARN|ERROR|DEBUG)\]\s+.*$"
+                matches = ["[INFO] System started", "[ERROR] Connection failed"]
+                non_matches = ["INFO System started", "[TRACE] Details...", "[info] lower case"]
+                return {
+                    "desc": "match log lines starting with [INFO], [WARN], [ERROR], or [DEBUG] at the start of the string",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "file_path":
+                # Unix-style absolute paths
+                pattern = r"^/[a-zA-Z0-9_./-]+$"
+                matches = ["/var/log/syslog", "/home/user/.bashrc", "/usr/local/share/data.txt"]
+                non_matches = ["var/log", "C:\\Windows", "/var/log/invalid char!"]
+                return {
+                    "desc": "match Unix-style absolute file paths (start with /, alphanumeric/dot/dash/underscore)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "ipv4":
+                pattern = r"\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b"
+                matches = ["192.168.1.1", "10.0.0.255", "8.8.8.8"]
+                non_matches = ["256.1.1.1", "192.168.1", "192.168.1.1.1"]
+                return {
+                    "desc": "match valid IPv4 addresses",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "json_kv":
+                key = rng.choice(["name", "id", "type", "value", "status"])
+                pattern = r'"\w+"\s*:\s*"[^"]*"'
+                matches = [f'"{key}": "{random_word(3, 8)}"', '"id": "123"']
+                non_matches = [f"{key}: {random_word(3, 8)}", '"name":"', 'name: "John"']
+                return {
+                    "desc": "match JSON-like key-value pairs with quoted strings",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "py_def":
+                func = random_identifier(3, 10)
+                pattern = r"def\s+[a-zA-Z_]\w*\s*\([^)]*\)\s*:"
+                matches = ["def foo():", f"def {func}(x, y):", "def _helper(data):"]
+                non_matches = ["def 123():", "def foo()", "function foo():"]
+                return {
+                    "desc": "match Python function definitions",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "email_tld":
+                pattern = r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|org|net|edu|gov)\b"
+                matches = [
+                    f"{random_word(3, 8)}@example.com",
+                    f"test.user@{random_domain(tlds=['com', 'org', 'net', 'edu', 'gov'])}",
+                ]
+                non_matches = ["user@example", "@example.com", "user@.com"]
+                return {
+                    "desc": "match email addresses with common TLDs",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            if kind == "mac":
+                pattern = r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b"
+                matches = ["AA:BB:CC:DD:EE:FF", "00-11-22-33-44-55"]
+                non_matches = ["ZZ:BB:CC:DD:EE:FF", "AA:BB:CC:DD:EE", "AABBCCDDEEFF"]
+                return {
+                    "desc": "match MAC addresses (6 groups of 2 hex digits, colon or hyphen separated)",
+                    "pattern": pattern,
+                    "matches": matches,
+                    "non_matches": non_matches,
+                }
+
+            # semver
+            major = rng.randint(0, 20)
+            minor = rng.randint(0, 20)
+            patch = rng.randint(0, 20)
+            pattern = r"\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b"
+            matches = [
+                f"{major}.{minor}.{patch}",
+                f"{major}.{minor}.{patch}-alpha.1",
+                f"{major}.{minor}.{patch}+build.5",
+            ]
+            non_matches = [
+                f"{major}.{minor}",
+                f"{major}.{minor}.{patch}.{rng.randint(0, 9)}",
+                f"v{major}.{minor}.{patch}",
+            ]
+            return {
+                "desc": "match semantic version numbers (e.g., 1.2.3, 1.2.3-alpha.1, 1.2.3+build.5)",
+                "pattern": pattern,
+                "matches": matches,
+                "non_matches": non_matches,
+            }
+
+        choice = pick_task()
+        desc = str(choice["desc"])
+        pattern = str(choice["pattern"])
+        matches = list(choice["matches"])  # type: ignore[arg-type]
+        non_matches = list(choice["non_matches"])  # type: ignore[arg-type]
 
         # Create test examples string
         test_examples = []
@@ -1093,12 +1873,333 @@ class GridEnvironment:
 
         return prompt, pattern, test_strings
 
+    def _regex_cases_pass(self, pattern: str, test_strings: list[dict[str, object]]) -> bool:
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            return False
+        if not test_strings:
+            return False
+        for tc in test_strings:
+            test_str = str(tc.get("string", ""))
+            should_match = bool(tc.get("should_match", False))
+            matched = bool(compiled.fullmatch(test_str))
+            if matched != should_match:
+                return False
+        return True
+
+    def _extract_regex_desc(self, prompt: str) -> str:
+        match = re.search(r"Write a regex pattern to (.+?)\\. Test cases:", prompt)
+        return match.group(1) if match else "match the desired strings"
+
+    def _make_regex_recognition_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        for _ in range(25):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            tc = self.rng.choice(list(test_strings))
+            test_str = str(tc.get("string", ""))
+            expected = bool(tc.get("should_match", False))
+            prompt = (
+                "Given this regex:\n"
+                f"{pattern}\n\n"
+                f'Does it match "{test_str}"? Answer yes or no, and briefly explain why.'
+            )
+            return prompt, {"expected": expected, "pattern": pattern, "test_string": test_str}
+        # Fallback: a trivial recognition task
+        prompt = 'Does the regex "^a+$" match "aaa"? Answer yes or no.'
+        return prompt, {"expected": True, "pattern": "^a+$", "test_string": "aaa"}
+
+    def _make_regex_explanation_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        stop = {
+            "match",
+            "matches",
+            "exactly",
+            "string",
+            "strings",
+            "with",
+            "the",
+            "a",
+            "an",
+            "of",
+            "to",
+            "in",
+            "format",
+            "starting",
+            "style",
+            "names",
+            "name",
+            "numbers",
+            "number",
+            "words",
+            "word",
+        }
+        for _ in range(25):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            desc = self._extract_regex_desc(synth_prompt)
+            tokens = re.findall(r"[A-Za-z0-9_]+", desc)
+            keywords: list[str] = []
+            for tok in tokens:
+                t = tok.strip().lower()
+                if not t or t in stop:
+                    continue
+                if t not in keywords:
+                    keywords.append(t)
+            if not keywords:
+                keywords = ["regex", "match"]
+            keywords = keywords[:8]
+            explanation = f"This regex matches strings that {desc}."
+            prompt = f"Explain what this regex matches in plain English:\n{pattern}"
+            return prompt, {
+                "required_keywords": keywords,
+                "pattern": pattern,
+                "reference_answer": explanation,
+            }
+        prompt = "Explain what this regex matches in plain English:\n^a+$"
+        return prompt, {
+            "required_keywords": ["a"],
+            "pattern": "^a+$",
+            "reference_answer": "Matches one or more 'a' characters.",
+        }
+
+    def _mutate_regex_pattern(self, pattern: str) -> list[tuple[str, str]]:
+        """Return candidate (mutated_pattern, mutation_note) pairs."""
+        mutations: list[tuple[str, str]] = []
+
+        if pattern.startswith("^") and pattern.endswith("$") and len(pattern) > 2:
+            core = pattern[1:-1]
+            mutations.append((core, "removed anchors"))
+            mutations.append((pattern[1:], "removed start anchor"))
+            mutations.append((pattern[:-1], "removed end anchor"))
+
+        if " " in pattern:
+            no_space = pattern.replace(" ", "", 1)
+            if no_space != pattern:
+                mutations.append((no_space, "removed required whitespace"))
+
+        if "2[0-3]" in pattern:
+            mutations.append((pattern.replace("2[0-3]", "2\\d", 1), "widened a bounded range"))
+            mutations.append((pattern.replace("2[0-3]", "2[0-4]", 1), "widened a bounded range"))
+
+        # Prefer loosening fixed-length digit runs.
+        widened = re.sub(r"\\d\{\d+\}", lambda _m: r"\d+", pattern, count=1)
+        if widened != pattern:
+            mutations.append((widened, "loosened a fixed-length quantifier"))
+
+        # Loosen a simple range quantifier.
+        widened_range = re.sub(r"\{\d+(?:,\d*)?\}", "{1,}", pattern, count=1)
+        if widened_range != pattern:
+            mutations.append((widened_range, "loosened a range quantifier"))
+
+        # Loosen a plus to star.
+        plus_to_star = pattern.replace("+", "*", 1)
+        if plus_to_star != pattern:
+            mutations.append((plus_to_star, "changed + to *"))
+
+        # Expand month/day constraints to allow invalid numbers (common bug template).
+        widened_month = pattern.replace("(0[1-9]|1[0-2])", "(\\d{2})", 1)
+        if widened_month != pattern:
+            mutations.append((widened_month, "removed month range constraint"))
+
+        widened_day = pattern.replace("(0[1-9]|[12]\\d|3[01])", "(\\d{2})", 1)
+        if widened_day != pattern:
+            mutations.append((widened_day, "removed day range constraint"))
+
+        return mutations
+
+    def _make_regex_debugging_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        for _ in range(40):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            desc = self._extract_regex_desc(synth_prompt)
+            candidates = self._mutate_regex_pattern(pattern)
+            self.rng.shuffle(candidates)
+            for mutated, note in candidates:
+                if mutated == pattern:
+                    continue
+                if not self._regex_cases_pass(pattern, test_strings):
+                    continue
+                # Mutated must compile and fail at least one case.
+                try:
+                    re.compile(mutated)
+                except re.error:
+                    continue
+                if self._regex_cases_pass(mutated, test_strings):
+                    continue
+                prompt = (
+                    f"This regex is supposed to {desc} but has a bug:\n"
+                    f"{mutated}\n\n"
+                    "Fix the regex. Respond with only the corrected pattern."
+                )
+                return prompt, {
+                    "pattern": pattern,
+                    "broken_pattern": mutated,
+                    "bug_description": note,
+                    "test_strings": test_strings,
+                }
+        # Fallback: mutate by loosening digits in a simple pattern.
+        prompt = (
+            "This regex is supposed to match exactly three digits but has a bug:\n"
+            "^\\d+$\n\nFix the regex. Respond with only the corrected pattern."
+        )
+        return prompt, {
+            "pattern": "^\\d{3}$",
+            "broken_pattern": "^\\d+$",
+            "bug_description": "loosened a fixed-length quantifier",
+            "test_strings": [
+                {"string": "123", "should_match": True},
+                {"string": "12", "should_match": False},
+                {"string": "1234", "should_match": False},
+            ],
+        }
+
+    def _inflate_regex_pattern(self, pattern: str) -> str:
+        inflated = pattern
+
+        def expand_digits(match: re.Match[str]) -> str:
+            n = int(match.group(1))
+            if n <= 0 or n > 6:
+                return match.group(0)
+            return "[0-9]" * n
+
+        inflated = re.sub(r"\\d\{(\d+)\}", expand_digits, inflated)
+        inflated = inflated.replace("\\d", "[0-9]")
+        inflated = inflated.replace("\\w", "[A-Za-z0-9_]")
+        if inflated == pattern:
+            inflated = f"(?:{pattern})"
+        return inflated
+
+    def _make_regex_refactoring_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        for _ in range(25):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            inflated = self._inflate_regex_pattern(pattern)
+            if not self._regex_cases_pass(inflated, test_strings):
+                continue
+            try:
+                if _regex_complexity_score(inflated) <= _regex_complexity_score(pattern):
+                    inflated = f"(?:{inflated})"
+            except Exception:
+                pass
+            prompt = (
+                "Simplify this regex without changing its matching behavior:\n"
+                f"{inflated}\n\nRespond with only the simplified pattern."
+            )
+            return prompt, {
+                "pattern": pattern,
+                "original_pattern": inflated,
+                "test_strings": test_strings,
+            }
+        prompt = (
+            "Simplify this regex without changing its matching behavior:\n"
+            "^(?:[0-9][0-9][0-9])$\n\nRespond with only the simplified pattern."
+        )
+        return prompt, {
+            "pattern": "^\\d{3}$",
+            "original_pattern": "^(?:[0-9][0-9][0-9])$",
+            "test_strings": [
+                {"string": "123", "should_match": True},
+                {"string": "12", "should_match": False},
+                {"string": "1234", "should_match": False},
+            ],
+        }
+
+    def _make_regex_mutation_effect_task(self, depth: str) -> tuple[str, dict[str, object]]:
+        for _ in range(40):
+            synth_prompt, pattern, test_strings = self._make_regex_task(depth)
+            if not self._regex_cases_pass(pattern, test_strings):
+                continue
+            candidates = self._mutate_regex_pattern(pattern)
+            self.rng.shuffle(candidates)
+            for mutated, note in candidates:
+                if mutated == pattern:
+                    continue
+                try:
+                    compiled = re.compile(mutated)
+                except re.error:
+                    continue
+                # Keep positives matching.
+                positives_ok = True
+                new_matches: list[str] = []
+                old_matches: list[str] = []
+                non_matches: list[str] = []
+                for tc in test_strings:
+                    test_str = str(tc.get("string", ""))
+                    should_match = bool(tc.get("should_match", False))
+                    mut_match = bool(compiled.fullmatch(test_str))
+                    if should_match:
+                        if not mut_match:
+                            positives_ok = False
+                            break
+                        old_matches.append(test_str)
+                    else:
+                        if mut_match:
+                            new_matches.append(test_str)
+                        else:
+                            non_matches.append(test_str)
+                if not positives_ok or not new_matches:
+                    continue
+
+                targets = list(dict.fromkeys(new_matches))[:3]
+                distractors_1 = list(dict.fromkeys(old_matches))[:3]
+                distractors_2 = list(dict.fromkeys(non_matches))[:3]
+                pool = targets + distractors_1 + distractors_2
+                self.rng.shuffle(pool)
+                pool_str = ", ".join(f'"{s}"' for s in pool)
+
+                required = targets
+                reference = ", ".join(required)
+                prompt = (
+                    f"Original regex: {pattern}\n"
+                    f"Mutated regex: {mutated}\n\n"
+                    f"The regex was changed ({note}).\n"
+                    f"Consider these strings: {pool_str}\n"
+                    "Which of these strings match the NEW regex but did NOT match the OLD regex? "
+                    "Respond with a comma-separated list of the strings (verbatim)."
+                )
+                return prompt, {
+                    "required_keywords": required,
+                    "pattern": pattern,
+                    "mutated_pattern": mutated,
+                    "reference_answer": reference,
+                }
+        prompt = (
+            "Original regex: ^\\d{3}$\nMutated regex: ^\\d+$\n\n"
+            'The quantifier was changed from {3} to +. Consider these strings: "1", "12", "123", "1234".\n'
+            "Which of these strings match the NEW regex but did NOT match the OLD regex? "
+            "Respond with a comma-separated list of the strings (verbatim)."
+        )
+        return prompt, {
+            "required_keywords": ["1", "12", "1234"],
+            "pattern": "^\\d{3}$",
+            "mutated_pattern": "^\\d+$",
+            "reference_answer": "1, 12, 1234",
+        }
+
     # ------------------------------------------------------------------
-    def register_result(self, organelle_id: str, task: GridTask, success: bool) -> None:
-        self.controller.update(task.cell, success)
+    def register_result(
+        self, organelle_id: str, task: GridTask, success: bool, progress: float | None = None
+    ) -> None:
+        # Thread fractional progress (dense rewards) into the controller so it can adapt even when
+        # strict success is sparse (e.g., regex debugging rarely hits 100% test pass early on).
+        if progress is not None:
+            try:
+                value = float(progress)
+            except Exception:
+                value = 1.0 if success else 0.0
+        else:
+            value = 1.0 if success else 0.0
+        if not math.isfinite(value):
+            value = 0.0
+        value = max(0.0, min(1.0, float(value)))
+        self.controller.update(task.cell, value)
         stats = self.organism_stats.setdefault(organelle_id, {})
         ema = stats.get(task.cell, self.tau)
-        stats[task.cell] = (1 - self.beta) * ema + self.beta * (1.0 if success else 0.0)
+        stats[task.cell] = (1 - self.beta) * ema + self.beta * value
         if task.canary and not success:
             self.organism_canary_fail[organelle_id] = True
         elif task.canary and success:

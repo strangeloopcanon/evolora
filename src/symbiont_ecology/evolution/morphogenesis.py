@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from symbiont_ecology.config import EcologyConfig
 from symbiont_ecology.evolution.population import Genome, PopulationManager
 from symbiont_ecology.host.kernel import HostKernel
+from symbiont_ecology.organelles.base import Organelle
 
 
 @dataclass
@@ -17,20 +18,77 @@ class MorphogenesisController:
     def apply(self, survivors: list[Genome], population: PopulationManager) -> None:
         if not survivors:
             return
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
         limits = self.config.limits
         backbone_params = max(self.host.total_backbone_params(), 1)
         base_budget = backbone_params * limits.lora_budget_frac
         adapter_cap = max(0, limits.max_active_adapters_per_layer)
+        score_ranked: list[tuple[Genome, float, Organelle]] = []
         for genome in survivors:
             organelle = self.host.get_organelle(genome.organelle_id)
             if organelle is None:
                 continue
-            roi = population.average_roi(genome.organelle_id, limit=5)
+            roi_history = population.roi.get(genome.organelle_id, [])
+            if not roi_history:
+                # Avoid rank collapse for organs that didn't get meaningful interaction this window.
+                # Still nudge gating bias based on a neutral ROI prior.
+                self._tweak_gate_bias(genome, roi=population.aggregate_roi(limit=5))
+                continue
+            # Use task_reward (competence) instead of ROI to decide rank changes.
+            # This allows high-rank models to survive if they are accurate, even if expensive.
+            score = population.average_task_reward(genome.organelle_id, limit=5)
+            score_ranked.append((genome, score, organelle))
+
+        if not score_ranked:
+            return
+        score_ranked.sort(key=lambda item: item[1])
+        n = len(score_ranked)
+        # Small populations: preserve the original absolute ROI thresholds.
+        # (Used by unit tests and keeps behaviour intuitive when mu < 4.)
+        if n < 4:
+            for genome, _score, organelle in score_ranked:
+                target_rank = genome.rank
+                # Fallback to ROI for absolute thresholds if population is tiny
+                roi = population.average_roi(genome.organelle_id, limit=5)
+                if roi >= 1.2:
+                    target_rank = min(genome.rank + 1, self.config.host.max_lora_rank)
+                elif roi <= 0.6 and genome.rank > min_rank:
+                    target_rank = max(min_rank, genome.rank - 1)
+                else:
+                    self._tweak_gate_bias(genome, roi)
+                    continue
+
+                if target_rank == genome.rank:
+                    continue
+
+                current_total = self.host.total_trainable_parameters()
+                current_org = self.host._trainable_params(organelle)
+                estimated = self.host.estimate_trainable(organelle, target_rank)
+                projected_total = current_total - current_org + estimated
+                budget = max(base_budget, projected_total)
+
+                if target_rank > genome.rank and projected_total > budget:
+                    continue
+
+                if self.host.resize_organelle_rank(genome.organelle_id, target_rank):
+                    genome.rank = target_rank
+            if adapter_cap:
+                self._enforce_layer_caps(survivors, population, adapter_cap)
+            return
+
+        # Scale-free: adjust ranks by relative competence (score) within the current survivors set.
+        # With mu=4 this becomes 1 shrink + 1 grow per gen (when ranks allow).
+        low_count = int(n // 4)
+        high_start = n - low_count
+
+        for idx, (genome, _score, organelle) in enumerate(score_ranked):
             target_rank = genome.rank
-            if roi >= 1.2:
+            roi = population.average_roi(genome.organelle_id, limit=5)
+            if low_count > 0 and idx < low_count and genome.rank > min_rank:
+                target_rank = max(min_rank, genome.rank - 1)
+            elif low_count > 0 and idx >= high_start:
                 target_rank = min(genome.rank + 1, self.config.host.max_lora_rank)
-            elif roi <= 0.6 and genome.rank > 1:
-                target_rank = max(1, genome.rank - 1)
             else:
                 self._tweak_gate_bias(genome, roi)
                 continue

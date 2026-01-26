@@ -119,18 +119,42 @@ class ComputeBudget(BaseModel):
     total_flops: float = 0.0
     total_generated_tokens: int = 0
     wall_clock_seconds: float = 0.0
+    train_tokens: int = 0
+    train_forward_passes: int = 0
+    train_hebbian_updates: int = 0
+    train_flops: float = 0.0
+    train_generated_tokens: int = 0
 
-    def record_forward(self, prompt_tokens: int, generated_tokens: int, flops: float) -> None:
+    def record_forward(
+        self,
+        prompt_tokens: int,
+        generated_tokens: int,
+        flops: float,
+        *,
+        training: bool = False,
+    ) -> None:
         """Record a forward pass through the model."""
-        self.total_tokens += prompt_tokens + generated_tokens
-        self.total_generated_tokens += generated_tokens
+        prompt = max(0, int(prompt_tokens))
+        generated = max(0, int(generated_tokens))
+        self.total_tokens += prompt + generated
+        self.total_generated_tokens += generated
         self.total_forward_passes += 1
         self.total_flops += flops
+        if training:
+            self.train_tokens += prompt + generated
+            self.train_generated_tokens += generated
+            self.train_forward_passes += 1
+            self.train_flops += flops
 
-    def record_hebbian_update(self, estimated_flops: float = 0.0) -> None:
+    def record_hebbian_update(
+        self, estimated_flops: float = 0.0, *, training: bool = False
+    ) -> None:
         """Record a Hebbian weight update (analogous to a gradient step)."""
         self.total_hebbian_updates += 1
         self.total_flops += estimated_flops
+        if training:
+            self.train_hebbian_updates += 1
+            self.train_flops += estimated_flops
 
     def add_wall_clock(self, seconds: float) -> None:
         """Accumulate wall-clock training time."""
@@ -145,6 +169,11 @@ class ComputeBudget(BaseModel):
             "total_flops": self.total_flops,
             "total_generated_tokens": self.total_generated_tokens,
             "wall_clock_seconds": self.wall_clock_seconds,
+            "train_tokens": self.train_tokens,
+            "train_forward_passes": self.train_forward_passes,
+            "train_hebbian_updates": self.train_hebbian_updates,
+            "train_flops": self.train_flops,
+            "train_generated_tokens": self.train_generated_tokens,
         }
 
 

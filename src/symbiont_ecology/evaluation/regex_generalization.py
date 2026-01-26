@@ -22,6 +22,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from symbiont_ecology.utils.regex_extract import pick_best_regex_candidate
+
 # ---------------------------------------------------------------------------
 # Enums and Constants
 # ---------------------------------------------------------------------------
@@ -59,9 +61,6 @@ class MutationType(str, Enum):
 # ---------------------------------------------------------------------------
 # Data Classes
 # ---------------------------------------------------------------------------
-
-_RESPONSE_CODE_BLOCK_RE = re.compile(r"```(?:regex|re|regexp)?\s*\n?(.*?)\n?```", re.DOTALL)
-_RESPONSE_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 
 
 @dataclass
@@ -297,34 +296,10 @@ def check_regex_against_cases(
 
 def extract_regex_from_response(response: str) -> str:
     """Extract a regex pattern from model response."""
-    text = response.strip()
-
-    # Check for code block
-    code_block_match = _RESPONSE_CODE_BLOCK_RE.search(text)
-    if code_block_match:
-        return code_block_match.group(1).strip()
-
-    # Check for backtick inline code
-    inline_match = _RESPONSE_INLINE_CODE_RE.search(text)
-    if inline_match:
-        return inline_match.group(1).strip()
-
-    # Split by lines and filter
-    lines = text.split("\n")
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        # Skip common prefixes
-        lower_line = line.lower()
-        if lower_line in ["regex", "regexp", "re", "pattern", "pattern:"]:
-            continue
-        if lower_line.startswith("the regex") or lower_line.startswith("here"):
-            continue
-        # Return first non-empty, non-prefix line
-        return line
-
-    return text
+    pattern, _details = pick_best_regex_candidate(response, test_cases=None)
+    if pattern:
+        return pattern
+    return response.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -360,20 +335,37 @@ def evaluate_recognition_task(task: RegexTask, response: str) -> tuple[bool, dic
             )
         return success, {"expected": expected, "response_snippet": response_lower[:100]}
 
+    # Some recognition-style tasks (e.g. mutation-effect questions) do not have a strict yes/no
+    # answer, but specify required_keywords for a free-text explanation.
+    keywords = task.metadata.get("required_keywords", [])
+    if keywords:
+        found_keywords = [kw for kw in keywords if str(kw).lower() in response_lower]
+        score = len(found_keywords) / len(keywords) if keywords else 1.0
+        success = score >= 0.7
+        return success, {
+            "required_keywords": keywords,
+            "found_keywords": found_keywords,
+            "coverage_score": score,
+        }
+
     return False, {"error": "No expected answer provided"}
 
 
 def evaluate_synthesis_task(task: RegexTask, response: str) -> tuple[bool, dict[str, Any]]:
     """Evaluate a synthesis task (write a regex)."""
-    pattern = extract_regex_from_response(response)
+    pattern, pick_details = pick_best_regex_candidate(response, test_cases=task.test_cases)
 
     if not pattern:
-        return False, {"error": "Could not extract regex pattern"}
+        return False, {"error": "Could not extract regex pattern", "pick": pick_details}
 
     # Test against provided test cases
     if task.test_cases:
         success, case_details = check_regex_against_cases(pattern, task.test_cases)
-        return success, {"extracted_pattern": pattern, "test_results": case_details}
+        return success, {
+            "extracted_pattern": pattern,
+            "test_results": case_details,
+            "pick": pick_details,
+        }
 
     # If no test cases, check if it compiles
     try:
@@ -407,25 +399,29 @@ def evaluate_explanation_task(task: RegexTask, response: str) -> tuple[bool, dic
 
 def evaluate_debugging_task(task: RegexTask, response: str) -> tuple[bool, dict[str, Any]]:
     """Evaluate a debugging task (fix this regex)."""
-    pattern = extract_regex_from_response(response)
+    pattern, pick_details = pick_best_regex_candidate(response, test_cases=task.test_cases)
 
     if not pattern:
-        return False, {"error": "Could not extract fixed regex pattern"}
+        return False, {"error": "Could not extract fixed regex pattern", "pick": pick_details}
 
     # Test the fixed pattern against test cases
     if task.test_cases:
         success, case_details = check_regex_against_cases(pattern, task.test_cases)
-        return success, {"fixed_pattern": pattern, "test_results": case_details}
+        return success, {
+            "fixed_pattern": pattern,
+            "test_results": case_details,
+            "pick": pick_details,
+        }
 
     return False, {"error": "No test cases provided for debugging task"}
 
 
 def evaluate_refactoring_task(task: RegexTask, response: str) -> tuple[bool, dict[str, Any]]:
     """Evaluate a refactoring task (simplify without changing behavior)."""
-    pattern = extract_regex_from_response(response)
+    pattern, pick_details = pick_best_regex_candidate(response, test_cases=task.test_cases)
 
     if not pattern:
-        return False, {"error": "Could not extract refactored regex pattern"}
+        return False, {"error": "Could not extract refactored regex pattern", "pick": pick_details}
 
     # Must pass all test cases
     if task.test_cases:
@@ -435,7 +431,7 @@ def evaluate_refactoring_task(task: RegexTask, response: str) -> tuple[bool, dic
 
     # Compute complexity metrics
     new_metrics = analyze_regex(pattern)
-    details: dict[str, Any] = {"refactored_pattern": pattern}
+    details: dict[str, Any] = {"refactored_pattern": pattern, "pick": pick_details}
 
     if task.target_regex:
         old_metrics = analyze_regex(task.target_regex)
@@ -504,7 +500,7 @@ class RegexGeneralizationEvaluator:
             CapabilityAxis.DEBUGGING,
             CapabilityAxis.REFACTORING,
         ]:
-            pattern = extract_regex_from_response(response)
+            pattern, _ = pick_best_regex_candidate(response, test_cases=task.test_cases)
             if pattern:
                 try:
                     re.compile(pattern)

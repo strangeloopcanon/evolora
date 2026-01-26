@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import os
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -15,7 +17,7 @@ from symbiont_ecology.config import EcologyConfig, HebbianConfig
 from symbiont_ecology.evolution.ledger import ATPLedger
 from symbiont_ecology.host.backbone import HFBackbone
 from symbiont_ecology.interfaces.messages import MessageEnvelope, Observation, Plan
-from symbiont_ecology.metrics.telemetry import RewardBreakdown, RouteEvent
+from symbiont_ecology.metrics.telemetry import ComputeBudget, RewardBreakdown, RouteEvent
 from symbiont_ecology.organelles import peft_hebbian
 from symbiont_ecology.organelles.base import Organelle, OrganelleContext
 from symbiont_ecology.routing.router import BanditRouter
@@ -29,6 +31,7 @@ class RouteMetrics:
     tokens: int
     latency_ms: float
     prompt_tokens: int
+    generated_tokens: int
     trainable_params: int
     flops_estimate: float
     memory_gb: float
@@ -57,6 +60,7 @@ class HostKernel:
     config: EcologyConfig
     router: BanditRouter
     ledger: ATPLedger
+    compute_budget: ComputeBudget | None = None
     device: torch.device = field(init=False)
     backbone: HFBackbone = field(init=False)
     organelles: dict[str, Organelle] = field(default_factory=dict)
@@ -87,12 +91,21 @@ class HostKernel:
             organelle_id=organelle_id,
             hebbian=hebbian_config or self.config.hebbian,
             reward_baseline=0.0,
+            progress_baseline=0.0,
             traces=None,
         )
-        organelle_cls = peft_hebbian.HebbianPEFTOrganelle
+        plasticity = str(os.getenv("EVOLORA_PLASTICITY", "hebbian") or "hebbian").strip().lower()
+        organelle_cls: type[peft_hebbian.HebbianPEFTOrganelle]
+        if plasticity in {"backprop", "bp", "grad", "gradient"}:
+            organelle_cls = peft_hebbian.BackpropPEFTOrganelle
+        else:
+            organelle_cls = peft_hebbian.HebbianPEFTOrganelle
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
+        rank = max(min_rank, min(int(rank), int(self.config.host.max_lora_rank)))
         organelle = organelle_cls(
             backbone=self.backbone,
-            rank=min(rank, self.config.host.max_lora_rank),
+            rank=rank,
             context=context,
             activation_bias=activation_bias,
         )
@@ -114,6 +127,7 @@ class HostKernel:
         latent_mix: float | None = None,
         recurrent_passes: int | None = None,
     ) -> HostStepResult:
+        training_intent = self._is_training_intent(intent)
         observation = Observation(state={"text": prompt})
         plan = Plan(steps=[], confidence=0.1)
         envelope = MessageEnvelope(
@@ -135,6 +149,17 @@ class HostKernel:
             except Exception:
                 pass
         envelope.observation.state["latent"] = latent.squeeze(0).tolist()
+        prompt_tokens_fallback = self._count_tokens(prompt)
+        hidden = int(
+            getattr(self.backbone, "hidden_size", prompt_tokens_fallback) or prompt_tokens_fallback
+        )
+        if self.compute_budget is not None:
+            # Account for the backbone latent extraction pass (no generation tokens).
+            try:
+                flops = float(prompt_tokens_fallback * hidden * 2)
+                self.compute_budget.record_forward(prompt_tokens_fallback, 0, flops, training=False)
+            except Exception:
+                pass
         organelle_pool = (
             {oid: self.organelles[oid] for oid in allowed_organelle_ids if oid in self.organelles}
             if allowed_organelle_ids is not None
@@ -143,14 +168,15 @@ class HostKernel:
         routed = self.router.select(organelle_pool, envelope, k=max_routes)
         route_events: list[RouteEvent] = []
         responses: dict[str, RouteMetrics] = {}
-        prompt_tokens = self._count_tokens(prompt)
-        hidden = getattr(self.backbone, "hidden_size", prompt_tokens)
+        prompt_tokens = prompt_tokens_fallback
         for organelle in routed:
             env = envelope.model_copy(deep=True)
             base_prompt = prompt
             history: list[str] = []
             passes = recurrent_passes or self._default_recurrence_passes(intent)
             passes = max(1, passes)
+            prompt_tokens_total = 0
+            generated_tokens_total = 0
             for pass_idx in range(passes):
                 working_text = self._format_recurrence_prompt(
                     base_prompt, history, pass_idx + 1, passes
@@ -160,6 +186,15 @@ class HostKernel:
                 env.observation.state["recurrent_total"] = passes
                 env.observation.state["recurrent_history"] = list(history)
                 env = organelle.forward(env)
+                try:
+                    pt = env.observation.state.get("prompt_tokens")
+                    if isinstance(pt, int) and pt > 0:
+                        prompt_tokens_total += pt
+                    gt = env.observation.state.get("generated_tokens")
+                    if isinstance(gt, int) and gt >= 0:
+                        generated_tokens_total += gt
+                except Exception:
+                    pass
                 answer_step = env.observation.state.get("answer", "")
                 if answer_step:
                     history.append(answer_step)
@@ -167,6 +202,9 @@ class HostKernel:
             answer = envelope.observation.state.get("answer", "")
             trainable = self._trainable_params(organelle)
             adapters = self._active_adapters(organelle)
+            if prompt_tokens_total <= 0:
+                prompt_tokens_total = prompt_tokens
+            total_tokens = prompt_tokens_total + max(0, generated_tokens_total)
             route_events.append(
                 RouteEvent(
                     organelle_id=organelle.organelle_id,
@@ -177,23 +215,34 @@ class HostKernel:
                     risk_penalty=0.0,
                     cost_penalty=0.0,
                     atp_delta=0.0,
-                    tokens=prompt_tokens,
+                    tokens=total_tokens,
                     latency_ms=0.0,
                 )
             )
-            flops = float(prompt_tokens * hidden * 2 * passes)
-            memory_gb = float(prompt_tokens * hidden * 2 * passes) / (1024**3)
+            flops = float(total_tokens * hidden * 2)
+            memory_gb = float(total_tokens * hidden * 2) / (1024**3)
             responses[organelle.organelle_id] = RouteMetrics(
                 answer=answer,
-                tokens=prompt_tokens,
+                tokens=total_tokens,
                 latency_ms=0.0,
-                prompt_tokens=prompt_tokens,
+                prompt_tokens=prompt_tokens_total,
+                generated_tokens=max(0, generated_tokens_total),
                 trainable_params=trainable,
                 flops_estimate=flops,
                 memory_gb=memory_gb,
                 active_adapters=adapters,
                 recurrent_passes=passes,
             )
+            if self.compute_budget is not None:
+                try:
+                    self.compute_budget.record_forward(
+                        prompt_tokens_total,
+                        max(0, generated_tokens_total),
+                        flops,
+                        training=training_intent,
+                    )
+                except Exception:
+                    pass
         latency_ms = (time.time() - t0) * 1000.0
         for evt in route_events:
             evt.latency_ms = latency_ms
@@ -204,6 +253,7 @@ class HostKernel:
                     tokens=metrics.tokens,
                     latency_ms=latency_ms,
                     prompt_tokens=metrics.prompt_tokens,
+                    generated_tokens=metrics.generated_tokens,
                     trainable_params=metrics.trainable_params,
                     flops_estimate=metrics.flops_estimate,
                     memory_gb=metrics.memory_gb,
@@ -219,11 +269,51 @@ class HostKernel:
         envelope: MessageEnvelope,
         rewards: dict[str, RewardBreakdown],
     ) -> None:
+        intent_goal = ""
+        if getattr(envelope, "intent", None) is not None:
+            intent_goal = str(getattr(envelope.intent, "goal", "") or "")
+        training_intent = self._is_training_intent(intent_goal)
         for organelle_id, breakdown in rewards.items():
             organelle = self.organelles.get(organelle_id)
             if organelle is None:
                 continue
-            organelle.update(envelope, breakdown)
+            did_update = False
+            try:
+                did_update = bool(organelle.update(envelope, breakdown))
+            except Exception:
+                did_update = False
+            if did_update and self.compute_budget is not None:
+                try:
+                    state = {}
+                    try:
+                        state = envelope.observation.state
+                    except Exception:
+                        state = {}
+                    update_tokens = state.get("update_forward_tokens")
+                    update_forward_flops = state.get("update_forward_flops")
+                    if isinstance(update_tokens, int) and isinstance(
+                        update_forward_flops, (int, float)
+                    ):
+                        self.compute_budget.record_forward(
+                            prompt_tokens=update_tokens,
+                            generated_tokens=0,
+                            flops=float(update_forward_flops),
+                            training=training_intent,
+                        )
+                    backward_flops = state.get("update_backward_flops")
+                    if isinstance(backward_flops, (int, float)) and float(backward_flops) > 0.0:
+                        self.compute_budget.record_hebbian_update(
+                            estimated_flops=float(backward_flops), training=training_intent
+                        )
+                    else:
+                        params = self._trainable_params(organelle)
+                        # Estimate: 2 FLOPs per param (scale + add)
+                        hebbian_flops = float(params * 2)
+                        self.compute_budget.record_hebbian_update(
+                            estimated_flops=hebbian_flops, training=training_intent
+                        )
+                except Exception:
+                    pass
             # Mint ATP based on total reward (which already subtracts cost_penalty)
             net_gain = max(0.0, breakdown.total)
             self.ledger.credit(organelle_id, net_gain * self.config.organism.atp_mint_rate)
@@ -247,6 +337,10 @@ class HostKernel:
         else:
             passes = getattr(host_cfg, "recurrence_train_passes", 1)
         return max(1, int(passes))
+
+    @staticmethod
+    def _is_training_intent(intent: str) -> bool:
+        return str(intent).strip().lower() == "solve task"
 
     def _format_recurrence_prompt(
         self,
@@ -319,6 +413,9 @@ class HostKernel:
         organelle = self.organelles.get(organelle_id)
         if organelle is None:
             return False
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
+        new_rank = max(min_rank, min(int(new_rank), int(self.config.host.max_lora_rank)))
         if hasattr(organelle, "resize_rank"):
             try:
                 changed = bool(organelle.resize_rank(new_rank))
@@ -448,6 +545,8 @@ class HostKernel:
         """
         contributions: dict[str, list[_SoupContribution]] = {}
         normalized_roles: dict[str, int] | None = None
+        min_rank = int(getattr(self.config.host, "min_lora_rank", 1) or 1)
+        min_rank = max(1, min_rank)
         if roles:
             # ensure only include roles for known members
             normalized_roles = {str(k): int(v) for k, v in roles.items() if isinstance(v, int)}
@@ -521,7 +620,7 @@ class HostKernel:
             effective_rank = target_rank
             if noise_total:
                 effective_rank = int(round(target_rank + noise_total))
-            effective_rank = max(1, min(self.config.host.max_lora_rank, effective_rank))
+            effective_rank = max(min_rank, min(self.config.host.max_lora_rank, effective_rank))
             if use_block:
                 try:
                     combined = self._combine_block_diagonal(parts, effective_rank)
@@ -539,9 +638,21 @@ class HostKernel:
                 continue
             if combined.ndim == 2 and effective_rank > 0 and mode != "block":
                 try:
+                    pre_norm = float(combined.norm().item())
                     u, s, vh = torch.linalg.svd(combined, full_matrices=False)
                     rank = min(effective_rank, s.shape[0])
                     combined = (u[:, :rank] * s[:rank]) @ vh[:rank, :]
+                    if rank < s.shape[0]:
+                        post_norm = float(combined.norm().item())
+                        if (
+                            pre_norm > 0.0
+                            and post_norm > 0.0
+                            and math.isfinite(pre_norm)
+                            and math.isfinite(post_norm)
+                        ):
+                            scale = pre_norm / post_norm
+                            scale = max(0.5, min(2.0, scale))
+                            combined = combined * float(scale)
                 except Exception:
                     pass
             soup_state[key] = combined
@@ -578,6 +689,30 @@ class HostKernel:
 
     def get_organelle(self, organelle_id: str) -> Optional[Organelle]:
         return self.organelles.get(organelle_id)
+
+    def measure_adapter_magnitude(self, organelle_id: str) -> float:
+        organelle = self.organelles.get(organelle_id)
+        if organelle is None:
+            return 0.0
+        # If the organelle exposes a direct measurement, use it.
+        if hasattr(organelle, "measure_magnitude"):
+            try:
+                return float(organelle.measure_magnitude())
+            except Exception:
+                pass
+        snapshot = organelle.export_adapter_state()
+        if not snapshot:
+            return 0.0
+        total_mag = 0.0
+        count = 0
+        for key, tensor in snapshot.items():
+            if "lora_B" in key:
+                try:
+                    total_mag += float(tensor.abs().max().item())
+                    count += 1
+                except Exception:
+                    pass
+        return total_mag / max(1, count)
 
     # ------------------------------------------------------------------
     def export_organelle_adapter(self, organelle_id: str, path: str | Path) -> None:

@@ -261,9 +261,10 @@ class BenchmarkStubOrganelle(Organelle):
 
     def update(
         self, envelope: MessageEnvelope, reward: RewardBreakdown
-    ) -> None:  # pragma: no cover
+    ) -> bool:  # pragma: no cover
         del envelope, reward
         self.step()
+        return False
 
     def trainable_parameters(self) -> int:
         return int(self.rank * self.backbone.hidden_size * 2)

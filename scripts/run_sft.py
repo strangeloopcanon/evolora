@@ -22,21 +22,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import pickle
+import random
+import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from datasets import Dataset
 from peft import LoraConfig, TaskType, get_peft_model
 from safetensors.torch import save_file
+from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
 )
@@ -46,6 +49,8 @@ from transformers.utils import logging as hf_logging
 hf_logging.set_verbosity_error()
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 warnings.filterwarnings("ignore", message=".*PEFT.*")
+
+BudgetKind = Literal["tokens", "forward_flops", "wall_clock_seconds"]
 
 
 # ---------------------------------------------------------------------------
@@ -67,10 +72,90 @@ def load_compute_budget_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]
     return compute
 
 
-def estimate_tokens_from_checkpoint(checkpoint_path: Path) -> int:
-    """Extract total_tokens from a checkpoint's compute budget."""
+@dataclass(frozen=True)
+class SFTBudget:
+    kind: BudgetKind
+    value: float
+    details: dict[str, object] | None = None
+
+    def exhausted(self, *, tokens: int, forward_flops: float, wall_clock_seconds: float) -> bool:
+        if self.kind == "tokens":
+            return tokens >= int(self.value)
+        if self.kind == "forward_flops":
+            return forward_flops >= float(self.value)
+        if self.kind == "wall_clock_seconds":
+            return wall_clock_seconds >= float(self.value)
+        raise ValueError(f"Unknown budget kind: {self.kind}")
+
+
+def estimate_sft_budget_from_checkpoint(
+    checkpoint_path: Path,
+    *,
+    match_budget_field: str = "train_flops",
+    backprop_multiplier: float = 3.0,
+) -> SFTBudget:
+    """Estimate an SFT compute budget from an evolution checkpoint.
+
+    The evolution runner tracks *forward-only* token counts (prompt + generated) in
+    `compute_budget.total_tokens` (and subset `train_tokens`).
+
+    SFT tokens are more expensive than forward-only inference because they include
+    backprop. We approximate this with a multiplier and convert the evolution
+    compute budget into an SFT token budget:
+
+        sft_token_budget ≈ evolution_tokens / backprop_multiplier
+    """
     budget = load_compute_budget_from_checkpoint(checkpoint_path)
-    return int(budget.get("total_tokens", 0))
+    field = str(match_budget_field)
+    if field not in (
+        "total_tokens",
+        "train_tokens",
+        "total_flops",
+        "train_flops",
+        "wall_clock_seconds",
+    ):
+        raise ValueError(f"Unsupported match_budget_field: {field}")
+
+    raw = budget.get(field)
+    if raw is None or (isinstance(raw, (int, float)) and float(raw) <= 0):
+        raise ValueError(f"Checkpoint compute_budget.{field} is missing/zero; cannot match budget")
+
+    multiplier = float(backprop_multiplier)
+    if multiplier <= 0 and field != "wall_clock_seconds":
+        raise ValueError("--backprop-multiplier must be positive")
+
+    if field in ("total_tokens", "train_tokens"):
+        evolution_tokens = int(raw)
+        sft_tokens = max(1, int(evolution_tokens / multiplier))
+        details: dict[str, object] = {
+            "match_budget_field": field,
+            "evolution_tokens": evolution_tokens,
+            "backprop_multiplier": multiplier,
+            "sft_token_budget": sft_tokens,
+        }
+        return SFTBudget(kind="tokens", value=float(sft_tokens), details=details)
+
+    if field in ("total_flops", "train_flops"):
+        evolution_flops = float(raw)
+        sft_forward_flops = max(1.0, evolution_flops / multiplier)
+        details = {
+            "match_budget_field": field,
+            "evolution_flops": evolution_flops,
+            "backprop_multiplier": multiplier,
+            "sft_forward_flops_budget": sft_forward_flops,
+        }
+        return SFTBudget(kind="forward_flops", value=float(sft_forward_flops), details=details)
+
+    if field == "wall_clock_seconds":
+        seconds = float(raw)
+        details = {
+            "match_budget_field": field,
+            "evolution_wall_clock_seconds": seconds,
+            "sft_wall_clock_budget_seconds": seconds,
+        }
+        return SFTBudget(kind="wall_clock_seconds", value=float(seconds), details=details)
+
+    raise ValueError(f"Unhandled match_budget_field: {field}")
 
 
 # ---------------------------------------------------------------------------
@@ -142,14 +227,11 @@ def load_jsonl_data(path: Path) -> list[dict[str, str]]:
                 print(f"[sft] Warning: skipping malformed line {line_num}: {e}")
                 continue
 
-            # Normalize to {"text": full_sequence}
             if "text" in obj:
-                records.append({"text": obj["text"]})
+                records.append({"prompt": "", "completion": obj["text"]})
             elif "prompt" in obj:
                 completion = obj.get("completion") or obj.get("target") or ""
-                # Format as prompt + completion for causal LM training
-                text = f"{obj['prompt']}\n{completion}".strip()
-                records.append({"text": text})
+                records.append({"prompt": obj["prompt"], "completion": completion})
             else:
                 print(f"[sft] Warning: skipping line {line_num}, no 'prompt' or 'text' field")
                 continue
@@ -163,25 +245,62 @@ def prepare_dataset(
     max_length: int,
     token_state: TokenBudgetState,
 ) -> Dataset:
-    """Tokenize data and track total tokens."""
+    """Tokenize prompt/completion pairs for supervised fine-tuning.
+
+    We build a single causal sequence per example:
+        <prompt>\n<completion>
+
+    and mask labels so loss is computed only on the completion tokens.
+    """
     dataset = Dataset.from_list(data)
 
     def tokenize_and_count(examples: dict[str, list[str]]) -> dict[str, list]:
-        tokenized = tokenizer(
-            examples["text"],
-            truncation=True,
-            max_length=max_length,
-            padding=False,
-        )
-        # Count tokens for budget tracking
-        for ids in tokenized["input_ids"]:
-            token_state.add_tokens(len(ids))
-        return tokenized
+        input_ids_batch: list[list[int]] = []
+        attention_masks_batch: list[list[int]] = []
+        labels_batch: list[list[int]] = []
+
+        prompts = examples.get("prompt") or []
+        completions = examples.get("completion") or []
+        for prompt, completion in zip(prompts, completions, strict=False):
+            prompt_prefix = str(prompt).rstrip()
+            if prompt_prefix:
+                prompt_prefix = f"{prompt_prefix}\n"
+            completion_text = str(completion)
+            full_text = f"{prompt_prefix}{completion_text}"
+
+            full = tokenizer(
+                full_text,
+                truncation=True,
+                max_length=max_length,
+                padding=False,
+            )
+            prompt_tokens = tokenizer(
+                prompt_prefix,
+                truncation=True,
+                max_length=max_length,
+                padding=False,
+            )
+
+            input_ids = list(full.get("input_ids") or [])
+            attention_mask = list(full.get("attention_mask") or [1] * len(input_ids))
+            prompt_len = min(len(prompt_tokens.get("input_ids") or []), len(input_ids))
+
+            labels = [-100] * int(prompt_len) + input_ids[int(prompt_len) :]
+            input_ids_batch.append(input_ids)
+            attention_masks_batch.append(attention_mask)
+            labels_batch.append(labels)
+            token_state.add_tokens(len(input_ids))
+
+        return {
+            "input_ids": input_ids_batch,
+            "attention_mask": attention_masks_batch,
+            "labels": labels_batch,
+        }
 
     tokenized = dataset.map(
         tokenize_and_count,
         batched=True,
-        remove_columns=["text"],
+        remove_columns=["prompt", "completion"],
         desc="Tokenizing",
     )
     # Reset counter - we'll count again during actual training
@@ -189,6 +308,43 @@ def prepare_dataset(
     token_state.total_tokens = 0
 
     return tokenized
+
+
+# ---------------------------------------------------------------------------
+# Data collator (pads labels with -100)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SupervisedDataCollator:
+    tokenizer: AutoTokenizer
+    label_pad_token_id: int = -100
+
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+        features_no_labels = []
+        labels = []
+        for feature in features:
+            features_no_labels.append(
+                {
+                    "input_ids": feature["input_ids"],
+                    "attention_mask": feature["attention_mask"],
+                }
+            )
+            labels.append(feature.get("labels") or [])
+
+        batch = self.tokenizer.pad(features_no_labels, padding=True, return_tensors="pt")
+        max_len = int(batch["input_ids"].shape[1])
+        labels_tensor = torch.full(
+            (len(labels), max_len), int(self.label_pad_token_id), dtype=torch.long
+        )
+        for idx, label in enumerate(labels):
+            label_ids = label[:max_len]
+            if not label_ids:
+                continue
+            labels_tensor[idx, : len(label_ids)] = torch.tensor(label_ids, dtype=torch.long)
+
+        batch["labels"] = labels_tensor
+        return batch
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +416,15 @@ class TokenTrackingTrainer(Trainer):
         self.token_state = token_state
 
     def training_step(self, model, inputs, num_items_in_batch=None):
-        # Count tokens in this batch
-        if "input_ids" in inputs:
-            batch_tokens = inputs["input_ids"].numel()
+        # Count non-padding tokens for fair comparison with evolution token counts.
+        if "attention_mask" in inputs:
+            try:
+                batch_tokens = int(inputs["attention_mask"].sum().item())
+            except Exception:
+                batch_tokens = 0
             self.token_state.add_tokens(batch_tokens)
+        elif "input_ids" in inputs:
+            self.token_state.add_tokens(int(inputs["input_ids"].numel()))
 
         return super().training_step(model, inputs, num_items_in_batch)
 
@@ -288,7 +449,48 @@ def parse_args() -> argparse.Namespace:
     budget_group.add_argument(
         "--token-budget",
         type=int,
-        help="Explicit token budget (alternative to --checkpoint).",
+        help="Explicit token budget (counts non-padding tokens; alternative to --checkpoint).",
+    )
+    budget_group.add_argument(
+        "--flops-budget",
+        type=float,
+        help="Explicit forward-flops budget (proxy: tokens * hidden_size * 2; alternative to --checkpoint).",
+    )
+    budget_group.add_argument(
+        "--wall-clock-budget-seconds",
+        type=float,
+        help="Explicit wall-clock budget in seconds (alternative to --checkpoint).",
+    )
+    parser.add_argument(
+        "--match-budget-field",
+        type=str,
+        choices=[
+            "total_tokens",
+            "train_tokens",
+            "total_flops",
+            "train_flops",
+            "wall_clock_seconds",
+        ],
+        default="train_flops",
+        help=(
+            "When using --checkpoint, which evolution compute_budget field to match before applying "
+            "--backprop-multiplier (default: train_flops)."
+        ),
+    )
+    parser.add_argument(
+        "--backprop-multiplier",
+        type=float,
+        default=3.0,
+        help=(
+            "Approximate relative compute of SFT per token vs forward-only inference "
+            "(default: 3.0). SFT token budget = evolution_tokens / backprop_multiplier."
+        ),
+    )
+    parser.add_argument(
+        "--budget-scale",
+        type=float,
+        default=1.0,
+        help="Scale the matched budget (default: 1.0). Useful for quick smoke runs (e.g., 0.1).",
     )
 
     # Data
@@ -305,6 +507,21 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="Qwen/Qwen3-0.6B",
         help="Base model to fine-tune (default: Qwen/Qwen3-0.6B).",
+    )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Enable trust_remote_code when loading HF model/tokenizer (default: disabled).",
+    )
+    parser.add_argument(
+        "--attn-implementation",
+        type=str,
+        choices=["eager", "sdpa", "flash_attention_2"],
+        default="sdpa",
+        help=(
+            "Attention implementation passed to the HF model loader (default: sdpa). "
+            "If you hit NaNs during MPS training, try --attn-implementation eager."
+        ),
     )
 
     # LoRA config
@@ -335,6 +552,18 @@ def parse_args() -> argparse.Namespace:
         help="Learning rate (default: 2e-4).",
     )
     parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.01,
+        help="Weight decay (default: 0.01).",
+    )
+    parser.add_argument(
+        "--warmup-ratio",
+        type=float,
+        default=0.1,
+        help="Warmup ratio for LR schedule (default: 0.1).",
+    )
+    parser.add_argument(
         "--max-length",
         type=int,
         default=256,
@@ -345,6 +574,79 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=100,
         help="Max epochs (will stop early if token budget exhausted).",
+    )
+    parser.add_argument(
+        "--engine",
+        type=str,
+        choices=["auto", "trainer", "manual"],
+        default="auto",
+        help=(
+            "Training engine. 'manual' adds non-finite guards and frequent checkpointing; "
+            "'trainer' uses HF Trainer. 'auto' selects manual on MPS (default)."
+        ),
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=0.3,
+        help="Gradient clipping max norm (default: 0.3).",
+    )
+    parser.add_argument(
+        "--adam-epsilon",
+        type=float,
+        default=1e-6,
+        help="AdamW epsilon for numerical stability (default: 1e-6).",
+    )
+    parser.add_argument(
+        "--lr-scheduler-type",
+        type=str,
+        default="cosine",
+        choices=["linear", "cosine", "constant", "constant_with_warmup"],
+        help="LR scheduler (default: cosine).",
+    )
+    parser.add_argument(
+        "--log-every-steps",
+        type=int,
+        default=20,
+        help="Log progress every N steps (default: 20).",
+    )
+    parser.add_argument(
+        "--save-every-steps",
+        type=int,
+        default=200,
+        help="Save a resumable training checkpoint every N steps (manual engine only; default: 200).",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume manual training from output/sft_train_state.pt if present.",
+    )
+    parser.add_argument(
+        "--max-consecutive-nonfinite",
+        type=int,
+        default=5,
+        help="Stop training after this many consecutive non-finite steps (default: 5).",
+    )
+    parser.add_argument(
+        "--max-nonfinite-restarts",
+        type=int,
+        default=3,
+        help=(
+            "Maximum automatic recoveries after repeated non-finite steps. "
+            "A recovery restores last-good weights, clears optimizer state, and reduces LR (default: 3)."
+        ),
+    )
+    parser.add_argument(
+        "--nonfinite-lr-reduce-factor",
+        type=float,
+        default=0.5,
+        help="On non-finite recovery, multiply LR by this factor (default: 0.5).",
+    )
+    parser.add_argument(
+        "--nonfinite-lr-min",
+        type=float,
+        default=1e-6,
+        help="Minimum LR after non-finite recoveries (default: 1e-6).",
     )
 
     # Output
@@ -369,23 +671,519 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed.",
     )
+    parser.add_argument(
+        "--optim",
+        type=str,
+        choices=["adamw_torch", "adamw_torch_fused"],
+        default="adamw_torch",
+        help=(
+            "Optimizer implementation (default: adamw_torch). "
+            "On MPS, the fused variant can be unstable for some models."
+        ),
+    )
 
     return parser.parse_args()
+
+
+def _resolve_device(device: str) -> torch.device:
+    if device == "auto":
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("cpu")
+    return torch.device(device)
+
+
+def _count_nonpad_tokens(batch: dict[str, torch.Tensor], *, pad_token_id: int) -> int:
+    if "attention_mask" in batch:
+        return int(batch["attention_mask"].sum().item())
+    if "input_ids" in batch:
+        return int((batch["input_ids"] != int(pad_token_id)).sum().item())
+    return 0
+
+
+def _estimate_forward_flops(tokens: int, *, hidden_size: int) -> float:
+    return float(int(tokens) * int(hidden_size) * 2)
+
+
+def _mean_tokens_per_example(dataset: Dataset) -> float | None:
+    try:
+        masks = dataset["attention_mask"]
+    except Exception:
+        return None
+    if not masks:
+        return None
+    total = 0
+    for mask in masks:
+        total += int(sum(mask))
+    return float(total) / float(len(masks))
+
+
+def _scheduler_steps_for_budget(
+    *,
+    dataset: Dataset,
+    budget: SFTBudget,
+    batch_size: int,
+    epochs: int,
+    hidden_size: int,
+    warmup_ratio: float,
+) -> tuple[int, int, dict[str, object]]:
+    steps_per_epoch = max(1, math.ceil(len(dataset) / int(batch_size)))
+    default_max_steps = steps_per_epoch * int(epochs)
+    scheduler_max_steps = default_max_steps
+
+    details: dict[str, object] = {
+        "steps_per_epoch": steps_per_epoch,
+        "default_max_steps": default_max_steps,
+    }
+
+    token_budget: int | None = None
+    if budget.kind == "tokens":
+        token_budget = int(budget.value)
+        details["token_budget"] = token_budget
+    elif budget.kind == "forward_flops":
+        denom = float(int(hidden_size) * 2)
+        token_budget = int(float(budget.value) / denom) if denom > 0 else None
+        details["token_budget_from_flops"] = token_budget
+
+    if token_budget is not None and token_budget > 0:
+        mean_tokens = _mean_tokens_per_example(dataset)
+        if mean_tokens is not None and mean_tokens > 0:
+            tokens_per_step = mean_tokens * float(batch_size)
+            estimated_steps = int(math.ceil(float(token_budget) / tokens_per_step))
+            scheduler_max_steps = max(1, min(default_max_steps, estimated_steps))
+            details["mean_tokens_per_example"] = mean_tokens
+            details["estimated_steps_to_budget"] = estimated_steps
+            details["tokens_per_step_estimate"] = tokens_per_step
+
+    warmup_steps = int(float(scheduler_max_steps) * float(warmup_ratio))
+    warmup_steps = max(0, min(warmup_steps, scheduler_max_steps))
+    details["scheduler_max_steps"] = scheduler_max_steps
+    details["warmup_steps"] = warmup_steps
+    return scheduler_max_steps, warmup_steps, details
+
+
+def _atomic_torch_save(obj: object, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(obj, tmp)
+    tmp.replace(path)
+
+
+def _snapshot_trainable_params(model) -> dict[str, torch.Tensor]:
+    state: dict[str, torch.Tensor] = {}
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            state[name] = param.detach().cpu().contiguous()
+    return state
+
+
+def _restore_trainable_params(model, state: dict[str, torch.Tensor], device: torch.device) -> None:
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            tensor = state.get(name)
+            if tensor is None or tensor.shape != param.shape:
+                continue
+            param.copy_(tensor.to(device=device, dtype=param.dtype))
+
+
+def train_manual(
+    *,
+    model,
+    tokenizer,
+    dataset: Dataset,
+    data_collator,
+    budget: SFTBudget,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> dict[str, object]:
+    """Manual training loop with non-finite guards and resumable checkpoints."""
+    from transformers.optimization import get_scheduler
+
+    model.to(device)
+    model.train()
+    try:
+        model.config.use_cache = False
+    except Exception:
+        pass
+
+    hidden_size = int(getattr(model.config, "hidden_size", 0) or 0)
+    if hidden_size <= 0:
+        raise ValueError("Could not infer model hidden_size for flops accounting")
+
+    # Deterministic dataset order across restarts: shuffle once, then iterate sequentially.
+    dataset = dataset.shuffle(seed=int(args.seed))
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if not trainable_params:
+        raise RuntimeError("No trainable parameters found; LoRA did not attach correctly")
+
+    use_fused = args.optim == "adamw_torch_fused"
+    optimizer_kwargs: dict[str, object] = {
+        "lr": float(args.learning_rate),
+        "betas": (0.9, 0.999),
+        "eps": float(args.adam_epsilon),
+        "weight_decay": float(args.weight_decay),
+    }
+    try:
+        optimizer = torch.optim.AdamW(trainable_params, fused=use_fused, **optimizer_kwargs)  # type: ignore[arg-type]
+    except TypeError:
+        optimizer = torch.optim.AdamW(trainable_params, **optimizer_kwargs)  # type: ignore[arg-type]
+
+    max_steps, warmup_steps, scheduler_details = _scheduler_steps_for_budget(
+        dataset=dataset,
+        budget=budget,
+        batch_size=int(args.batch_size),
+        epochs=int(args.epochs),
+        hidden_size=hidden_size,
+        warmup_ratio=float(args.warmup_ratio),
+    )
+    print(
+        "[sft] LR schedule: "
+        f"max_steps={max_steps:,} warmup_steps={warmup_steps:,} "
+        f"(budget_kind={budget.kind})"
+    )
+    scheduler = get_scheduler(
+        args.lr_scheduler_type,
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=max_steps,
+    )
+
+    train_loader = DataLoader(
+        dataset,
+        batch_size=int(args.batch_size),
+        shuffle=False,
+        collate_fn=data_collator,
+    )
+
+    # Progress / resume state
+    global_step = 0
+    epoch = 0
+    step_in_epoch = 0
+    tokens_processed = 0
+    forward_flops_processed = 0.0
+    elapsed_prior = 0.0
+    nonfinite_events = 0
+    consecutive_nonfinite = 0
+    nonfinite_restarts = 0
+    stop_reason = "max_epochs"
+    last_good = _snapshot_trainable_params(model)
+
+    ckpt_path = args.output / "sft_train_state.pt"
+    if bool(args.resume) and ckpt_path.exists():
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        global_step = int(ckpt.get("global_step", 0) or 0)
+        epoch = int(ckpt.get("epoch", 0) or 0)
+        step_in_epoch = int(ckpt.get("step_in_epoch", 0) or 0)
+        tokens_processed = int(ckpt.get("tokens_processed", 0) or 0)
+        forward_flops_processed = float(ckpt.get("forward_flops_processed", 0.0) or 0.0)
+        elapsed_prior = float(ckpt.get("elapsed_seconds", 0.0) or 0.0)
+        nonfinite_restarts = int(ckpt.get("nonfinite_restarts", 0) or 0)
+
+        saved_state = ckpt.get("trainable_state")
+        if isinstance(saved_state, dict):
+            _restore_trainable_params(model, saved_state, device)
+            last_good = {k: v for k, v in saved_state.items() if isinstance(v, torch.Tensor)}
+        opt_state = ckpt.get("optimizer_state")
+        if opt_state is not None:
+            try:
+                optimizer.load_state_dict(opt_state)
+            except Exception:
+                pass
+        sched_state = ckpt.get("scheduler_state")
+        if sched_state is not None:
+            try:
+                scheduler.load_state_dict(sched_state)
+            except Exception:
+                pass
+        prev_max_steps = ckpt.get("scheduler_max_steps")
+        prev_warmup = ckpt.get("scheduler_warmup_steps")
+        if prev_max_steps is not None or prev_warmup is not None:
+            if prev_max_steps != max_steps or prev_warmup != warmup_steps:
+                print(
+                    "[sft] Warning: scheduler settings differ from checkpoint "
+                    f"(ckpt max_steps={prev_max_steps}, warmup_steps={prev_warmup}; "
+                    f"current max_steps={max_steps}, warmup_steps={warmup_steps})"
+                )
+        py_state = ckpt.get("python_random_state")
+        if py_state is not None:
+            try:
+                random.setstate(py_state)
+            except Exception:
+                pass
+        torch_state = ckpt.get("torch_rng_state")
+        if isinstance(torch_state, torch.Tensor):
+            try:
+                torch.set_rng_state(torch_state)
+            except Exception:
+                pass
+
+        print(
+            "[sft] Resumed from checkpoint: "
+            f"epoch={epoch} step_in_epoch={step_in_epoch} global_step={global_step} "
+            f"tokens={tokens_processed:,} forward_flops={forward_flops_processed:,.0f} "
+            f"nonfinite_restarts={nonfinite_restarts}"
+        )
+
+    start_time = time.perf_counter() - elapsed_prior
+
+    def _scale_lr(factor: float) -> float:
+        min_lr = float(args.nonfinite_lr_min)
+        new_lrs: list[float] = []
+        for group in optimizer.param_groups:
+            current = float(group.get("lr", 0.0))
+            updated = max(min_lr, current * float(factor))
+            group["lr"] = updated
+            new_lrs.append(updated)
+        if hasattr(scheduler, "base_lrs"):
+            try:
+                scheduler.base_lrs = list(new_lrs)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        return float(new_lrs[0]) if new_lrs else 0.0
+
+    def _recover(reason: str) -> bool:
+        nonlocal consecutive_nonfinite, nonfinite_restarts, stop_reason
+        if nonfinite_restarts >= int(args.max_nonfinite_restarts):
+            stop_reason = reason
+            return False
+        nonfinite_restarts += 1
+        _restore_trainable_params(model, last_good, device)
+        try:
+            optimizer.state.clear()
+        except Exception:
+            pass
+        new_lr = _scale_lr(float(args.nonfinite_lr_reduce_factor))
+        consecutive_nonfinite = 0
+        print(
+            f"[sft] nonfinite_recovery={nonfinite_restarts}/{int(args.max_nonfinite_restarts)} "
+            f"reason={reason} new_lr={new_lr:.3g}"
+        )
+        return True
+
+    try:
+        for epoch_idx in range(epoch, int(args.epochs)):
+            epoch = epoch_idx
+            step_in_epoch_local = 0
+            loader_iter = iter(train_loader)
+            if epoch_idx == epoch and step_in_epoch > 0:
+                for _ in range(step_in_epoch):
+                    next(loader_iter, None)
+                step_in_epoch_local = step_in_epoch
+            for batch in loader_iter:
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+                elif device.type == "mps":
+                    torch.mps.synchronize()
+                wall = time.perf_counter() - start_time
+                if budget.exhausted(
+                    tokens=tokens_processed,
+                    forward_flops=forward_flops_processed,
+                    wall_clock_seconds=wall,
+                ):
+                    stop_reason = "budget_exhausted"
+                    break
+
+                global_step += 1
+                step_in_epoch_local += 1
+                step_in_epoch = step_in_epoch_local
+
+                batch = {k: v.to(device) for k, v in batch.items()}
+                batch_tokens = _count_nonpad_tokens(batch, pad_token_id=int(tokenizer.pad_token_id))
+                tokens_processed += batch_tokens
+                forward_flops_processed += _estimate_forward_flops(
+                    batch_tokens, hidden_size=hidden_size
+                )
+
+                optimizer.zero_grad(set_to_none=True)
+                outputs = model(**batch)
+                loss = outputs.loss
+                if loss is None or not torch.isfinite(loss).all():
+                    nonfinite_events += 1
+                    consecutive_nonfinite += 1
+                    if consecutive_nonfinite >= int(args.max_consecutive_nonfinite):
+                        if not _recover("nonfinite_loss"):
+                            break
+                    continue
+
+                loss.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    trainable_params, float(args.max_grad_norm)
+                )
+                if not math.isfinite(float(grad_norm)):
+                    nonfinite_events += 1
+                    consecutive_nonfinite += 1
+                    if consecutive_nonfinite >= int(args.max_consecutive_nonfinite):
+                        if not _recover("nonfinite_grad"):
+                            break
+                    continue
+
+                optimizer.step()
+                scheduler.step()
+                consecutive_nonfinite = 0
+
+                # Guard against parameters becoming NaN/Inf; restore last-good snapshot.
+                params_ok = True
+                for p in trainable_params:
+                    if not torch.isfinite(p).all():
+                        params_ok = False
+                        break
+                if not params_ok:
+                    nonfinite_events += 1
+                    consecutive_nonfinite += 1
+                    # Parameter corruption is severe: restore immediately (and count as a recovery).
+                    if not _recover("nonfinite_params"):
+                        break
+                    continue
+
+                last_good = _snapshot_trainable_params(model)
+
+                if int(args.log_every_steps) > 0 and global_step % int(args.log_every_steps) == 0:
+                    lr = float(optimizer.param_groups[0].get("lr", 0.0))
+                    print(
+                        f"[sft] step={global_step} epoch={epoch_idx} "
+                        f"loss={float(loss.detach().item()):.4f} grad_norm={float(grad_norm):.4f} "
+                        f"lr={lr:.3g} tokens={tokens_processed:,} flops={forward_flops_processed:,.0f}"
+                    )
+
+                if int(args.save_every_steps) > 0 and global_step % int(args.save_every_steps) == 0:
+                    wall = time.perf_counter() - start_time
+                    _atomic_torch_save(
+                        {
+                            "global_step": global_step,
+                            "epoch": epoch_idx,
+                            "step_in_epoch": step_in_epoch_local,
+                            "tokens_processed": tokens_processed,
+                            "forward_flops_processed": forward_flops_processed,
+                            "elapsed_seconds": wall,
+                            "trainable_state": last_good,
+                            "nonfinite_restarts": nonfinite_restarts,
+                            "optimizer_state": optimizer.state_dict(),
+                            "scheduler_state": scheduler.state_dict(),
+                            "scheduler_max_steps": max_steps,
+                            "scheduler_warmup_steps": warmup_steps,
+                            "scheduler_details": scheduler_details,
+                            "python_random_state": random.getstate(),
+                            "torch_rng_state": torch.get_rng_state(),
+                        },
+                        ckpt_path,
+                    )
+
+            if stop_reason != "max_epochs":
+                break
+            step_in_epoch = 0
+    except KeyboardInterrupt:
+        stop_reason = "keyboard_interrupt"
+        print("[sft] Interrupted; saving resumable checkpoint", flush=True)
+    finally:
+        wall = time.perf_counter() - start_time
+        # Always save a final resumable checkpoint (cheap for LoRA).
+        _atomic_torch_save(
+            {
+                "global_step": global_step,
+                "epoch": epoch,
+                "step_in_epoch": step_in_epoch,
+                "tokens_processed": tokens_processed,
+                "forward_flops_processed": forward_flops_processed,
+                "elapsed_seconds": wall,
+                "trainable_state": last_good,
+                "nonfinite_restarts": nonfinite_restarts,
+                "optimizer_state": optimizer.state_dict(),
+                "scheduler_state": scheduler.state_dict(),
+                "scheduler_max_steps": max_steps,
+                "scheduler_warmup_steps": warmup_steps,
+                "scheduler_details": scheduler_details,
+                "python_random_state": random.getstate(),
+                "torch_rng_state": torch.get_rng_state(),
+            },
+            ckpt_path,
+        )
+    return {
+        "stop_reason": stop_reason,
+        "global_step": global_step,
+        "epoch": epoch,
+        "tokens_processed": tokens_processed,
+        "forward_flops_processed": forward_flops_processed,
+        "wall_clock_seconds": wall,
+        "nonfinite_events": nonfinite_events,
+        "nonfinite_restarts": nonfinite_restarts,
+        "checkpoint_path": str(ckpt_path),
+        "scheduler_max_steps": max_steps,
+        "scheduler_warmup_steps": warmup_steps,
+        "scheduler_details": scheduler_details,
+    }
 
 
 def main() -> None:
     args = parse_args()
 
     # Determine token budget
+    budget_details: dict[str, object] | None = None
     if args.checkpoint:
-        token_budget = estimate_tokens_from_checkpoint(args.checkpoint)
-        print(f"[sft] Loaded token budget from checkpoint: {token_budget:,} tokens")
-    else:
-        token_budget = args.token_budget
-        print(f"[sft] Using explicit token budget: {token_budget:,} tokens")
+        budget = estimate_sft_budget_from_checkpoint(
+            args.checkpoint,
+            match_budget_field=args.match_budget_field,
+            backprop_multiplier=args.backprop_multiplier,
+        )
+        if budget.details is not None:
+            budget_details = dict(budget.details)
+        scale = float(args.budget_scale)
+        if scale <= 0:
+            raise ValueError("--budget-scale must be positive")
+        if scale != 1.0:
+            budget = SFTBudget(
+                kind=budget.kind,
+                value=float(budget.value) * scale,
+                details=budget.details,
+            )
+            if budget_details is not None:
+                budget_details["budget_scale"] = scale
 
-    if token_budget <= 0:
-        raise ValueError("Token budget must be positive")
+        if budget.kind == "tokens" and budget_details is not None:
+            print(
+                "[sft] Loaded evolution compute budget: "
+                f"{int(budget_details['evolution_tokens']):,} {budget_details['match_budget_field']} tokens"
+            )
+            print(
+                f"[sft] Backprop multiplier: {float(budget_details['backprop_multiplier']):.2f} "
+                f"→ SFT token budget: {int(budget.value):,} tokens"
+            )
+        elif budget.kind == "forward_flops" and budget_details is not None:
+            print(
+                "[sft] Loaded evolution compute budget: "
+                f"{float(budget_details['evolution_flops']):,.0f} {budget_details['match_budget_field']}"
+            )
+            print(
+                f"[sft] Backprop multiplier: {float(budget_details['backprop_multiplier']):.2f} "
+                f"→ SFT forward-flops budget: {float(budget.value):,.0f}"
+            )
+        elif budget.kind == "wall_clock_seconds" and budget_details is not None:
+            evo_seconds = float(budget_details.get("evolution_wall_clock_seconds", 0.0))
+            print(
+                f"[sft] Matching wall-clock budget: {float(budget.value):,.2f}s "
+                f"(evolution: {evo_seconds:,.2f}s)"
+            )
+    else:
+        if args.token_budget is not None:
+            budget = SFTBudget(kind="tokens", value=float(args.token_budget))
+            print(f"[sft] Using explicit token budget: {int(budget.value):,} tokens")
+        elif args.flops_budget is not None:
+            budget = SFTBudget(kind="forward_flops", value=float(args.flops_budget))
+            print(f"[sft] Using explicit forward-flops budget: {float(budget.value):,.0f}")
+        elif args.wall_clock_budget_seconds is not None:
+            budget = SFTBudget(
+                kind="wall_clock_seconds", value=float(args.wall_clock_budget_seconds)
+            )
+            print(f"[sft] Using explicit wall-clock budget: {float(budget.value):,.2f}s")
+        else:
+            raise ValueError("A budget source is required")
+
+    if budget.value <= 0:
+        raise ValueError("Budget must be positive")
 
     # Load training data
     if not args.data.exists():
@@ -399,18 +1197,21 @@ def main() -> None:
         raise ValueError("No valid training examples found")
 
     # Initialize token tracking
-    token_state = TokenBudgetState(budget=token_budget)
+    token_state = TokenBudgetState(budget=int(budget.value) if budget.kind == "tokens" else 0)
 
     # Load tokenizer and model
     print(f"[sft] Loading model: {args.model}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model, trust_remote_code=bool(args.trust_remote_code)
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         torch_dtype=torch.float32,  # Use float32 for stability on CPU/MPS
-        trust_remote_code=True,
+        trust_remote_code=bool(args.trust_remote_code),
+        attn_implementation=args.attn_implementation,
     )
 
     # Apply LoRA - same target modules as evolution
@@ -436,54 +1237,82 @@ def main() -> None:
     # Prepare dataset
     print(f"[sft] Tokenizing dataset (max_length={args.max_length})")
     dataset = prepare_dataset(raw_data, tokenizer, args.max_length, token_state)
+    try:
+        dataset = dataset.shuffle(seed=int(args.seed))
+    except Exception:
+        pass
 
-    # Data collator for causal LM
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,  # Causal LM, not masked LM
-    )
+    data_collator = SupervisedDataCollator(tokenizer)
 
     # Output directory
     args.output.mkdir(parents=True, exist_ok=True)
 
-    # Training arguments
-    training_args = TrainingArguments(
-        output_dir=str(args.output),
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        weight_decay=0.01,
-        warmup_ratio=0.1,
-        logging_steps=10,
-        save_strategy="epoch",
-        save_total_limit=2,
-        seed=args.seed,
-        report_to="none",  # Disable wandb etc.
-        remove_unused_columns=False,
-        # Disable evaluation during training
-        eval_strategy="no",
-    )
+    device = _resolve_device(args.device)
+    engine = str(args.engine)
+    if engine == "auto":
+        engine = "manual" if device.type == "mps" else "trainer"
+    if budget.kind != "tokens" and engine != "manual":
+        raise ValueError("Non-token budgets require --engine manual")
 
-    # Token budget callback
-    budget_callback = TokenBudgetCallback(token_state)
+    training_summary: dict[str, object] = {}
+    if engine == "manual":
+        print(f"[sft] Starting manual training on {device} (budget kind={budget.kind})")
+        training_summary = train_manual(
+            model=model,
+            tokenizer=tokenizer,
+            dataset=dataset,
+            data_collator=data_collator,
+            budget=budget,
+            args=args,
+            device=device,
+        )
+        token_state.total_tokens = int(training_summary.get("tokens_processed", 0) or 0)
+        print(
+            "[sft] Training complete "
+            f"(stop_reason={training_summary.get('stop_reason')}, "
+            f"tokens={token_state.total_tokens:,})"
+        )
+    else:
+        # Training arguments (HF Trainer)
+        training_args = TrainingArguments(
+            output_dir=str(args.output),
+            num_train_epochs=args.epochs,
+            per_device_train_batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            optim=args.optim,
+            weight_decay=args.weight_decay,
+            warmup_ratio=args.warmup_ratio,
+            max_grad_norm=args.max_grad_norm,
+            adam_epsilon=args.adam_epsilon,
+            lr_scheduler_type=args.lr_scheduler_type,
+            logging_steps=max(1, int(args.log_every_steps)),
+            save_strategy="epoch",
+            save_total_limit=2,
+            seed=args.seed,
+            report_to="none",  # Disable wandb etc.
+            remove_unused_columns=False,
+            # Disable evaluation during training
+            eval_strategy="no",
+        )
 
-    # Create trainer
-    trainer = TokenTrackingTrainer(
-        token_state=token_state,
-        model=model,
-        args=training_args,
-        train_dataset=dataset,
-        data_collator=data_collator,
-        callbacks=[budget_callback],
-    )
+        # Token budget callback
+        budget_callback = TokenBudgetCallback(token_state)
 
-    # Train
-    print(f"[sft] Starting training (budget: {token_budget:,} tokens)")
-    trainer.train()
+        # Create trainer
+        trainer = TokenTrackingTrainer(
+            token_state=token_state,
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            data_collator=data_collator,
+            callbacks=[budget_callback],
+        )
 
-    # Report final stats
-    print("[sft] Training complete")
-    print(f"[sft] Tokens processed: {token_state.total_tokens:,} / {token_budget:,}")
+        # Train
+        print(f"[sft] Starting Trainer training (budget: {int(budget.value):,} tokens)")
+        trainer.train()
+        print("[sft] Training complete")
+        print(f"[sft] Tokens processed: {token_state.total_tokens:,} / {int(budget.value):,}")
 
     # Export LoRA weights in safetensors format (compatible with evolution loader)
     lora_output = args.output / "lora_adapter.safetensors"
@@ -499,10 +1328,25 @@ def main() -> None:
         "model": args.model,
         "lora_rank": args.lora_rank,
         "lora_alpha": args.lora_alpha,
-        "token_budget": token_budget,
+        "budget_kind": budget.kind,
+        "budget_value": budget.value,
         "tokens_processed": token_state.total_tokens,
         "training_examples": len(raw_data),
         "source_checkpoint": str(args.checkpoint) if args.checkpoint else None,
+        "budget_details": budget_details,
+        "training_summary": training_summary,
+        "engine": engine,
+        "training_hparams": {
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
+            "warmup_ratio": args.warmup_ratio,
+            "max_length": args.max_length,
+            "max_grad_norm": args.max_grad_norm,
+            "adam_epsilon": args.adam_epsilon,
+            "lr_scheduler_type": args.lr_scheduler_type,
+            "optim": args.optim,
+        },
     }
     metadata_path = args.output / "sft_metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2))

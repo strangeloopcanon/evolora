@@ -1,22 +1,31 @@
-# Regex evolution config (EcologyConfig schema).
+# Regex generalization evo-vs-SFT config (EcologyConfig schema).
 #
-# This config is intended for the "evolution vs compute-matched SFT" regex track:
-# - Evolution run: `python scripts/run_evolution.py --config config/experiments/qwen3_regex.yaml ...`
-# - Compute-matched SFT (recommended: match evo train compute via tokens + multiplier):
-#     `python scripts/run_sft.py --checkpoint <run_dir>/checkpoint.pt --match-budget-field train_tokens --backprop-multiplier 2.0 --attn-implementation eager --engine manual --resume --data <run_dir>/datasets/sft_train.jsonl --model Qwen/Qwen2.5-0.5B ...`
-#   (Alternative: wall-clock match via `--match-budget-field wall_clock_seconds`.)
-# - Holdout eval: `python scripts/evaluate_holdout.py --holdout <run_dir>/datasets/holdout_tasks.jsonl --evo-selection-tasks <run_dir>/datasets/selection_tasks.jsonl ...`
+# This config is meant for the "regex_generalization" task mix:
+# - recognition (yes/no), synthesis, explanation (keywords), debugging, refactoring, mutation-effect.
+#
+# Runner (recommended):
+#   make regex-generalization-evo-vs-sft
+#
+# Or:
+#   scripts/run_regex_generalization_evo_vs_sft.sh --config config/experiments/qwen3_regex_generalization.yaml ...
 host:
   backbone_type: gemma
   backbone_model: Qwen/Qwen2.5-0.5B
   tokenizer: Qwen/Qwen2.5-0.5B
   device: mps
+  min_lora_rank: 4
   max_lora_rank: 8
   max_sequence_length: 256
-  gen_max_new_tokens: 64
+  gen_max_new_tokens: 96
 
 grid:
-  families: [regex]
+  families:
+    - regex.synthesis
+    - regex.recognition
+    - regex.explanation
+    - regex.debugging
+    - regex.refactoring
+    - regex.mutation_effect
   depths: [short, medium, long]
 
 controller:
@@ -33,15 +42,21 @@ pricing:
 energy:
   Emax: 5.0
   m: 1.0
-  alpha: 1.0e-14
+  # Match selection pressure to (approx) compute, not wall-clock latency (hardware-dependent).
+  alpha: 2.0e-6
   beta: 0.02
-  gamma: 0.001
-  lambda_p: 1.0e-7
+  gamma: 0.0
+  lambda_p: 5.0e-8
   bankruptcy_grace: 3
   cost_scale: 1.0
 
 canary:
   q_min: 0.95
+
+limits:
+  # For this benchmark we want capacity to come from task learning signal, not from
+  # aggressively shrinking LoRA ranks due to adapter-cap bookkeeping.
+  max_active_adapters_per_layer: 32
 
 population_strategy:
   mu: 4
@@ -56,10 +71,13 @@ evolution:
   max_population: 16
 
 assimilation_tuning:
-  per_cell_interval: 5
+  per_cell_interval: 2
   max_merges_per_cell: 1
   seed_scale: 0.5
   soup_size: 3
+  # Allow merges with limited-but-broad competence checks (global probe uses progress thresholds).
+  probe_max_other_cells: 6
+  probe_required_passes: 3
   holdout_tasks_path: config/evaluation/holdout_regex.jsonl
   holdout_sample_size: 8
   holdout_margin: 0.02
@@ -68,9 +86,6 @@ assimilation_tuning:
   permutation_samples: 100
   dr_enabled: true
   dr_min_power: 0.2
-  hf_prompts:
-    - "Summarize your solution for a non-technical reviewer."
-    - "Suggest a follow-up action we can validate manually."
 
 environment:
   synthetic_batch_size: 2
