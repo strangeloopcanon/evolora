@@ -146,6 +146,9 @@ you can switch organelles to per-organelle backprop updates:
 EVOLORA_PLASTICITY=backprop scripts/run_regex_generalization_evo_vs_sft.sh --no-sft --no-eval-id
 ```
 
+Notes:
+- `scripts/evaluate_holdout.py` can evaluate a specific organelle via `--evo-organelle-id org_...` if you want to sanity-check selection.
+
 ## macOS stability notes
 - Always set `MPLCONFIGDIR="$(mktemp -d)"` for analysis/plots.
 - If Metal/MPS memory pressure is still a problem, try `export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0` before starting a long run.

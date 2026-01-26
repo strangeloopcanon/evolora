@@ -6,6 +6,12 @@ In real evo runs, it’s possible to end up with a mixed population where many o
 their LoRA weights (effectively behaving like the base model). When evaluating “best evo organelle” via a
 separate selection/validation set, make sure selection does not accidentally choose a no-op adapter.
 
+### Empirical snapshot (single run; Qwen/Qwen2.5-0.5B)
+
+- Base OOD holdout: `2/19` on `config/evaluation/regex_generalization.jsonl`
+- Best evolved organelles (backprop plasticity, 50 generations): `5/19` (26.3%)
+- Failure mode: selection initially picked a zero-magnitude adapter and reported `2/19`; evaluation now skips no-op adapters when any non-zero adapters exist.
+
 ## Prologue: What This Is For
 
 This framework is intended to **measure the generalizability of regex-related skills** in language models, rather than raw task performance on a fixed set of examples.
