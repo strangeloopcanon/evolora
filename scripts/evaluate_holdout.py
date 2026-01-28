@@ -59,18 +59,41 @@ class EvalResult:
     correct: int = 0
     total: int = 0
     task_results: list[dict[str, Any]] = field(default_factory=list)
+    bucket_breakdown: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @property
     def accuracy(self) -> float:
         return self.correct / self.total if self.total > 0 else 0.0
 
     def summary(self) -> dict[str, Any]:
+        bucket_stats: dict[str, dict[str, float]] = {}
+        bucket_accs: list[float] = []
+        for bucket, stats in self.bucket_breakdown.items():
+            total = int(stats.get("total", 0) or 0)
+            correct = int(stats.get("correct", 0) or 0)
+            acc = float(correct / total) if total else 0.0
+            bucket_stats[bucket] = {"correct": correct, "total": total, "accuracy": acc}
+            bucket_accs.append(acc)
+        macro_acc = float(sum(bucket_accs) / len(bucket_accs)) if bucket_accs else None
+        worst_acc = float(min(bucket_accs)) if bucket_accs else None
+        gm_acc = None
+        if bucket_accs:
+            import math
+
+            eps = 1e-6
+            gm_acc = float(
+                math.exp(sum(math.log(max(a, eps)) for a in bucket_accs) / len(bucket_accs))
+            )
         return {
             "model": self.model_name,
             "correct": self.correct,
             "total": self.total,
             "accuracy": self.accuracy,
             "accuracy_pct": f"{100 * self.accuracy:.1f}%",
+            "bucket_breakdown": bucket_stats,
+            "bucket_macro_accuracy": macro_acc,
+            "bucket_worst_accuracy": worst_acc,
+            "bucket_geometric_mean_accuracy": gm_acc,
         }
 
 
@@ -103,6 +126,29 @@ def check_answer(response: str, task: dict[str, Any]) -> tuple[bool, str]:
             return bool(result.success), f"capability={regex_task.capability.value}"
         except Exception:
             # Fall back to the lightweight evaluator below.
+            pass
+
+    # GridEnvironment-style tasks: {"prompt": ..., "target": ..., "family": ..., "depth": ...}
+    if "family" in task and "target" in task:
+        try:
+            from symbiont_ecology.environment.grid import GridTask
+
+            family = str(task.get("family", "") or "")
+            depth = str(task.get("depth", "") or "short")
+            prompt = str(task.get("prompt", "") or "")
+            grid_task = GridTask(
+                task_id=str(task.get("task_id", "") or "holdout"),
+                cell=(family, depth),
+                prompt=prompt,
+                price=0.0,
+                target=task.get("target"),
+                family=family,
+                depth=depth,
+                difficulty=0.0,
+            )
+            ok, _reward = grid_task.evaluate(response)
+            return bool(ok), f"family={family}"
+        except Exception:
             pass
 
     expected = task.get("expected_answer")
@@ -188,6 +234,7 @@ def evaluate_model(
     for i, task in enumerate(eval_tasks):
         prompt = task["prompt"]
         task_id = task.get("task_id", f"task_{i}")
+        bucket = str(task.get("family") or task.get("capability") or "unknown")
 
         # Tokenize and generate
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
@@ -210,9 +257,14 @@ def evaluate_model(
         if is_correct:
             result.correct += 1
         result.total += 1
+        bucket_stats = result.bucket_breakdown.setdefault(bucket, {"correct": 0, "total": 0})
+        bucket_stats["total"] += 1
+        if is_correct:
+            bucket_stats["correct"] += 1
 
         task_result = {
             "task_id": task_id,
+            "bucket": bucket,
             "correct": is_correct,
             "reason": reason,
             "response_preview": response[:100],
@@ -427,7 +479,11 @@ def _evaluate_selection_tasks(
     # on one axis (e.g., synthesis-only).
     major_caps = ["recognition", "synthesis", "explanation", "debugging", "refactoring"]
     cap_accs: list[float] = []
-    for c in major_caps:
+    if any(c in by_capability for c in major_caps):
+        caps = [c for c in major_caps if by_capability.get(c, {}).get("total")]
+    else:
+        caps = [k for k, v in sorted(by_capability.items()) if v.get("total")]
+    for c in caps:
         stats = by_capability.get(c)
         if not stats or not stats.get("total"):
             continue

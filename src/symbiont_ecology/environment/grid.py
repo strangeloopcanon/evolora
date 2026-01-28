@@ -98,9 +98,31 @@ class GridTask:
             task_reward = 1.0 if success else 0.0
 
         elif self.family == "string.sort":
-            expected = "".join(sorted(str(self.target)))
-            success = expected in clean.replace(" ", "")
-            task_reward = 1.0 if success else 0.0
+            if isinstance(self.target, list):
+                # Accept a JSON array of sorted items (e.g., ["alpha","bravo",...]).
+                parsed_ok = False
+                try:
+                    parsed = json.loads(clean)
+                    parsed_ok = isinstance(parsed, list)
+                    success = parsed_ok and parsed == self.target
+                except json.JSONDecodeError:
+                    success = False
+                if not success:
+                    try:
+                        start = clean.find("[")
+                        end = clean.rfind("]")
+                        if start != -1 and end != -1 and end > start:
+                            candidate = clean[start : end + 1]
+                            parsed = json.loads(candidate)
+                            parsed_ok = isinstance(parsed, list)
+                            success = parsed_ok and parsed == self.target
+                    except Exception:
+                        success = False
+                task_reward = 1.0 if success else 0.0
+            else:
+                expected = "".join(sorted(str(self.target)))
+                success = expected in clean.replace(" ", "")
+                task_reward = 1.0 if success else 0.0
 
         elif self.family == "word.count":
             # Try digits first, then spelled numbers (zero..twenty)
@@ -346,6 +368,49 @@ class GridTask:
         """Return a canonical supervised target string for this task (if available)."""
         family = str(self.family)
         target = self.target
+
+        if family in {"math", "math.sequence", "math.multi_step"}:
+            try:
+                value = float(target)
+            except Exception:
+                return None
+            if not math.isfinite(value):
+                return None
+            if float(value).is_integer():
+                return str(int(value))
+            return str(value)
+
+        if family == "string.sort":
+            if isinstance(target, list):
+                try:
+                    return json.dumps(target, ensure_ascii=False)
+                except Exception:
+                    return None
+            value = str(target).strip()
+            return "".join(sorted(value)) if value else None
+
+        if family == "word.count":
+            try:
+                return str(int(target))
+            except Exception:
+                return None
+
+        if family == "json_repair":
+            if not isinstance(target, list):
+                return None
+            try:
+                return json.dumps(target, ensure_ascii=False)
+            except Exception:
+                return None
+
+        if family == "logic.bool":
+            if isinstance(target, bool):
+                return "True" if target else "False"
+            return None
+
+        if family == "code.format":
+            value = str(target).strip()
+            return value or None
 
         if family in {"regex", "regex.synthesis", "regex.debugging", "regex.refactoring"}:
             if isinstance(target, dict):

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import os
 import pickle
 import random
@@ -31,7 +30,7 @@ from symbiont_ecology import (
     load_ecology_config,
 )
 from symbiont_ecology.economics.api import compute_route_cost
-from symbiont_ecology.environment.grid import GridEnvironment
+from symbiont_ecology.environment.grid import GridEnvironment, GridTask
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.population import Genome
 from symbiont_ecology.metrics.telemetry import ComputeBudget
@@ -153,41 +152,41 @@ def _normalize_code_answer(answer: str, *, multiline: bool) -> str:
 
 def _holdout_success(family: str, target: Any, answer: str) -> bool:
     family = str(family)
-    if family in {"math", "math.sequence", "math.multi_step"}:
-        predicted = _parse_last_number(answer)
-        if predicted is None:
-            return False
-        try:
-            expected = float(target)
-        except Exception:
-            return False
-        return math.isclose(predicted, expected, rel_tol=1e-3)
-    if family == "word.count":
-        predicted = _parse_last_int(answer)
-        if predicted is None:
-            tokens = answer.strip().lower().split()
-            for tok in tokens[::-1]:
-                if tok in _WORD_TO_INT:
-                    predicted = _WORD_TO_INT[tok]
-                    break
-        if predicted is None:
-            return False
-        try:
-            expected = int(target)
-        except Exception:
-            return False
-        return predicted == expected
-    if family == "code.format":
-        expected_raw = str(target).strip()
-        if "\n" in expected_raw:
-            normalized = _normalize_code_answer(answer, multiline=True)
-            expected_lines = [line.rstrip() for line in expected_raw.splitlines()]
-            expected = "\n".join(expected_lines).strip()
-            return normalized == expected
-        normalized = _normalize_code_answer(answer, multiline=False)
-        expected = expected_raw.strip().strip("'\"")
-        return normalized == expected
-    return answer.strip() == str(target).strip()
+    known_families = {
+        "math",
+        "math.sequence",
+        "math.multi_step",
+        "string.sort",
+        "word.count",
+        "json_repair",
+        "logic.bool",
+        "code.format",
+        "regex",
+        "regex.synthesis",
+        "regex.debugging",
+        "regex.refactoring",
+        "regex.recognition",
+        "regex.explanation",
+        "regex.mutation_effect",
+    }
+    if family not in known_families:
+        return answer.strip() == str(target).strip()
+
+    try:
+        task = GridTask(
+            task_id="holdout",
+            cell=(family, "short"),
+            prompt="",
+            price=0.0,
+            target=target,
+            family=family,
+            depth="short",
+            difficulty=0.0,
+        )
+        success, _reward = task.evaluate(answer)
+        return bool(success)
+    except Exception:
+        return False
 
 
 def _select_best_organelle_for_cell(
