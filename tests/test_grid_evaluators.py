@@ -104,3 +104,72 @@ def test_code_format_equivalence():
     assert ok is True
     ok_code_block, _ = task.evaluate("```adaptive_signal_flow```")
     assert ok_code_block is True
+
+
+def test_string_sort_accepts_json_array_targets():
+    task = GridTask(
+        task_id="s1",
+        cell=("string.sort", "short"),
+        prompt="Sort list",
+        price=1.0,
+        target=["alpha", "bravo"],
+        family="string.sort",
+        depth="short",
+        difficulty=0.3,
+    )
+    ok, _ = task.evaluate('["alpha", "bravo"]')
+    assert ok is True
+    ok_py_list, _ = task.evaluate("['alpha', 'bravo']")
+    assert ok_py_list is False
+
+
+def test_supervised_completion_supports_multiobjective_families():
+    import json
+
+    math_task = GridTask(
+        task_id="sc_math",
+        cell=("math", "short"),
+        prompt="Add",
+        price=1.0,
+        target=12.0,
+        family="math",
+        depth="short",
+        difficulty=0.1,
+    )
+    assert math_task.supervised_completion() == "12"
+
+    json_task = GridTask(
+        task_id="sc_json",
+        cell=("json_repair", "short"),
+        prompt="JSON",
+        price=1.0,
+        target=[1, 2, 3],
+        family="json_repair",
+        depth="short",
+        difficulty=0.1,
+    )
+    assert json_task.supervised_completion() == json.dumps([1, 2, 3], ensure_ascii=False)
+
+    bool_task = GridTask(
+        task_id="sc_bool",
+        cell=("logic.bool", "short"),
+        prompt="Bool",
+        price=1.0,
+        target=True,
+        family="logic.bool",
+        depth="short",
+        difficulty=0.1,
+    )
+    assert bool_task.supervised_completion() == "True"
+
+    sort_task = GridTask(
+        task_id="sc_sort",
+        cell=("string.sort", "short"),
+        prompt="Sort letters",
+        price=1.0,
+        target="cba",
+        family="string.sort",
+        depth="short",
+        difficulty=0.1,
+    )
+    assert sort_task.supervised_completion() == "abc"
