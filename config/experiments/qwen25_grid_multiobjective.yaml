@@ -1,0 +1,107 @@
+# Multi-objective grid mix for testing "portfolio routing" advantages.
+#
+# Intended workflow:
+#  1) Generate datasets (train/selection/holdout) from this config:
+#       python scripts/generate_grid_datasets.py --config config/experiments/qwen25_grid_multiobjective.yaml --out-dir <run>/datasets
+#  2) Run evolution with backprop plasticity:
+#       EVOLORA_PLASTICITY=backprop ./scripts/run_calibration_then_resume.sh --config config/experiments/qwen25_grid_multiobjective.yaml --output <run> ...
+#  3) Compute-matched SFT from the evo checkpoint:
+#       python scripts/run_sft.py --checkpoint <run>/checkpoint.pt --data <run>/datasets/sft_train.jsonl --model <same> --output <run>/sft
+#  4) Evaluate base vs SFT vs evo (single or routed portfolio):
+#       python scripts/evaluate_holdout.py --holdout <run>/datasets/holdout_tasks.jsonl --sft-adapter <run>/sft/peft_adapter --evo-checkpoint <run>/checkpoint.pt --evo-selection-tasks <run>/datasets/selection_tasks.jsonl --evo-selection-family any --evo-eval-routing family
+#
+# See: scripts/run_grid_multiobjective_evo_vs_sft.sh
+
+host:
+  backbone_type: gemma
+  backbone_model: Qwen/Qwen2.5-0.5B
+  tokenizer: Qwen/Qwen2.5-0.5B
+  device: mps
+  min_lora_rank: 4
+  max_lora_rank: 8
+  max_sequence_length: 256
+  gen_max_new_tokens: 96
+
+grid:
+  families:
+    - math.multi_step
+    - json_repair
+    - code.format
+    - logic.bool
+    - string.sort
+    - regex.synthesis
+  depths: [short, medium, long]
+
+controller:
+  tau: 0.5
+  beta: 0.2
+  eta: 0.5
+
+pricing:
+  base: 1.0
+  k: 1.5
+  min: 0.3
+  max: 2.0
+
+energy:
+  Emax: 5.0
+  m: 1.0
+  # Penalize compute (FLOPs proxy) rather than wall-clock (hardware-dependent).
+  alpha: 2.0e-6
+  beta: 0.02
+  gamma: 0.0
+  lambda_p: 5.0e-8
+  bankruptcy_grace: 3
+  cost_scale: 1.0
+
+canary:
+  q_min: 0.95
+
+limits:
+  # Keep adapter-cap bookkeeping from forcing morphogenesis down too aggressively.
+  max_active_adapters_per_layer: 32
+
+population_strategy:
+  mu: 4
+  lambda: 12
+  max_population: 16
+  initial_orgs: 4
+
+evolution:
+  mutation_rate: 0.05
+  max_merges_per_gen: 3
+  min_population: 4
+  max_population: 16
+
+assimilation_tuning:
+  per_cell_interval: 2
+  max_merges_per_cell: 1
+  seed_scale: 0.5
+  soup_size: 3
+  probe_max_other_cells: 6
+  probe_required_passes: 3
+  holdout_tasks_path: config/evaluation/holdout_grid_multiobjective.jsonl
+  holdout_sample_size: 12
+  holdout_margin: 0.02
+  bootstrap_uplift_enabled: false
+  bootstrap_samples: 100
+  permutation_samples: 100
+  dr_enabled: true
+  dr_min_power: 0.2
+
+environment:
+  synthetic_batch_size: 2
+  max_episode_steps: 128
+  energy_budget: 50.0
+
+human_bandit:
+  enabled: false
+
+evaluation:
+  enabled: false
+
+comms:
+  enabled: false
+
+policy:
+  enabled: false

@@ -137,3 +137,53 @@ REGEX_GEN_DEVICE ?=
 REGEX_GEN_BATCH_SIZE ?=
 REGEX_GEN_DISABLE_HUMAN ?= 1
 REGEX_GEN_EVAL_MAX_SAMPLES ?=
+
+.PHONY: grid-multiobjective-evo-vs-sft
+grid-multiobjective-evo-vs-sft: setup
+	./scripts/run_grid_multiobjective_evo_vs_sft.sh \
+	  --config $(GRID_MO_CONFIG) \
+	  --output $(GRID_MO_OUTPUT) \
+	  --calib-gens $(GRID_MO_CALIB_GENS) \
+	  --full-gens $(GRID_MO_FULL_GENS) \
+	  --checkpoint-every $(GRID_MO_CHECKPOINT_EVERY) \
+	  --seed $(GRID_MO_SEED) \
+	  $(if $(GRID_MO_DEVICE),--device $(GRID_MO_DEVICE),) \
+	  $(if $(GRID_MO_BATCH_SIZE),--batch-size $(GRID_MO_BATCH_SIZE),) \
+	  $(if $(GRID_MO_DISABLE_HUMAN),--disable-human,) \
+	  $(if $(GRID_MO_EVO_EVAL_ROUTING),--evo-eval-routing $(GRID_MO_EVO_EVAL_ROUTING),)
+
+GRID_MO_CONFIG ?= config/experiments/qwen25_grid_multiobjective.yaml
+GRID_MO_OUTPUT ?= artifacts_grid_multiobj_evo_sft_$(shell date +%Y%m%d_%H%M%S)
+GRID_MO_CALIB_GENS ?= 5
+GRID_MO_FULL_GENS ?= 50
+GRID_MO_CHECKPOINT_EVERY ?= 5
+GRID_MO_SEED ?= 777
+GRID_MO_DEVICE ?=
+GRID_MO_BATCH_SIZE ?=
+GRID_MO_DISABLE_HUMAN ?= 1
+GRID_MO_EVO_EVAL_ROUTING ?= family
+
+.PHONY: grid-multiobjective-full-ecology-evo-vs-sft
+grid-multiobjective-full-ecology-evo-vs-sft: setup
+	./scripts/run_grid_multiobjective_evo_vs_sft.sh \
+	  --config $(GRID_MO_FULL_ECOLOGY_CONFIG) \
+	  --output $(GRID_MO_FULL_ECOLOGY_OUTPUT) \
+	  --calib-gens $(GRID_MO_FULL_ECOLOGY_CALIB_GENS) \
+	  --full-gens $(GRID_MO_FULL_ECOLOGY_FULL_GENS) \
+	  --checkpoint-every $(GRID_MO_FULL_ECOLOGY_CHECKPOINT_EVERY) \
+	  --seed $(GRID_MO_FULL_ECOLOGY_SEED) \
+	  $(if $(GRID_MO_FULL_ECOLOGY_DEVICE),--device $(GRID_MO_FULL_ECOLOGY_DEVICE),) \
+	  $(if $(GRID_MO_FULL_ECOLOGY_BATCH_SIZE),--batch-size $(GRID_MO_FULL_ECOLOGY_BATCH_SIZE),) \
+	  $(if $(GRID_MO_FULL_ECOLOGY_DISABLE_HUMAN),--disable-human,) \
+	  $(if $(GRID_MO_FULL_ECOLOGY_EVO_EVAL_ROUTING),--evo-eval-routing $(GRID_MO_FULL_ECOLOGY_EVO_EVAL_ROUTING),)
+
+GRID_MO_FULL_ECOLOGY_CONFIG ?= config/experiments/qwen25_grid_multiobjective_full_ecology.yaml
+GRID_MO_FULL_ECOLOGY_OUTPUT ?= artifacts_grid_multiobj_full_ecology_evo_sft_$(shell date +%Y%m%d_%H%M%S)
+GRID_MO_FULL_ECOLOGY_CALIB_GENS ?= 5
+GRID_MO_FULL_ECOLOGY_FULL_GENS ?= 50
+GRID_MO_FULL_ECOLOGY_CHECKPOINT_EVERY ?= 5
+GRID_MO_FULL_ECOLOGY_SEED ?= 777
+GRID_MO_FULL_ECOLOGY_DEVICE ?=
+GRID_MO_FULL_ECOLOGY_BATCH_SIZE ?=
+GRID_MO_FULL_ECOLOGY_DISABLE_HUMAN ?= 1
+GRID_MO_FULL_ECOLOGY_EVO_EVAL_ROUTING ?= family
