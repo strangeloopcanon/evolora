@@ -38,7 +38,7 @@ Three things are being optimised simultaneously:
 
 ### Three Levels of Learning
 
-1. **Local plasticity** — Hebbian reward-modulated updates within each organelle (per episode)
+1. **Local plasticity** — reward-modulated local updates within each organelle (Hebbian or backprop; per episode)
 2. **Population selection** — assimilation + merging of successful adapters (per generation)
 3. **Meta-evolution** — tuning ecology parameters (assimilation threshold, energy floor, etc.)
 
@@ -65,10 +65,11 @@ See `docs/paper_packs/` for detailed run reports and plots.
 So far, the pattern looks like this:
 
 - **SFT wins on specialization**: on in-distribution tasks, compute-matched SFT (matched on training FLOPs) is usually the strongest baseline.
-- **Evolution can win on robustness**: on a family shift, a routed portfolio of evolved specialists can beat SFT, seemingly by avoiding negative transfer.
+- **Evolution can win on robustness**: on a family shift, a routed portfolio of evolved specialists can beat SFT—sometimes by retaining a capability that a single adapter loses (e.g., `word.count`).
 
 - **ID (6-family grid mix; Qwen/Qwen2.5-0.5B)**: base **70/512 (13.7%)**, SFT **318/512 (62.1%)**, evo (routed) **157/512 (30.7%)**
-- **OOD (unseen task-family holdout; math + word.count + code.format)**: base **5/120 (4.2%)**, SFT **54/120 (45.0%)**, evo (routed) **68/120 (56.7%)**
+- **OOD (paper holdout; math + word.count + code.format)**: base **5/120 (4.2%)**, SFT **54/120 (45.0%)**, evo (routed) **68/120 (56.7%)**
+  - Best single evolved organelle: **58/120 (48.3%)**; routing + OOD reselection: **68/120 (56.7%)**
   - Most striking detail: SFT collapsed on `word.count` (**1/40**) while evo stayed closer to base (**7/40**).
 
 <details>
@@ -77,6 +78,12 @@ So far, the pattern looks like this:
 ```bash
 # Example: evaluate an existing grid run on the paper holdout (OOD family shift).
 # IMPORTANT: selection tasks must be different from the holdout to avoid leakage.
+# Note: this particular holdout includes two families not present in the 6-family training mix (`math`, `word.count`)
+# plus one overlapping family (`code.format`) with a shifted distribution.
+#
+# Fairness note: "routed + reselection" uses a small selection set to pick specialists (extra eval-time compute).
+# If you want a strict single-pass comparison, use a single selected organelle (`--evo-eval-routing single`)
+# or reuse an existing routing map.
 
 python scripts/generate_grid_datasets.py \
   --config config/experiments/paper_qwen3_ecology.yaml \
