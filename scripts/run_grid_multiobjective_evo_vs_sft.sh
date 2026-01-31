@@ -224,6 +224,33 @@ except Exception:
 PY
 }
 
+budget_field_is_positive() {
+  local checkpoint_path="$1"
+  local field="$2"
+  if ! [ -f "$checkpoint_path" ]; then
+    return 1
+  fi
+  "$PY" - <<'PY' "$checkpoint_path" "$field"
+import pickle
+import sys
+from pathlib import Path
+
+checkpoint_path = Path(sys.argv[1])
+field = str(sys.argv[2])
+try:
+    state = pickle.loads(checkpoint_path.read_bytes())
+    budget = state.get("compute_budget") or {}
+    value = budget.get(field, 0.0) or 0.0
+    try:
+        value = float(value)
+    except Exception:
+        value = 0.0
+    sys.exit(0 if value > 0.0 else 1)
+except Exception:
+    sys.exit(1)
+PY
+}
+
 EXTRA_EVO_ARGS=()
 if [ -n "$DEVICE" ]; then
   EXTRA_EVO_ARGS+=(--device "$DEVICE")
@@ -310,16 +337,20 @@ if [ "$GEN_DONE" -lt "$FULL_GENS" ]; then
 fi
 
 if [ "$RUN_SFT" -eq 1 ]; then
-  echo "[sft] compute-matched baseline from $CHECKPOINT"
-  AGENT_MODE=baseline "$PY" scripts/run_sft.py \
-    --checkpoint "$CHECKPOINT" \
-    --match-budget-field "$SFT_MATCH_BUDGET_FIELD" \
-    --backprop-multiplier "$BACKPROP_MULTIPLIER" \
-    --data "$SFT_DATA" \
-    --model "$MODEL" \
-    --lora-rank 8 \
-    --output "$OUTPUT/sft" \
-    --resume
+  if budget_field_is_positive "$CHECKPOINT" "$SFT_MATCH_BUDGET_FIELD"; then
+    echo "[sft] compute-matched baseline from $CHECKPOINT"
+    AGENT_MODE=baseline "$PY" scripts/run_sft.py \
+      --checkpoint "$CHECKPOINT" \
+      --match-budget-field "$SFT_MATCH_BUDGET_FIELD" \
+      --backprop-multiplier "$BACKPROP_MULTIPLIER" \
+      --data "$SFT_DATA" \
+      --model "$MODEL" \
+      --lora-rank 8 \
+      --output "$OUTPUT/sft" \
+      --resume
+  else
+    echo "[sft] Skipping: checkpoint compute_budget.$SFT_MATCH_BUDGET_FIELD is missing/zero; cannot match budget."
+  fi
 fi
 
 if [ "$RUN_EVAL" -eq 1 ]; then

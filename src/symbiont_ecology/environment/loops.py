@@ -1552,9 +1552,10 @@ class EcologyLoop:
         except Exception:
             random.shuffle(order)
         for oid in order:
+            prompt_text = task.prompt
             result = self.host.step(
-                prompt=task.prompt,
-                intent="team episode",
+                prompt=prompt_text,
+                intent="team probe",
                 max_routes=1,
                 allowed_organelle_ids=[oid],
             )
@@ -1562,17 +1563,70 @@ class EcologyLoop:
             if metrics is None:
                 continue
             success, reward = task.evaluate(metrics.answer)
+            if success:
+                self._record_knowledge_entry(oid, task, metrics)
+            responses = {oid: (metrics.answer, float(metrics.tokens))}
+            human_feedback = self._collect_human_feedback(task.prompt, responses)
+            if human_feedback:
+                blended = self._blend_rewards({oid: reward}, human_feedback)
+                reward = blended.get(oid, reward)
+            try:
+                progress = float(reward.task_reward)
+            except Exception:
+                progress = 0.0
+            progress = max(0.0, min(1.0, progress))
+            self.environment.register_result(oid, task, success, progress=progress)
             settlement = self._settle_episode(oid, task, reward, metrics)
-            results.append((oid, metrics, success, reward, settlement))
+            reward = reward.model_copy(update={"cost_penalty": settlement["cost"]})
+
+            task_cell_family, task_cell_depth = task.cell
+            meta = {
+                "family": task.family,
+                "depth": task.depth,
+                "task_id": getattr(task, "task_id", None),
+                "cell_family": task_cell_family,
+                "cell_depth": task_cell_depth,
+                "price": float(getattr(task, "price", 0.0)),
+                "difficulty": float(getattr(task, "difficulty", 0.0)),
+                "success": bool(success),
+                "generation": self.generation_index,
+                "task_reward": float(reward.task_reward),
+            }
+            self.population.record_score(oid, reward.total, meta=meta)
+            self.population.record_energy(oid, settlement["cost"])
+            self.population.record_roi(oid, settlement["roi"])
+            self.population.record_adapter_usage(oid, metrics.active_adapters, metrics.tokens)
             # record episode per member
             adapter_utilisation = (
-                {k: float(v) for k, v in metrics.active_adapters.items()}
+                {
+                    k: float(v)
+                    for k, v in metrics.active_adapters.items()
+                    if k not in {"rank", "total"}
+                }
                 if isinstance(metrics.active_adapters, dict)
                 else {}
             )
             self._record_episode(
                 task, oid, reward, metrics, settlement, success, adapter_utilisation
             )
+            # Attach task metadata for plasticity rules (e.g., per-family baselines).
+            try:
+                state = result.envelope.observation.state
+                state["task_prompt"] = str(prompt_text)
+                state["task_family"] = str(task.family)
+                state["task_depth"] = str(task.depth)
+                state["task_cell"] = {
+                    "family": str(task_cell_family),
+                    "depth": str(task_cell_depth),
+                }
+                state["task_id"] = str(getattr(task, "task_id", "") or "")
+                completion = task.supervised_completion()
+                if completion:
+                    state["supervised_completion"] = str(completion)
+            except Exception:
+                pass
+            self.host.apply_reward(result.envelope, {oid: reward})
+            results.append((oid, metrics, success, reward, settlement))
             # C2C: post latent capsule from this team step
             try:
                 if bool(

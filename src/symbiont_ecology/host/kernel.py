@@ -340,7 +340,8 @@ class HostKernel:
 
     @staticmethod
     def _is_training_intent(intent: str) -> bool:
-        return str(intent).strip().lower() == "solve task"
+        intent_key = str(intent).strip().lower()
+        return intent_key in {"solve task", "team probe", "team handoff", "team episode"}
 
     def _format_recurrence_prompt(
         self,

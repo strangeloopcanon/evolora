@@ -29,7 +29,7 @@ IMAGE = (
     # Pin to versions we've already exercised locally (keeps Modal runs stable).
     # Install torch from the CPU wheel index to avoid pulling in CUDA runtime deps for the smoke test.
     .pip_install(
-        "torch==2.9.1",
+        "torch==2.2.1",
         index_url="https://download.pytorch.org/whl/cpu",
         extra_index_url="https://pypi.org/simple",
     )
@@ -38,7 +38,7 @@ IMAGE = (
         "peft==0.18.1",
         "accelerate==1.12.0",
         "datasets==4.4.2",
-        "numpy==2.4.1",
+        "numpy==1.26.4",
         "scipy==1.17.0",
         "rich==14.2.0",
         "pydantic==2.12.5",

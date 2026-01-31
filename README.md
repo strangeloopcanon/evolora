@@ -60,6 +60,48 @@ See `docs/paper_packs/` for detailed run reports and plots.
 
 ---
 
+## Key Finding: Specialization vs Robustness
+
+So far, the pattern looks like this:
+
+- **SFT wins on specialization**: on in-distribution tasks, compute-matched SFT (matched on training FLOPs) is usually the strongest baseline.
+- **Evolution can win on robustness**: on a family shift, a routed portfolio of evolved specialists can beat SFT, seemingly by avoiding negative transfer.
+
+- **ID (6-family grid mix; Qwen/Qwen2.5-0.5B)**: base **70/512 (13.7%)**, SFT **318/512 (62.1%)**, evo (routed) **157/512 (30.7%)**
+- **OOD (unseen task-family holdout; math + word.count + code.format)**: base **5/120 (4.2%)**, SFT **54/120 (45.0%)**, evo (routed) **68/120 (56.7%)**
+  - Most striking detail: SFT collapsed on `word.count` (**1/40**) while evo stayed closer to base (**7/40**).
+
+<details>
+<summary>Reproduce the OOD comparison (uses an existing run directory)</summary>
+
+```bash
+# Example: evaluate an existing grid run on the paper holdout (OOD family shift).
+# IMPORTANT: selection tasks must be different from the holdout to avoid leakage.
+
+python scripts/generate_grid_datasets.py \
+  --config config/experiments/paper_qwen3_ecology.yaml \
+  --seed 4242 \
+  --train-size 1000 \
+  --selection-size 192 \
+  --holdout-size 192 \
+  --out-dir artifacts_ood_eval_paper/datasets
+
+python scripts/evaluate_holdout.py \
+  --holdout config/evaluation/paper_qwen3_holdout_v1.jsonl \
+  --model Qwen/Qwen2.5-0.5B \
+  --sft-adapter <RUN_DIR>/sft/peft_adapter \
+  --evo-checkpoint <RUN_DIR>/checkpoint.pt \
+  --evo-eval-routing family \
+  --evo-selection-tasks artifacts_ood_eval_paper/datasets/selection_tasks.jsonl \
+  --evo-selection-max-samples 64 \
+  --evo-selection-max-new-tokens 64 \
+  --output artifacts_ood_eval_paper/eval_paper_holdout.json
+```
+
+</details>
+
+---
+
 ## Comparing Evolution vs SFT (Compute-Matched)
 
 A key question: does evolutionary adaptation actually outperform standard supervised fine-tuning given the same compute budget? This section explains how to run a fair comparison.
