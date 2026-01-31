@@ -1250,7 +1250,10 @@ def main() -> None:
     device = _resolve_device(args.device)
     engine = str(args.engine)
     if engine == "auto":
-        engine = "manual" if device.type == "mps" else "trainer"
+        if budget.kind != "tokens":
+            engine = "manual"
+        else:
+            engine = "manual" if device.type == "mps" else "trainer"
     if budget.kind != "tokens" and engine != "manual":
         raise ValueError("Non-token budgets require --engine manual")
 

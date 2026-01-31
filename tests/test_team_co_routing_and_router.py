@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from symbiont_ecology import EcologyConfig
 from symbiont_ecology.environment.loops import EcologyLoop
+from symbiont_ecology.metrics.telemetry import RewardBreakdown
 
 
 def test_select_synergy_pair_prefers_corouting() -> None:
@@ -21,16 +22,29 @@ def test_select_synergy_pair_prefers_corouting() -> None:
 
 def test_run_team_episode_best_of_two_and_records(monkeypatch) -> None:
     cfg = EcologyConfig()
+    env = SimpleNamespace(
+        post_message=lambda *a, **k: None,
+        register_result=lambda *a, **k: None,
+    )
+    pop = SimpleNamespace(
+        population={"A": object(), "B": object()},
+        record_score=lambda *a, **k: None,
+        record_energy=lambda *a, **k: None,
+        record_roi=lambda *a, **k: None,
+        record_adapter_usage=lambda *a, **k: None,
+    )
     # Minimal loop
     loop = EcologyLoop(
         config=cfg,
         host=SimpleNamespace(),
-        environment=SimpleNamespace(post_message=lambda *a, **k: None),
-        population=SimpleNamespace(population={"A": object(), "B": object()}),
+        environment=env,
+        population=pop,
         assimilation=SimpleNamespace(),
     )
     # Enable handoff
     loop.config.assimilation_tuning.team_handoff_enabled = True
+    loop._record_knowledge_entry = lambda *a, **k: None  # type: ignore[method-assign]
+    loop._collect_human_feedback = lambda *a, **k: {}  # type: ignore[method-assign]
 
     class DummyMetrics:
         def __init__(self):
@@ -54,7 +68,7 @@ def test_run_team_episode_best_of_two_and_records(monkeypatch) -> None:
             latency_ms=0.1,
         )
 
-    loop.host = SimpleNamespace(step=step)
+    loop.host = SimpleNamespace(step=step, apply_reward=lambda *a, **k: None)
 
     # Make A have higher ROI than B via settlement stub
     def settle(oid, task, reward, metrics):  # noqa: ARG002
@@ -69,7 +83,27 @@ def test_run_team_episode_best_of_two_and_records(monkeypatch) -> None:
     )  # type: ignore[method-assign]
 
     # Minimal task: evaluate returns success True
-    task = SimpleNamespace(prompt="p", evaluate=lambda answer: (True, SimpleNamespace(total=1.0)))
+    task = SimpleNamespace(
+        task_id="t",
+        prompt="p",
+        family="math",
+        depth="short",
+        cell=("math", "short"),
+        price=1.0,
+        difficulty=0.0,
+        supervised_completion=lambda: "1",
+        evaluate=lambda answer: (
+            True,
+            RewardBreakdown(
+                task_reward=1.0,
+                novelty_bonus=0.0,
+                competence_bonus=0.0,
+                helper_bonus=0.0,
+                risk_penalty=0.0,
+                cost_penalty=0.0,
+            ),
+        ),
+    )
     ok = loop._run_team_episode(("A", "B"), task)
     assert ok is True
     # Should record an episode for each member

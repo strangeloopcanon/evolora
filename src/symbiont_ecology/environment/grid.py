@@ -558,7 +558,15 @@ class EnvironmentController:
         self.lp_progress[cell] = (1 - lp_alpha) * self.lp_progress.get(cell, 0.0) + lp_alpha * delta
 
     def get_state(self, cell: GridKey) -> GridCellState:
-        return deepcopy(self.cells[cell])
+        if cell in self.cells:
+            return deepcopy(self.cells[cell])
+        # Allow evaluation on out-of-grid cells (e.g., OOD depths) without crashing.
+        # We intentionally do not mutate controller state for unseen cells.
+        return GridCellState(
+            difficulty=0.5,
+            success_ema=0.5,
+            price=float(getattr(self.pricing, "base", 1.0)),
+        )
 
     def queue_canary(self, cell: GridKey, task: GridTask) -> None:
         state = self.cells[cell]

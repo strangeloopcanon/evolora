@@ -187,3 +187,28 @@ GRID_MO_FULL_ECOLOGY_DEVICE ?=
 GRID_MO_FULL_ECOLOGY_BATCH_SIZE ?=
 GRID_MO_FULL_ECOLOGY_DISABLE_HUMAN ?= 1
 GRID_MO_FULL_ECOLOGY_EVO_EVAL_ROUTING ?= family
+
+.PHONY: grid-broadmix-full-ecology-evo-vs-sft
+grid-broadmix-full-ecology-evo-vs-sft: setup
+	./scripts/run_grid_multiobjective_evo_vs_sft.sh \
+	  --config $(GRID_BM_FULL_ECOLOGY_CONFIG) \
+	  --output $(GRID_BM_FULL_ECOLOGY_OUTPUT) \
+	  --calib-gens $(GRID_BM_FULL_ECOLOGY_CALIB_GENS) \
+	  --full-gens $(GRID_BM_FULL_ECOLOGY_FULL_GENS) \
+	  --checkpoint-every $(GRID_BM_FULL_ECOLOGY_CHECKPOINT_EVERY) \
+	  --seed $(GRID_BM_FULL_ECOLOGY_SEED) \
+	  $(if $(GRID_BM_FULL_ECOLOGY_DEVICE),--device $(GRID_BM_FULL_ECOLOGY_DEVICE),) \
+	  $(if $(GRID_BM_FULL_ECOLOGY_BATCH_SIZE),--batch-size $(GRID_BM_FULL_ECOLOGY_BATCH_SIZE),) \
+	  $(if $(GRID_BM_FULL_ECOLOGY_DISABLE_HUMAN),--disable-human,) \
+	  $(if $(GRID_BM_FULL_ECOLOGY_EVO_EVAL_ROUTING),--evo-eval-routing $(GRID_BM_FULL_ECOLOGY_EVO_EVAL_ROUTING),)
+
+GRID_BM_FULL_ECOLOGY_CONFIG ?= config/experiments/qwen25_grid_broadmix_full_ecology.yaml
+GRID_BM_FULL_ECOLOGY_OUTPUT ?= artifacts_grid_broadmix_full_ecology_evo_sft_$(shell date +%Y%m%d_%H%M%S)
+GRID_BM_FULL_ECOLOGY_CALIB_GENS ?= 5
+GRID_BM_FULL_ECOLOGY_FULL_GENS ?= 50
+GRID_BM_FULL_ECOLOGY_CHECKPOINT_EVERY ?= 5
+GRID_BM_FULL_ECOLOGY_SEED ?= 777
+GRID_BM_FULL_ECOLOGY_DEVICE ?=
+GRID_BM_FULL_ECOLOGY_BATCH_SIZE ?=
+GRID_BM_FULL_ECOLOGY_DISABLE_HUMAN ?= 1
+GRID_BM_FULL_ECOLOGY_EVO_EVAL_ROUTING ?= family

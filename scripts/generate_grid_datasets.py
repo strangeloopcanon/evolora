@@ -203,17 +203,6 @@ def main() -> None:
         cfg.grid, cfg.controller, cfg.pricing, cfg.canary, seed=int(args.seed) + 33
     )
 
-    train_tasks = _generate_grid_tasks(
-        env_train,
-        families=families,
-        depths=depths,
-        counts=train_counts,
-        rng=train_rng,
-        exclude=reserved,
-        dedupe_within_split=False,
-    )
-    for task in train_tasks:
-        reserved.add(_grid_task_key(task))
     selection_tasks = _generate_grid_tasks(
         env_sel,
         families=families,
@@ -231,6 +220,17 @@ def main() -> None:
         depths=depths,
         counts=holdout_counts,
         rng=holdout_rng,
+        exclude=reserved,
+        dedupe_within_split=False,
+    )
+    for task in holdout_tasks:
+        reserved.add(_grid_task_key(task))
+    train_tasks = _generate_grid_tasks(
+        env_train,
+        families=families,
+        depths=depths,
+        counts=train_counts,
+        rng=train_rng,
         exclude=reserved,
         dedupe_within_split=False,
     )
