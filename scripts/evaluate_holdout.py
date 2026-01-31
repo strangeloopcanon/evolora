@@ -108,13 +108,9 @@ class EvalResult:
 
 def load_holdout_tasks(path: Path) -> list[dict[str, Any]]:
     """Load holdout tasks from JSONL file."""
-    tasks = []
-    with path.open() as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                tasks.append(json.loads(line))
-    return tasks
+    from symbiont_ecology.evaluation.holdout_tasks import load_holdout_tasks_jsonl
+
+    return load_holdout_tasks_jsonl(path)
 
 
 _DEFAULT_GRID_PROMPT_AUGMENTATIONS: tuple[str, ...] = (
