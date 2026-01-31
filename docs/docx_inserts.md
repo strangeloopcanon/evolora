@@ -2,6 +2,12 @@
 
 This file is meant to be copied into `evolora.docx` (or adapted into prose).
 
+## Replace Paragraph 016 (Outdated Numbers)
+
+If the doc currently says “On Qwen3-0.6B, a 50-generation run produced …”, replace it with:
+
+> On Qwen3-0.6B, our most complete run so far (150 generations) produced 52 merges and reached 16.7% QD archive coverage, with end-of-run ROI ≈ 1.39. In the same harness, the frozen-base baseline stayed structurally inert (0 merges, 0% QD coverage) with ROI ≈ 0.94, and a single-adapter baseline failed to form an economy (ROI ≈ −0.06). On the holdout set, the ecology also cut average inference cost from ≈ 1.91 → ≈ 1.14, with a small accuracy lift (13.3% → 14.2%).
+
 ## Results Snapshot (Numbers from Tracked Runs)
 
 ### Long-Run Ecology (Qwen3-0.6B, paper pack)
