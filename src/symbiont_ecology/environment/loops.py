@@ -1525,16 +1525,16 @@ class EcologyLoop:
                 for other in top:
                     if other == fallback_organelle:
                         continue
-                    pair = tuple(sorted((fallback_organelle, other)))  # type: ignore[assignment]
+                    pair = tuple(sorted((fallback_organelle, other)))
                     if pair not in excluded:
-                        return pair  # type: ignore[return-value]
+                        return pair
             if len(top) >= 2:
                 # Return the first non-excluded pair in rank order
                 for i in range(len(top)):
                     for j in range(i + 1, len(top)):
-                        pair = tuple(sorted((top[i], top[j])))  # type: ignore[assignment]
+                        pair = tuple(sorted((top[i], top[j])))
                         if pair not in excluded:
-                            return pair  # type: ignore[return-value]
+                            return pair
         except Exception:
             pass
         return None
@@ -2015,7 +2015,7 @@ class EcologyLoop:
                 "energy": round(energy_ratio, 4),
                 "trait": round(trait, 4),
                 "policy": round(policy_frac, 4),
-                "raw": per_org,
+                "raw": float(per_org),
             }
         capped_total = raw_total
         cap_hit = False
@@ -3645,9 +3645,9 @@ class EcologyLoop:
             self.population.remove(organelle_id)
         # expose gating counts for diagnostics in generation summary
         try:
-            self.assim_gating_counts = gating  # type: ignore[attr-defined]
-            self.assim_gating_samples_snapshot = list(self.assim_gating_samples[-24:])  # type: ignore[attr-defined]
-            self.assim_attempt_samples_snapshot = list(self.assim_attempt_samples[-24:])  # type: ignore[attr-defined]
+            self.assim_gating_counts = gating
+            self.assim_gating_samples_snapshot = list(self.assim_gating_samples[-24:])
+            self.assim_attempt_samples_snapshot = list(self.assim_attempt_samples[-24:])
         except Exception:
             pass
         return merges
@@ -5623,7 +5623,7 @@ class EcologyLoop:
                 "bonus": float(getattr(tuning, "energy_topup_roi_bonus", 0.0)),
                 "tau": float(self.config.controller.tau),
             }
-        base = self._nudge_baseline  # type: ignore[attr-defined]
+        base = self._nudge_baseline
         # Decide whether to nudge up evidence or relax back
         stall = (
             (self.assim_fail_streak >= 8)
@@ -6116,7 +6116,7 @@ class EcologyLoop:
                 if org is None:
                     return 0.0
                 try:
-                    state = org.export_adapter_state()  # type: ignore[attr-defined]
+                    state = org.export_adapter_state()
                 except Exception:
                     state = {}
                 total = 0.0
@@ -6134,7 +6134,7 @@ class EcologyLoop:
                 imp = 0.0
                 if org is not None and hasattr(org, "fisher_importance"):
                     try:
-                        imp = float(org.fisher_importance())  # type: ignore[attr-defined]
+                        imp = float(org.fisher_importance())
                     except Exception:
                         imp = 0.0
                 if not imp or not math.isfinite(imp):
