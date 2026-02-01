@@ -7,7 +7,7 @@ import math
 import random
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from symbiont_ecology.config import (
@@ -126,14 +126,14 @@ class GridTask:
 
         elif self.family == "word.count":
             # Try digits first, then spelled numbers (zero..twenty)
-            predicted: int | None = None
+            predicted_count: int | None = None
             digits = "".join(ch for ch in clean if ch.isdigit())
             if digits:
                 try:
-                    predicted = int(digits)
+                    predicted_count = int(digits)
                 except Exception:
-                    predicted = None
-            if predicted is None:
+                    predicted_count = None
+            if predicted_count is None:
                 tokens = clean.strip().lower().split()
                 words_map = {
                     "zero": 0,
@@ -160,9 +160,9 @@ class GridTask:
                 }
                 for tok in tokens:
                     if tok in words_map:
-                        predicted = words_map[tok]
+                        predicted_count = words_map[tok]
                         break
-            success = (predicted is not None) and (predicted == int(self.target))
+            success = (predicted_count is not None) and (predicted_count == int(self.target))
             task_reward = 1.0 if success else 0.0
 
         elif self.family == "json_repair":
@@ -228,8 +228,8 @@ class GridTask:
                 and isinstance(details.get("passed"), int)
                 and isinstance(details.get("total"), int)
             ):
-                passed = int(details["passed"])
-                total = int(details["total"])
+                passed = int(details["passed"])  # type: ignore
+                total = int(details["total"])  # type: ignore
                 if total > 0:
                     task_reward = float(passed) / float(total)
                     success = passed >= total
@@ -251,11 +251,11 @@ class GridTask:
         elif self.family == "regex.recognition":
             expected_bool: bool | None = None
             if isinstance(self.target, dict):
-                expected = self.target.get("expected")
-                if isinstance(expected, bool):
-                    expected_bool = expected
-                elif expected is not None:
-                    expected_bool = bool(expected)
+                expected_raw = self.target.get("expected")
+                if isinstance(expected_raw, bool):
+                    expected_bool = expected_raw
+                elif expected_raw is not None:
+                    expected_bool = bool(expected_raw)
             elif isinstance(self.target, bool):
                 expected_bool = self.target
             else:
@@ -296,12 +296,16 @@ class GridTask:
             task_reward = float(score)
 
         elif self.family == "regex.refactoring":
-            test_strings: list[dict[str, object]] = []
+            refactor_test_strings: list[dict[str, object]] = []
             original_pattern = ""
             if isinstance(self.target, dict):
-                test_strings = self.target.get("test_strings", []) or []
+                raw_test_strings = self.target.get("test_strings", []) or []
+                if isinstance(raw_test_strings, list):
+                    refactor_test_strings = raw_test_strings
                 original_pattern = str(self.target.get("original_pattern") or "")
-            picked, _pick_details = pick_best_regex_candidate(clean, test_cases=test_strings)
+            picked, _pick_details = pick_best_regex_candidate(
+                clean, test_cases=refactor_test_strings
+            )
             if not picked:
                 success = False
                 task_reward = 0.0
@@ -317,7 +321,7 @@ class GridTask:
                     passed = 0
                     total = 0
                     ok = True
-                    for tc in test_strings:
+                    for tc in refactor_test_strings:
                         test_str = str(tc.get("string", ""))
                         should_match = bool(tc.get("should_match", False))
                         matched = bool(compiled.fullmatch(test_str))
@@ -371,14 +375,14 @@ class GridTask:
 
         if family in {"math", "math.sequence", "math.multi_step"}:
             try:
-                value = float(target)
+                numeric_value = float(target)
             except Exception:
                 return None
-            if not math.isfinite(value):
+            if not math.isfinite(numeric_value):
                 return None
-            if float(value).is_integer():
-                return str(int(value))
-            return str(value)
+            if float(numeric_value).is_integer():
+                return str(int(numeric_value))
+            return str(numeric_value)
 
         if family == "string.sort":
             if isinstance(target, list):
@@ -386,8 +390,8 @@ class GridTask:
                     return json.dumps(target, ensure_ascii=False)
                 except Exception:
                     return None
-            value = str(target).strip()
-            return "".join(sorted(value)) if value else None
+            sort_value = str(target).strip()
+            return "".join(sorted(sort_value)) if sort_value else None
 
         if family == "word.count":
             try:
@@ -409,8 +413,8 @@ class GridTask:
             return None
 
         if family == "code.format":
-            value = str(target).strip()
-            return value or None
+            code_value = str(target).strip()
+            return code_value or None
 
         if family in {"regex", "regex.synthesis", "regex.debugging", "regex.refactoring"}:
             if isinstance(target, dict):
@@ -467,11 +471,7 @@ class GridCellState:
     success_ema: float = 0.5
     price: float = 1.0
     canary_index: int = 0
-    canaries: List[GridTask] = None  # type: ignore
-
-    def __post_init__(self) -> None:
-        if self.canaries is None:
-            self.canaries = []
+    canaries: List[GridTask] = field(default_factory=list)
 
 
 class EnvironmentController:
@@ -655,6 +655,9 @@ class GridEnvironment:
         self._message_seq: int = 0
         # simple latent cache bus for C2C comms
         self.cache_bus: list[dict[str, object]] = []
+        # communication settings (can be overridden by loops.py)
+        self.comms_history_cap: int = 64
+        self.default_comm_priority: float = 0.0
 
     def post_message(
         self,
@@ -709,21 +712,24 @@ class GridEnvironment:
         topics_set = {topic for topic in (topics or []) if topic}
         exclude_set = {str(item) for item in (exclude or set())}
         reader_id = str(reader) if reader is not None else None
-        ordered = sorted(
-            self.message_board,
-            key=lambda entry: (float(entry.get("priority", 0.0)), int(entry.get("posted_at", 0))),
-            reverse=True,
-        )
+
+        def _msg_sort_key(entry: dict[str, object]) -> tuple[float, int]:
+            priority = entry.get("priority", 0.0)
+            posted = entry.get("posted_at", 0)
+            return (float(priority) if priority is not None else 0.0, int(posted) if posted is not None else 0)  # type: ignore
+
+        ordered = sorted(self.message_board, key=_msg_sort_key, reverse=True)
         primary: list[dict[str, object]] = []
         secondary: list[dict[str, object]] = []
         for entry in ordered:
-            ttl = int(entry.get("ttl", 0))
+            ttl_val = entry.get("ttl", 0)
+            ttl = int(ttl_val) if ttl_val is not None else 0  # type: ignore
             if ttl <= 0:
                 continue
             poster = str(entry.get("organelle_id"))
             if poster in exclude_set:
                 continue
-            seen_by: set[str] = entry.get("seen_by", set())  # type: ignore[assignment]
+            seen_by: set[str] = entry.get("seen_by", set())  # type: ignore
             if reader_id and reader_id in seen_by:
                 continue
             topic = entry.get("topic")
@@ -738,33 +744,33 @@ class GridEnvironment:
         for entry in combined:
             if len(results) >= max_items:
                 break
-            ttl = int(entry.get("ttl", 0))
+            ttl = int(entry.get("ttl", 0))  # type: ignore
             if ttl <= 0:
                 continue
             entry["ttl"] = ttl - 1
-            entry["reads"] = int(entry.get("reads", 0)) + 1
-            seen_by = entry.get("seen_by", set())
+            entry["reads"] = int(entry.get("reads", 0)) + 1  # type: ignore
+            seen_by = entry.get("seen_by", set())  # type: ignore
             if isinstance(seen_by, set) and reader_id:
                 seen_by.add(reader_id)
             cleaned = {
                 "organelle_id": str(entry.get("organelle_id")),
                 "text": str(entry.get("text")),
                 "topic": entry.get("topic"),
-                "priority": float(entry.get("priority", 0.0)),
+                "priority": float(entry.get("priority", 0.0)),  # type: ignore
                 "cell": entry.get("cell"),
-                "meta": dict(entry.get("meta", {})),
-                "ttl": int(entry.get("ttl", 0)),
-                "reads": int(entry.get("reads", 0)),
+                "meta": dict(entry.get("meta", {})) if entry.get("meta") else {},  # type: ignore
+                "ttl": int(entry.get("ttl", 0)),  # type: ignore
+                "reads": int(entry.get("reads", 0)),  # type: ignore
             }
             results.append(cleaned)
         # purge expired messages
-        self.message_board = [entry for entry in self.message_board if int(entry.get("ttl", 0)) > 0]
+        self.message_board = [entry for entry in self.message_board if int(entry.get("ttl", 0)) > 0]  # type: ignore
         return results
 
     def peek_messages(self, limit: int = 5) -> list[dict[str, object]]:
         ordered = sorted(
             self.message_board,
-            key=lambda entry: (float(entry.get("priority", 0.0)), int(entry.get("posted_at", 0))),
+            key=lambda entry: (float(entry.get("priority", 0.0)), int(entry.get("posted_at", 0))),  # type: ignore
             reverse=True,
         )
         snapshot: list[dict[str, object]] = []
@@ -774,9 +780,9 @@ class GridEnvironment:
                     "organelle_id": str(entry.get("organelle_id")),
                     "text": str(entry.get("text")),
                     "topic": entry.get("topic"),
-                    "priority": float(entry.get("priority", 0.0)),
-                    "ttl": int(entry.get("ttl", 0)),
-                    "reads": int(entry.get("reads", 0)),
+                    "priority": float(entry.get("priority", 0.0)),  # type: ignore
+                    "ttl": int(entry.get("ttl", 0)),  # type: ignore
+                    "reads": int(entry.get("reads", 0)),  # type: ignore
                     "cell": entry.get("cell"),
                 }
             )
@@ -794,15 +800,16 @@ class GridEnvironment:
     def read_caches(self, max_items: int = 2) -> list[dict[str, object]]:
         cleaned: list[dict[str, object]] = []
         for entry in list(self.cache_bus):
-            ttl = int(entry.get("ttl", 0))
+            ttl = int(entry.get("ttl", 0))  # type: ignore
             if ttl <= 0:
                 self.cache_bus.remove(entry)
                 continue
             entry["ttl"] = ttl - 1
+            latent_val = entry.get("latent", [])
             cleaned.append(
                 {
                     "organelle_id": str(entry.get("organelle_id")),
-                    "latent": list(entry.get("latent", [])),
+                    "latent": list(latent_val) if latent_val else [],  # type: ignore
                 }
             )
             if len(cleaned) >= max_items:
@@ -868,16 +875,16 @@ class GridEnvironment:
             b = self.rng.randint(1, upper)
             if self.rng.random() < 0.5:
                 prompt = f"Add {a} and {b}. Respond with the number only."
-                target = a + b
+                math_target = a + b
             else:
                 prompt = f"Multiply {a} by {b}. Respond with the number only."
-                target = a * b
+                math_target = a * b
             return GridTask(
                 task_id=task_id,
                 cell=cell,
                 prompt=prompt,
                 price=price,
-                target=float(target),
+                target=float(math_target),
                 family="math",
                 depth=depth,
                 difficulty=difficulty,
@@ -895,13 +902,13 @@ class GridEnvironment:
                 "Sort the following letters alphabetically and respond with the sorted string: "
                 + " ".join(letters)
             )
-            target = "".join(letters)
+            sort_target = "".join(letters)
             return GridTask(
                 task_id=task_id,
                 cell=cell,
                 prompt=prompt,
                 price=price,
-                target=target,
+                target=sort_target,
                 family="string.sort",
                 depth=depth,
                 difficulty=difficulty,
@@ -937,13 +944,13 @@ class GridEnvironment:
                 + ", ".join(str(n) for n in shuffled)
                 + ", produce a valid JSON array containing them sorted ascending."
             )
-            target = sorted(numbers)
+            json_target = sorted(numbers)
             return GridTask(
                 task_id=task_id,
                 cell=cell,
                 prompt=prompt,
                 price=price,
-                target=target,
+                target=json_target,
                 family="json_repair",
                 depth=depth,
                 difficulty=difficulty,
@@ -1924,8 +1931,8 @@ class GridEnvironment:
         choice = pick_task()
         desc = str(choice["desc"])
         pattern = str(choice["pattern"])
-        matches = list(choice["matches"])  # type: ignore[arg-type]
-        non_matches = list(choice["non_matches"])  # type: ignore[arg-type]
+        matches = list(choice["matches"])  # type: ignore
+        non_matches = list(choice["non_matches"])  # type: ignore
 
         # Create test examples string
         test_examples = []

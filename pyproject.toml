@@ -63,17 +63,12 @@ warn_return_any = true
 warn_unused_configs = true
 plugins = []
 
-[[tool.mypy.overrides]]
-module = "symbiont_ecology.environment.grid"
-ignore_errors = true
-
+# loops.py uses many dynamic dict structures where values are typed as object
+# These errors are less critical than structural type errors and would require
+# extensive refactoring of the dict schemas to fix properly
 [[tool.mypy.overrides]]
 module = "symbiont_ecology.environment.loops"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "symbiont_ecology.organelles.peft_hebbian"
-ignore_errors = true
+disable_error_code = ["arg-type", "call-overload", "attr-defined", "operator", "misc", "index", "no-any-return", "no-redef", "assignment", "var-annotated"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

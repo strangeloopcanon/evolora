@@ -8,7 +8,7 @@ import os
 import random
 from collections import deque
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Any, Tuple, cast
 
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model
@@ -68,7 +68,7 @@ class HebbianPEFTOrganelle(Organelle):
                 pass
         else:
             model = get_peft_model(base_model, lora_cfg, adapter_name=self.organelle_id)
-            backbone.model = model  # share PEFT-wrapped backbone to avoid duplicate adapters
+            backbone.model = model  # type: ignore[assignment]  # share PEFT-wrapped backbone to avoid duplicate adapters
         self.model = model
         self._ensure_active_adapter()
         self.model.to(self.device)
@@ -161,7 +161,7 @@ class HebbianPEFTOrganelle(Organelle):
             if probe_top_p < 1.0:
                 top_p = probe_top_p
         do_sample = bool(temperature > 0.0 or top_p < 1.0)
-        gen_kwargs = {"max_new_tokens": max_new, "do_sample": do_sample}
+        gen_kwargs: dict[str, object] = {"max_new_tokens": max_new, "do_sample": do_sample}
         if do_sample:
             if temperature > 0.0:
                 gen_kwargs["temperature"] = temperature
@@ -371,10 +371,17 @@ class HebbianPEFTOrganelle(Organelle):
         # module.lora_A / lora_B are dict-like keyed by adapter name; update this organelle's adapter.
         try:
             adapter = self.organelle_id
-            if adapter not in module.lora_A or adapter not in module.lora_B:
+            lora_a_dict = getattr(module, "lora_A", None)
+            lora_b_dict = getattr(module, "lora_B", None)
+            # Check for dict-like interface (dict or ModuleDict)
+            if lora_a_dict is None or lora_b_dict is None:
                 return
-            lora_a = module.lora_A[adapter]
-            lora_b = module.lora_B[adapter]
+            if not hasattr(lora_a_dict, "__contains__") or not hasattr(lora_b_dict, "__contains__"):
+                return
+            if adapter not in lora_a_dict or adapter not in lora_b_dict:
+                return
+            lora_a = lora_a_dict[adapter]
+            lora_b = lora_b_dict[adapter]
             a_weight = lora_a.weight
             b_weight = lora_b.weight
         except Exception:  # pragma: no cover - defensive against PEFT internals
@@ -413,6 +420,8 @@ class HebbianPEFTOrganelle(Organelle):
             )
             return vec[idx] * signs
 
+        if pre is None or post is None:
+            return
         pre = _match_dim(pre, in_features, "pre")
         post = _match_dim(post, out_features, "post")
 
@@ -729,14 +738,16 @@ class HebbianPEFTOrganelle(Organelle):
     def trainable_parameters(self) -> int:
         total = 0
         for module in self.model.modules():
-            if hasattr(module, "lora_A"):
-                for adapter, lora in module.lora_A.items():
-                    if adapter == self.organelle_id:
-                        total += lora.weight.numel()
-            if hasattr(module, "lora_B"):
-                for adapter, lora in module.lora_B.items():
-                    if adapter == self.organelle_id:
-                        total += lora.weight.numel()
+            lora_a_dict = getattr(module, "lora_A", None)
+            lora_b_dict = getattr(module, "lora_B", None)
+            if lora_a_dict is not None and hasattr(lora_a_dict, "items"):
+                for adapter, lora in cast(Any, lora_a_dict).items():
+                    if adapter == self.organelle_id and hasattr(lora, "weight"):
+                        total += int(lora.weight.numel())
+            if lora_b_dict is not None and hasattr(lora_b_dict, "items"):
+                for adapter, lora in cast(Any, lora_b_dict).items():
+                    if adapter == self.organelle_id and hasattr(lora, "weight"):
+                        total += int(lora.weight.numel())
         return total
 
     def estimate_trainable(self, new_rank: int) -> int:
@@ -750,14 +761,19 @@ class HebbianPEFTOrganelle(Organelle):
             return False
         old_weights: dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
         for name, module in self.model.named_modules():
-            if hasattr(module, "lora_A") and hasattr(module, "lora_B"):
-                lora_a = module.lora_A
-                lora_b = module.lora_B
-                if isinstance(lora_a, dict) and self.organelle_id in lora_a:
-                    old_weights[name] = (
-                        lora_a[self.organelle_id].weight.detach().clone(),
-                        lora_b[self.organelle_id].weight.detach().clone(),
-                    )
+            lora_a = getattr(module, "lora_A", None)
+            lora_b = getattr(module, "lora_B", None)
+            if lora_a is None or lora_b is None:
+                continue
+            try:
+                if self.organelle_id not in lora_a or self.organelle_id not in lora_b:
+                    continue
+                old_weights[name] = (
+                    lora_a[self.organelle_id].weight.detach().clone(),
+                    lora_b[self.organelle_id].weight.detach().clone(),
+                )
+            except Exception:
+                continue
         try:
             if hasattr(self.model, "delete_adapter"):
                 self.model.delete_adapter(self.organelle_id)
@@ -800,12 +816,15 @@ class HebbianPEFTOrganelle(Organelle):
                 continue
             lora_a = module.lora_A
             lora_b = module.lora_B
-            if not isinstance(lora_a, dict) or self.organelle_id not in lora_a:
-                continue
             old_a, old_b = old_weights[name]
             adapter = self.organelle_id
-            new_a = lora_a[adapter].weight
-            new_b = lora_b[adapter].weight
+            try:
+                if adapter not in lora_a or adapter not in lora_b:
+                    continue
+                new_a = lora_a[adapter].weight
+                new_b = lora_b[adapter].weight
+            except Exception:
+                continue
             try:
                 projected_a, projected_b = self._recompose_from_history(
                     new_rank=new_rank,
@@ -834,9 +853,11 @@ class HebbianPEFTOrganelle(Organelle):
         if hasattr(self.model, "peft_config"):
             config = self.model.peft_config
             if isinstance(config, dict) and self.organelle_id in config:
-                target = config[self.organelle_id].target_modules
-                for module_name in target:
-                    summary[module_name] = summary.get(module_name, 0) + 1
+                adapter_config = config[self.organelle_id]
+                target = getattr(adapter_config, "target_modules", None)
+                if target is not None:
+                    for module_name in target:
+                        summary[module_name] = summary.get(module_name, 0) + 1
         if not summary:
             summary["total"] = 0
         summary["rank"] = int(self.rank)
@@ -930,7 +951,7 @@ class BackpropPEFTOrganelle(HebbianPEFTOrganelle):
             replay_size = int(os.getenv("EVOLORA_BP_REPLAY_SIZE", replay_size) or replay_size)
         except Exception:
             replay_size = 32
-        self._replay = deque(maxlen=max(0, replay_size))
+        self._replay: deque[tuple[str, str, float]] = deque(maxlen=max(0, replay_size))
         replay_k = 1
         try:
             replay_k = int(os.getenv("EVOLORA_BP_REPLAY_K", replay_k) or replay_k)
