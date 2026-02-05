@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,7 @@ class HebbianConfig(BaseModel):
 
 class HostConfig(BaseModel):
     backbone_type: str = Field("gemma")
-    backbone_model: str = Field("google/gemma-3-270m-it")
+    backbone_model: str = Field("Qwen/Qwen3-0.6B")
     tokenizer: Optional[str] = None
     revision: Optional[str] = None
     dtype: Literal["float16", "bfloat16", "float32"] = "bfloat16"
@@ -1104,71 +1104,139 @@ __all__ = [
 ]
 
 
-def load_ecology_config(path: Path | str) -> EcologyConfig:
-    """Load an ecology configuration from a YAML file.
+def _normalize_legacy_config(raw: dict[str, Any] | dict[Any, Any]) -> dict[str, Any]:
+    """Map older top-level config keys into the current schema."""
+    data = {str(key): value for key, value in dict(raw).items()}
 
-    Strategy:
-    - Try omegaconf for full YAML support.
-    - If omegaconf is missing OR parsing fails (malformed YAML), fall back to a
-      minimal, robust parser that supports the simple two-level structure used in tests.
-    """
-    # Preferred path: omegaconf (rich YAML with interpolation)
-    try:
-        from omegaconf import OmegaConf
+    host = data.get("host")
+    if not isinstance(host, dict):
+        host = {}
+    model = data.get("model")
+    if isinstance(model, dict):
+        if "backbone_model" not in host:
+            model_name = model.get("name")
+            if isinstance(model_name, str) and model_name.strip():
+                host["backbone_model"] = model_name.strip()
+        if "tokenizer" not in host:
+            model_name = model.get("name")
+            if isinstance(model_name, str) and model_name.strip():
+                host["tokenizer"] = model_name.strip()
+        model_device = model.get("device")
+        if "device" not in host and isinstance(model_device, str) and model_device.strip():
+            host["device"] = model_device.strip()
+        model_dtype = model.get("dtype")
+        if "dtype" not in host and isinstance(model_dtype, str) and model_dtype.strip():
+            host["dtype"] = model_dtype.strip()
+    organelle = data.get("organelle")
+    if isinstance(organelle, dict) and "max_lora_rank" not in host:
+        rank = organelle.get("lora_r")
+        if isinstance(rank, int):
+            host["max_lora_rank"] = rank
+    if host:
+        data["host"] = host
 
-        try:
-            conf = OmegaConf.load(Path(path))
-            data = OmegaConf.to_container(conf, resolve=True)
-            return EcologyConfig.model_validate(data)
-        except Exception:
-            # Parsing failed; defer to the lightweight fallback below
-            pass
-    except ImportError:
-        # No omegaconf available; use fallback parser below
-        pass
+    env = data.get("env")
+    if "grid" not in data and isinstance(env, dict):
+        legacy_grid = env.get("grid")
+        if isinstance(legacy_grid, dict):
+            data["grid"] = legacy_grid
 
-    # Fallback: minimal YAML-ish parser for simple two-level configs used in tests
-    # Avoids adding heavy deps in constrained environments and tolerates minor formatting issues.
-    text = Path(path).read_text()
+    if "controller" not in data:
+        teacher = data.get("teacher")
+        if isinstance(teacher, dict):
+            data["controller"] = teacher
+
+    if "population_strategy" not in data:
+        population = data.get("population")
+        if isinstance(population, dict):
+            data["population_strategy"] = population
+
+    return data
+
+
+def _parse_fallback_yaml(path: Path) -> dict[str, dict[str, object]]:
+    """Minimal strict parser for simple two-level YAML used in fallback mode."""
+    text = path.read_text()
     result: dict[str, dict[str, object]] = {}
     current: dict[str, object] | None = None
-    for raw in text.splitlines():
+    for line_no, raw in enumerate(text.splitlines(), start=1):
         line = raw.rstrip()
         if not line or line.lstrip().startswith("#"):
             continue
         if not line.startswith(" ") and ":" in line:
-            # New top-level section
             key = line.split(":", 1)[0].strip()
+            if not key:
+                raise ValueError(f"Malformed config at line {line_no}: missing section key")
             current = {}
             result[key] = current
             continue
         if current is None:
-            # Malformed; skip stray lines before any section
-            continue
-        # Expect an indented key: value
+            raise ValueError(
+                f"Malformed config at line {line_no}: expected top-level section before entries"
+            )
         parts = line.strip().split(":", 1)
         if len(parts) != 2:
-            continue
+            raise ValueError(f"Malformed config at line {line_no}: expected 'key: value'")
         k, v = parts[0].strip(), parts[1].strip()
-        # Parse simple list syntax: [a, b, c]
+        if not k:
+            raise ValueError(f"Malformed config at line {line_no}: empty key")
         if v.startswith("[") and v.endswith("]"):
             inner = v[1:-1].strip()
             items: list[object] = []
             if inner:
                 for tok in inner.split(","):
-                    # For lists, keep items as strings to satisfy typed fields like GridConfig.families
-                    items.append(tok.strip())
+                    item = tok.strip()
+                    if not item:
+                        continue
+                    if (item.startswith("'") and item.endswith("'")) or (
+                        item.startswith('"') and item.endswith('"')
+                    ):
+                        items.append(item[1:-1])
+                    else:
+                        items.append(item)
             current[k] = items
-        else:
-            # Scalar: try bool/int/float else string
-            vv = v.strip()
-            if vv.lower() in ("true", "false"):
-                current[k] = vv.lower() == "true"
-            elif vv.replace(".", "", 1).isdigit():
-                current[k] = float(vv) if "." in vv else int(vv)
-            else:
-                current[k] = vv
-    return EcologyConfig.model_validate(result)
+            continue
+        vv = v.strip()
+        if vv.lower() in ("true", "false"):
+            current[k] = vv.lower() == "true"
+            continue
+        if (vv.startswith("'") and vv.endswith("'")) or (vv.startswith('"') and vv.endswith('"')):
+            current[k] = vv[1:-1]
+            continue
+        try:
+            current[k] = int(vv)
+            continue
+        except ValueError:
+            pass
+        try:
+            current[k] = float(vv)
+            continue
+        except ValueError:
+            pass
+        current[k] = vv
+    return result
+
+
+def load_ecology_config(path: Path | str) -> EcologyConfig:
+    """Load an ecology configuration from a YAML file.
+
+    Strategy:
+    - Use omegaconf when available (fail-fast on malformed YAML).
+    - If omegaconf is unavailable, use a strict minimal parser for simple two-level configs.
+    - Normalize legacy top-level keys (model/env/teacher/population) into current schema.
+    """
+    path_obj = Path(path)
+    try:
+        from omegaconf import OmegaConf
+
+        conf = OmegaConf.load(path_obj)
+        data = OmegaConf.to_container(conf, resolve=True)
+        if not isinstance(data, dict):
+            raise ValueError(f"Config root must be a mapping: {path_obj}")
+        return EcologyConfig.model_validate(_normalize_legacy_config(data))
+    except ImportError:
+        parsed = _parse_fallback_yaml(path_obj)
+        return EcologyConfig.model_validate(_normalize_legacy_config(parsed))
 
 
 __all__.append("load_ecology_config")

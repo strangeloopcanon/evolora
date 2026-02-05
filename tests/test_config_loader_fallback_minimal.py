@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import pytest
+from omegaconf.errors import OmegaConfBaseException
+from yaml import YAMLError
+
 from symbiont_ecology.config import load_ecology_config
 
 
@@ -27,19 +31,9 @@ def test_load_ecology_config_fallback_minimal(tmp_path: Path) -> None:
     assert cfg.energy.m == 1
 
 
-def test_load_ecology_config_fallback_edge_lines(tmp_path: Path) -> None:
-    # Include comments, blanks, a malformed indented line before any section,
-    # a bad key without colon, and a list with numerics to hit parser branches.
-    yaml = (
-        "# comment line\n\n"
-        "  stray: ignored\n"
-        "host:\n  backbone_model: google/gemma-3-270m-it\n  badline\n"
-        "grid:\n  families: [1, 2.5]\n  depths: [short]\n"
-    )
+def test_load_ecology_config_rejects_malformed_yaml(tmp_path: Path) -> None:
+    yaml = "host:\n" "  backbone_model: Qwen/Qwen3-0.6B\n" "  tokenizer Qwen/Qwen3-0.6B\n"
     path = tmp_path / "cfg2.yaml"
     path.write_text(yaml)
-    cfg = load_ecology_config(path)
-    # Numeric list items should parse as numbers
-    assert [int(cfg.grid.families[0]), float(cfg.grid.families[1])] == [1, 2.5]
-    # Depth remains as string
-    assert [str(x) for x in cfg.grid.depths] == ["short"]
+    with pytest.raises((ValueError, OmegaConfBaseException, YAMLError)):
+        load_ecology_config(path)

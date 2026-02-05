@@ -155,7 +155,7 @@ def run_broadmix(
             "--run-dir",
             str(output_dir),
             "--model",
-            "Qwen/Qwen2.5-0.5B",
+            "Qwen/Qwen3-0.6B",
             "--device",
             "cuda",
             "--max-samples",

@@ -209,7 +209,7 @@ def main() -> None:
         required=True,
         help="Run directory containing checkpoint.pt (and optionally sft/peft_adapter).",
     )
-    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B", help="Base model name.")
+    parser.add_argument("--model", type=str, default="Qwen/Qwen3-0.6B", help="Base model name.")
     parser.add_argument(
         "--output-dir",
         type=Path,

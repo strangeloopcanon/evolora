@@ -699,6 +699,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _seed_everything(seed: int) -> None:
+    random.seed(int(seed))
+    torch.manual_seed(int(seed))
+    if torch.cuda.is_available():  # pragma: no cover - depends on hardware
+        torch.cuda.manual_seed_all(int(seed))
+
+
 def _resolve_device(device: str) -> torch.device:
     if device == "auto":
         if torch.backends.mps.is_available():
@@ -1134,6 +1141,7 @@ def train_manual(
 
 def main() -> None:
     args = parse_args()
+    _seed_everything(args.seed)
 
     # Determine token budget
     budget_details: dict[str, object] | None = None
