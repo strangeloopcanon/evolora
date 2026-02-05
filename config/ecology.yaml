@@ -1,8 +1,7 @@
-env:
-  grid:
-    families: ["math", "json_repair"]
-    depths: ["short", "medium", "long"]
-teacher:
+grid:
+  families: ["math", "json_repair"]
+  depths: ["short", "medium", "long"]
+controller:
   tau: 0.5
   beta: 0.2
   eta: 0.5
@@ -21,7 +20,7 @@ energy:
   bankruptcy_grace: 3
 canary:
   q_min: 0.95
-population:
+population_strategy:
   mu: 4
   lambda: 12
   max_population: 16

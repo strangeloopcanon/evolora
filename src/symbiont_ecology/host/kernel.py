@@ -743,17 +743,20 @@ class HostKernel:
     ) -> None:
         """Load an adapter state from disk and import into the organelle.
 
-        If the organelle does not implement import_adapter_state, this is a no-op.
+        Raises if the organelle cannot import the adapter state.
         """
         org = self.organelles.get(organelle_id)
         if org is None:
             raise KeyError(f"Unknown organelle {organelle_id}")
         p = Path(path)
         state = load_file(str(p))
+        importer = getattr(org, "import_adapter_state", None)
+        if not callable(importer):
+            raise AttributeError(f"Organelle {organelle_id} does not support adapter import")
         try:
-            org.import_adapter_state(state, alpha=alpha)
-        except Exception:
-            pass
+            importer(state, alpha=alpha)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to import adapter for organelle {organelle_id}") from exc
 
     def load_organelle_adapter(self, organelle_id: str, path: str | Path) -> None:
         """Load an adapter state from disk, preferring exact replacement.

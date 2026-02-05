@@ -86,7 +86,7 @@ def run_smoke(*, seed: int = 777, generations: int = 1, device: str = "cpu") -> 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     config = REMOTE_ROOT / "config" / "experiments" / "qwen25_grid_multiobjective_full_ecology.yaml"
-    model = "Qwen/Qwen2.5-0.5B"
+    model = "Qwen/Qwen3-0.6B"
 
     subprocess.run(
         [

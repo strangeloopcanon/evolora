@@ -1,6 +1,8 @@
 import builtins
 from pathlib import Path
 
+import pytest
+
 from symbiont_ecology.config import load_ecology_config
 
 
@@ -22,3 +24,20 @@ def test_load_ecology_config_fallback_parser(tmp_path: Path, monkeypatch):
     assert cfg.grid.families == ["word.count", "math"]
     assert cfg.energy.m == 1
     assert abs(cfg.energy.alpha - 0.5) < 1e-9
+
+
+def test_load_ecology_config_fallback_rejects_malformed_yaml(tmp_path: Path, monkeypatch) -> None:
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "omegaconf":
+            raise ImportError("blocked for test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    cfg_text = "host:\n" "  backbone_model Qwen/Qwen3-0.6B\n"
+    path = tmp_path / "bad.yaml"
+    path.write_text(cfg_text)
+    with pytest.raises(ValueError):
+        load_ecology_config(path)

@@ -418,8 +418,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="Qwen/Qwen2.5-0.5B",
-        help="Base model ID (default: Qwen/Qwen2.5-0.5B)",
+        default="Qwen/Qwen3-0.6B",
+        help="Base model ID (default: Qwen/Qwen3-0.6B)",
     )
     parser.add_argument(
         "--evo-checkpoint",

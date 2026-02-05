@@ -3596,6 +3596,8 @@ class EcologyLoop:
                             }
                 except Exception:
                     pass
+            if token_spent:
+                attempt_detail["evidence_token_used"] = True
             self._record_assimilation_attempt(attempt_detail)
             history_record = {
                 "generation": self.generation_index,
@@ -3638,8 +3640,6 @@ class EcologyLoop:
                 cell,
                 history_record,
             )
-            if token_spent:
-                attempt_detail["evidence_token_used"] = True
         for organelle_id in removable:
             self.host.retire_organelle(organelle_id)
             self.population.remove(organelle_id)

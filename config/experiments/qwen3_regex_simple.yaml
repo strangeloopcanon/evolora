@@ -1,16 +1,16 @@
 # Qwen3-0.6B ecology with regex generation tasks (simplified - no holdout)
-model:
-  name: "Qwen/Qwen2.5-0.5B"
+host:
+  backbone_model: "Qwen/Qwen3-0.6B"
+  tokenizer: "Qwen/Qwen3-0.6B"
   device: "auto"
   dtype: "bfloat16"
-  torch_compile: false
+  max_lora_rank: 8
 
-env:
-  grid:
-    families: ["regex", "math"]
-    depths: ["short", "medium"]
+grid:
+  families: ["regex", "math"]
+  depths: ["short", "medium"]
 
-teacher:
+controller:
   tau: 0.5
   beta: 0.2
   eta: 0.5
@@ -34,7 +34,7 @@ energy:
 canary:
   q_min: 0.95
 
-population:
+population_strategy:
   mu: 4
   lambda: 12
   max_population: 16
@@ -79,11 +79,3 @@ comms:
 
 policy:
   enabled: false
-
-organelle:
-  lora_r: 8
-  lora_alpha: 16
-  lora_dropout: 0.05
-  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
-  hebbian_lr: 0.001
-  trace_decay: 0.95

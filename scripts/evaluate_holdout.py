@@ -21,7 +21,7 @@ Usage:
     # Specify model and sample size
     python scripts/evaluate_holdout.py \
         --holdout config/evaluation/regex_generalization.jsonl \
-        --model Qwen/Qwen2.5-0.5B \
+        --model Qwen/Qwen3-0.6B \
         --max-samples 20 \
         --verbose
 """
@@ -1140,15 +1140,14 @@ def load_evo_model(
 
     Returns:
         (PEFT model with the selected organelle applied, organelle_id)
-        Returns (base_model, None) if loading fails
+        Raises RuntimeError if checkpoint loading fails
     """
     try:
         peft_model, adapter_states, meta = _load_evo_peft_model_and_states(
             base_model, checkpoint_path, allow_unsafe_pickle=allow_unsafe_pickle
         )
     except Exception as exc:
-        print(f"  [warn] Failed to load evolution checkpoint: {exc}")
-        return base_model, None
+        raise RuntimeError(f"Failed to load evolution checkpoint: {checkpoint_path}") from exc
 
     lora_rank = int(meta.get("lora_rank", 0) or 0)
     target_modules = list(meta.get("target_modules", []) or [])
@@ -1275,8 +1274,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="Qwen/Qwen2.5-0.5B",
-        help="Base model name (default: Qwen/Qwen2.5-0.5B).",
+        default="Qwen/Qwen3-0.6B",
+        help="Base model name (default: Qwen/Qwen3-0.6B).",
     )
     parser.add_argument(
         "--trust-remote-code",

@@ -97,5 +97,5 @@ exclude_lines = [
 targets = ["src/symbiont_ecology"]
 
 [tool.symbiont]
-default_backbone = "unsloth/Qwen2.5-0.5b-instruct"
+default_backbone = "Qwen/Qwen3-0.6B"
 max_lora_rank = 8

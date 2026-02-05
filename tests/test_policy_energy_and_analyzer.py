@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from symbiont_ecology import ATPLedger, EcologyConfig
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.assimilation import AssimilationTester
@@ -321,8 +323,8 @@ policy:
             sys.modules.pop("omegaconf", None)
 
 
-def test_config_loader_omegaconf_parse_failure_fallback(tmp_path) -> None:
-    # Simulate OmegaConf import succeeds but .load raises, exercising inner except branch
+def test_config_loader_omegaconf_parse_failure_raises(tmp_path) -> None:
+    # Simulate OmegaConf import succeeds but .load raises; loader must fail fast.
     import sys
     from types import SimpleNamespace
 
@@ -341,7 +343,7 @@ def test_config_loader_omegaconf_parse_failure_fallback(tmp_path) -> None:
     try:
         p = tmp_path / "bad.yaml"
         p.write_text("policy:\n  enabled: true\n")
-        cfg = load_ecology_config(p)
-        assert cfg.policy.enabled is True
+        with pytest.raises(ValueError, match="parse error"):
+            load_ecology_config(p)
     finally:
         sys.modules.pop("omegaconf", None)

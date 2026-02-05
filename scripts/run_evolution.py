@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Long Gemma evolution with per-generation summaries."""
+"""Long-form evolution runner with per-generation summaries."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
+import torch
 from transformers.utils import logging as hf_logging
 
 from symbiont_ecology import (
@@ -99,6 +100,13 @@ def _git_commit_short() -> str | None:
         return sha[:7] if sha else None
     except Exception:
         return None
+
+
+def _seed_everything(seed: int) -> None:
+    random.seed(int(seed))
+    torch.manual_seed(int(seed))
+    if torch.cuda.is_available():  # pragma: no cover - depends on hardware
+        torch.cuda.manual_seed_all(int(seed))
 
 
 def _parse_last_number(text: str) -> float | None:
@@ -453,7 +461,7 @@ def summarize_slice(episodes_jsonl: Path, start_idx: int, end_idx: int) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run long-form evolution on Gemma host.")
+    parser = argparse.ArgumentParser(description="Run long-form evolution on a frozen host model.")
     parser.add_argument(
         "--config",
         type=Path,
@@ -469,7 +477,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("artifacts_gemma_long_eval"),
+        default=Path("artifacts_qwen3_long_eval"),
         help="Directory for telemetry outputs.",
     )
     parser.add_argument(
@@ -1115,6 +1123,7 @@ def _make_assimilation_tester(config) -> AssimilationTester:
 
 def main() -> None:
     args = parse_args()
+    _seed_everything(args.seed)
 
     resume_root = args.resume_from
     if resume_root is not None:
@@ -1128,7 +1137,7 @@ def main() -> None:
 
     # Respect model IDs provided by the experiment config; only default if unset
     if not getattr(config.host, "backbone_model", None):
-        config.host.backbone_model = "google/gemma-3-270m-it"
+        config.host.backbone_model = "Qwen/Qwen3-0.6B"
     if not getattr(config.host, "tokenizer", None):
         config.host.tokenizer = config.host.backbone_model
 
@@ -1172,6 +1181,7 @@ def main() -> None:
         # respawn organelles with saved IDs and adapter states
         adapter_states = state.get("adapter_states", {}) or {}
         population.population = dict(population.population)
+        restore_errors: list[str] = []
         for genome in population.population.values():
             oid = genome.organelle_id
             host.spawn_organelle(rank=genome.rank, organelle_id=oid)
@@ -1184,10 +1194,13 @@ def main() -> None:
                         org = host.organelles.get(oid)
                         if org is not None:
                             org.import_adapter_state(state_obj, alpha=1.0)  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+                except Exception as exc:
+                    restore_errors.append(f"{oid}: {exc}")
             ledger.ensure(oid, 0.0)
             ledger.ensure_energy(oid, 0.0)
+        if restore_errors:
+            joined = "; ".join(restore_errors)
+            raise RuntimeError(f"Failed to restore one or more organelle adapters: {joined}")
         # restore ledger balances
         if state.get("ledger_state") is not None:
             ledger = _restore_ledger(state.get("ledger_state"), ledger)

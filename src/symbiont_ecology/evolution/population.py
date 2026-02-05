@@ -222,7 +222,7 @@ class PopulationManager:
         self.energy_delta.setdefault(organelle_id, []).append(delta)
         # accumulate evidence credits on positive deltas as a weak proxy
         if delta > 0:
-            self.evidence_credit[organelle_id] = self.evidence_credit.get(organelle_id, 0) + 0
+            self.evidence_credit[organelle_id] = self.evidence_credit.get(organelle_id, 0) + 1
 
     def record_roi(self, organelle_id: str, value: float) -> None:
         if not math.isfinite(value):

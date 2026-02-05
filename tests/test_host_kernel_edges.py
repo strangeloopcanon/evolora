@@ -194,7 +194,7 @@ def test_estimate_trainable_fallback_scales_by_rank() -> None:
     assert estimate == 12
 
 
-def test_import_organelle_adapter_swallow_import_errors(tmp_path: Path) -> None:
+def test_import_organelle_adapter_raises_on_import_errors(tmp_path: Path) -> None:
     cfg = EcologyConfig()
     host = HostKernel(config=cfg, router=BanditRouter(), ledger=ATPLedger())
 
@@ -213,7 +213,8 @@ def test_import_organelle_adapter_swallow_import_errors(tmp_path: Path) -> None:
     host.organelles["b"] = FailingImporter()
     out = tmp_path / "snap.safetensors"
     host.export_organelle_adapter("a", out)
-    host.import_organelle_adapter("b", out, alpha=0.5)
+    with pytest.raises(RuntimeError):
+        host.import_organelle_adapter("b", out, alpha=0.5)
 
 
 def test_recurrence_template_format_error_falls_back() -> None:

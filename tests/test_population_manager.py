@@ -51,6 +51,17 @@ def test_population_prune_excess_and_assimilation_records():
     assert recs and recs[-1]["uplift"] == 0.1
 
 
+def test_record_energy_delta_mints_evidence_token_on_positive_delta() -> None:
+    pm = PopulationManager(EvolutionConfig())
+    pm.register(Genome("o1", {"novelty": 0.1}, gate_bias=0.0, rank=2))
+    pm.record_energy_delta("o1", 0.0)
+    assert pm.evidence_tokens("o1") == 0
+    pm.record_energy_delta("o1", 1.5)
+    assert pm.evidence_tokens("o1") == 1
+    pm.record_energy_delta("o1", 2.0)
+    assert pm.evidence_tokens("o1") == 2
+
+
 def test_cell_novelty_decreases_with_usage():
     cfg = EvolutionConfig()
     pm = PopulationManager(cfg)
