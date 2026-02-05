@@ -10,12 +10,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import pickle
 import re
 import subprocess
 from pathlib import Path
 from statistics import mean
 from typing import Any
+
+from symbiont_ecology.utils.checkpoint_io import load_checkpoint
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -48,12 +49,12 @@ def _git_commit(repo_root: Path) -> str | None:
         return None
 
 
-def _load_checkpoint_generation(run_dir: Path) -> int | None:
+def _load_checkpoint_generation(run_dir: Path, *, allow_unsafe_pickle: bool = False) -> int | None:
     checkpoint_path = run_dir / "checkpoint.pt"
     if not checkpoint_path.exists():
         return None
     try:
-        state = pickle.loads(checkpoint_path.read_bytes())
+        state = load_checkpoint(checkpoint_path, allow_unsafe_pickle=allow_unsafe_pickle)
     except Exception:
         return None
     if not isinstance(state, dict):
@@ -78,12 +79,14 @@ def _count_jsonl_lines(path: Path) -> int | None:
         return None
 
 
-def _summarize_run(run_dir: Path) -> dict[str, object]:
+def _summarize_run(run_dir: Path, *, allow_unsafe_pickle: bool = False) -> dict[str, object]:
     records = _load_jsonl(run_dir / "gen_summaries.jsonl")
     records_sorted = sorted(records, key=lambda rec: int(rec.get("generation", 0) or 0))
     record_generations = [int(rec.get("generation", 0) or 0) for rec in records_sorted]
     max_record_generation = max(record_generations) if record_generations else 0
-    checkpoint_generation = _load_checkpoint_generation(run_dir)
+    checkpoint_generation = _load_checkpoint_generation(
+        run_dir, allow_unsafe_pickle=allow_unsafe_pickle
+    )
     generations_total = checkpoint_generation or max_record_generation or len(records_sorted)
     records_count = len(records_sorted)
 
@@ -329,6 +332,14 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Output directory (tracked, e.g. results/paper_qwen3_20251215)",
     )
+    parser.add_argument(
+        "--allow-unsafe-pickle",
+        action="store_true",
+        help=(
+            "Allow trusted legacy pickle checkpoints. "
+            "Unsafe: untrusted pickle files can execute arbitrary code."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -338,7 +349,10 @@ def main() -> None:
     out_dir: Path = args.output
     runs = {"frozen": args.frozen, "single": args.single, "ecology": args.ecology}
 
-    summaries = {name: _summarize_run(path) for name, path in runs.items()}
+    summaries = {
+        name: _summarize_run(path, allow_unsafe_pickle=args.allow_unsafe_pickle)
+        for name, path in runs.items()
+    }
     (out_dir / "reports").mkdir(parents=True, exist_ok=True)
     for name, run_dir in runs.items():
         _maybe_copy(run_dir / "report.md", out_dir / "reports" / f"{name}_report.md")

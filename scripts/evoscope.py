@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 from analyze_ecology_run import (
-    load_jsonl,
-    summarise_generations,
-    summarise_assimilation,
     ensure_plots,
+    load_jsonl,
+    summarise_assimilation,
+    summarise_generations,
 )
 
 
@@ -34,7 +34,9 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _sorted_dict_items(mapping: Mapping[str, Any], *, limit: int | None = None) -> list[tuple[str, Any]]:
+def _sorted_dict_items(
+    mapping: Mapping[str, Any], *, limit: int | None = None
+) -> list[tuple[str, Any]]:
     items = sorted(mapping.items(), key=lambda kv: kv[1], reverse=True)
     return items if limit is None else items[:limit]
 
@@ -61,15 +63,21 @@ def build_html(
     qd_archive_cov = [_safe_float(rec.get("qd_archive_coverage", 0.0)) * 100.0 for rec in records]
     latest_record = records[-1] if records else {}
     qd_top = summary.get("qd_archive_top") or latest_record.get("qd_archive_top") or []
-    qd_top_html = "".join(
-        f"<li>{entry['cell']} (bin {entry['bin']}): ROI {entry['roi']:.3f}, novelty {entry['novelty']:.2f}</li>"
-        for entry in qd_top
-    ) or "<li>N/A</li>"
+    qd_top_html = (
+        "".join(
+            f"<li>{entry['cell']} (bin {entry['bin']}): ROI {entry['roi']:.3f}, novelty {entry['novelty']:.2f}</li>"
+            for entry in qd_top
+        )
+        or "<li>N/A</li>"
+    )
     board_latest = summary.get("comms_board_latest") or latest_record.get("comms_board") or []
-    board_html = "".join(
-        f"<li>{entry['organelle_id']} → {entry.get('topic') or 'general'} · {entry['text']}</li>"
-        for entry in board_latest
-    ) or "<li>N/A</li>"
+    board_html = (
+        "".join(
+            f"<li>{entry['organelle_id']} → {entry.get('topic') or 'general'} · {entry['text']}</li>"
+            for entry in board_latest
+        )
+        or "<li>N/A</li>"
+    )
     gating_totals = summary.get("assimilation_gating_total", {}) or {}
     gating_sorted = _sorted_dict_items(gating_totals, limit=12)
     gating_labels = [label for label, _ in gating_sorted]
@@ -85,16 +93,21 @@ def build_html(
         f"<li>{pair}: {count}</li>" for pair, count in _sorted_dict_items(co_routing_top, limit=10)
     )
     history_latest = summary.get("assimilation_history_latest") or {}
-    history_html = "".join(
-        (
-            f"<li>{key}: gen {rec.get('generation')} · uplift {float(rec.get('uplift')):+.3f}</li>"
-            if isinstance(rec.get("uplift"), (int, float))
-            else f"<li>{key}: gen {rec.get('generation')}</li>"
+    history_html = (
+        "".join(
+            (
+                f"<li>{key}: gen {rec.get('generation')} · uplift {float(rec.get('uplift')):+.3f}</li>"
+                if isinstance(rec.get("uplift"), (int, float))
+                else f"<li>{key}: gen {rec.get('generation')}</li>"
+            )
+            for key, rec in list(history_latest.items())[:8]
         )
-        for key, rec in list(history_latest.items())[:8]
-    ) or "<li>N/A</li>"
+        or "<li>N/A</li>"
+    )
     tier_totals = summary.get("colony_tier_counts_total") or {}
-    tier_lines = "".join(f"<li>Tier {tier}: {count}</li>" for tier, count in _sorted_dict_items(tier_totals))
+    tier_lines = "".join(
+        f"<li>Tier {tier}: {count}</li>" for tier, count in _sorted_dict_items(tier_totals)
+    )
 
     recent_rows = []
     for rec in records[-25:]:
@@ -136,7 +149,9 @@ def build_html(
     assimilation_failures = assimilation_summary.get("failures", 0)
     assimilation_extra = []
     if "sample_size_mean" in assimilation_summary:
-        assimilation_extra.append(f"Mean sample size: {assimilation_summary['sample_size_mean']:.1f}")
+        assimilation_extra.append(
+            f"Mean sample size: {assimilation_summary['sample_size_mean']:.1f}"
+        )
     if "ci_excludes_zero_rate" in assimilation_summary:
         assimilation_extra.append(
             f"CI excludes zero: {assimilation_summary['ci_excludes_zero_rate'] * 100:.1f}%"
@@ -146,12 +161,13 @@ def build_html(
     if "dr_used" in assimilation_summary:
         assimilation_extra.append(f"DR uplift events: {assimilation_summary['dr_used']}")
     method_counts = assimilation_summary.get("methods") or {}
-    method_lines = "".join(f"<li>{name}: {count}</li>" for name, count in _sorted_dict_items(method_counts))
+    method_lines = "".join(
+        f"<li>{name}: {count}</li>" for name, count in _sorted_dict_items(method_counts)
+    )
     strata_lines = ""
     if assimilation_summary.get("dr_strata_top"):
         strata_lines = "".join(
-            f"<li>{name}: {count}</li>"
-            for name, count in assimilation_summary["dr_strata_top"]
+            f"<li>{name}: {count}</li>" for name, count in assimilation_summary["dr_strata_top"]
         )
     # Top-line stats for easy scanning
     qd_last_cov = qd_archive_cov[-1] if qd_archive_cov else 0.0
@@ -452,7 +468,9 @@ def build_html(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate EvoScope HTML for a run directory")
-    parser.add_argument("run_dir", type=Path, help="Path to the run directory (contains gen_summaries.jsonl)")
+    parser.add_argument(
+        "run_dir", type=Path, help="Path to the run directory (contains gen_summaries.jsonl)"
+    )
     args = parser.parse_args()
     root = args.run_dir
     gen_path = root / "gen_summaries.jsonl"

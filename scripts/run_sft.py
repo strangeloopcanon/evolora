@@ -24,7 +24,6 @@ import argparse
 import json
 import math
 import os
-import pickle
 import random
 import time
 import warnings
@@ -46,6 +45,8 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.utils import logging as hf_logging
 
+from symbiont_ecology.utils.checkpoint_io import load_checkpoint
+
 hf_logging.set_verbosity_error()
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 warnings.filterwarnings("ignore", message=".*PEFT.*")
@@ -58,11 +59,13 @@ BudgetKind = Literal["tokens", "forward_flops", "wall_clock_seconds"]
 # ---------------------------------------------------------------------------
 
 
-def load_compute_budget_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
+def load_compute_budget_from_checkpoint(
+    checkpoint_path: Path, *, allow_unsafe_pickle: bool = False
+) -> dict[str, Any]:
     """Load compute budget from an evolution checkpoint."""
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    checkpoint_state = pickle.loads(checkpoint_path.read_bytes())
+    checkpoint_state = load_checkpoint(checkpoint_path, allow_unsafe_pickle=allow_unsafe_pickle)
     compute = checkpoint_state.get("compute_budget")
     if compute is None:
         raise ValueError(
@@ -93,6 +96,7 @@ def estimate_sft_budget_from_checkpoint(
     *,
     match_budget_field: str = "train_flops",
     backprop_multiplier: float = 3.0,
+    allow_unsafe_pickle: bool = False,
 ) -> SFTBudget:
     """Estimate an SFT compute budget from an evolution checkpoint.
 
@@ -105,7 +109,9 @@ def estimate_sft_budget_from_checkpoint(
 
         sft_token_budget ≈ evolution_tokens / backprop_multiplier
     """
-    budget = load_compute_budget_from_checkpoint(checkpoint_path)
+    budget = load_compute_budget_from_checkpoint(
+        checkpoint_path, allow_unsafe_pickle=allow_unsafe_pickle
+    )
     field = str(match_budget_field)
     if field not in (
         "total_tokens",
@@ -445,6 +451,14 @@ def parse_args() -> argparse.Namespace:
         "--checkpoint",
         type=Path,
         help="Path to evolution checkpoint.pt to match compute budget from.",
+    )
+    parser.add_argument(
+        "--allow-unsafe-pickle",
+        action="store_true",
+        help=(
+            "Allow trusted legacy pickle checkpoints when reading --checkpoint. "
+            "Unsafe: untrusted pickle files can execute arbitrary code."
+        ),
     )
     budget_group.add_argument(
         "--token-budget",
@@ -875,7 +889,7 @@ def train_manual(
 
     ckpt_path = args.output / "sft_train_state.pt"
     if bool(args.resume) and ckpt_path.exists():
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         global_step = int(ckpt.get("global_step", 0) or 0)
         epoch = int(ckpt.get("epoch", 0) or 0)
         step_in_epoch = int(ckpt.get("step_in_epoch", 0) or 0)
@@ -1128,6 +1142,7 @@ def main() -> None:
             args.checkpoint,
             match_budget_field=args.match_budget_field,
             backprop_multiplier=args.backprop_multiplier,
+            allow_unsafe_pickle=args.allow_unsafe_pickle,
         )
         if budget.details is not None:
             budget_details = dict(budget.details)

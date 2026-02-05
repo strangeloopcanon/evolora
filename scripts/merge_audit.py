@@ -21,7 +21,9 @@ def _format_cell(cell: Dict[str, Any] | None) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Summarise merge audit results for a run directory")
+    parser = argparse.ArgumentParser(
+        description="Summarise merge audit results for a run directory"
+    )
     parser.add_argument("run_dir", type=Path, help="Run directory containing gen_summaries.jsonl")
     parser.add_argument(
         "--top",
@@ -79,7 +81,9 @@ def main() -> None:
         return
 
     print(f"\nWorst {len(top_n)} audits (delta <= {args.threshold}):")
-    header = "{:>4} {:>4} {:>12} {:>12} {:>12} {:>8}".format("Gen", "Tasks", "Pre ROI", "Post ROI", "Delta", "Org")
+    header = "{:>4} {:>4} {:>12} {:>12} {:>12} {:>8}".format(
+        "Gen", "Tasks", "Pre ROI", "Post ROI", "Delta", "Org"
+    )
     print(header)
     print("-" * len(header))
     for record in top_n:
@@ -109,4 +113,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -248,7 +248,7 @@ class EcologyLoop:
         self._prune_knowledge_cache()
         # per-generation caps
         self._team_handoff_used = 0
-        self._prompt_scaffold_counts = {}
+        self._prompt_scaffold_counts: dict[str, int] = {}
         self._team_probe_candidates_gen = []
         self._winter_events_gen = []
         self._population_refresh_gen = {}

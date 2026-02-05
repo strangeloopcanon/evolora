@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -11,7 +11,7 @@ SoupEntry = Union[float, str, dict[str, Any], list[Any]]
 
 
 class RouteEvent(BaseModel):
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     organelle_id: str
     reward: float
     novelty: float
@@ -78,7 +78,7 @@ class LedgerSnapshot(BaseModel):
     accounts: dict[str, float]
     total_atp: float
     energy: dict[str, float] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class RewardBreakdown(BaseModel):

@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""Export top-N organelle adapters from a checkpointed run into safetensors files.
-
-WARNING: This script loads a pickle checkpoint. Only run it on checkpoints you trust.
-"""
+"""Export top-N organelle adapters from a checkpointed run into safetensors files."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import pickle
 from pathlib import Path
 
 import torch
 from safetensors.torch import save_file
+
+from symbiont_ecology.utils.checkpoint_io import load_checkpoint
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,6 +37,14 @@ def parse_args() -> argparse.Namespace:
         default="roi",
         help="Metric used to rank organelles for export",
     )
+    parser.add_argument(
+        "--allow-unsafe-pickle",
+        action="store_true",
+        help=(
+            "Allow trusted legacy pickle checkpoints. "
+            "Unsafe: untrusted pickle files can execute arbitrary code."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -53,6 +59,64 @@ def _as_tensor_state(state: object) -> dict[str, torch.Tensor] | None:
     return tensor_state or None
 
 
+def _average_tail(values: object, limit: int = 10) -> float:
+    if not isinstance(values, list) or not values:
+        return 0.0
+    tail = values[-max(1, limit) :]
+    nums: list[float] = []
+    for value in tail:
+        try:
+            nums.append(float(value))
+        except Exception:
+            continue
+    if not nums:
+        return 0.0
+    return float(sum(nums) / len(nums))
+
+
+def _metrics_from_population_state(
+    state: dict[str, object], organelle_id: str, *, limit: int = 10
+) -> tuple[float, float, int | None]:
+    avg_roi = 0.0
+    avg_score = 0.0
+    rank: int | None = None
+    population_state = state.get("population_state")
+    if isinstance(population_state, dict):
+        roi_map = population_state.get("roi")
+        history_map = population_state.get("history")
+        genomes_map = population_state.get("genomes")
+        if isinstance(roi_map, dict):
+            avg_roi = _average_tail(roi_map.get(organelle_id), limit=limit)
+        if isinstance(history_map, dict):
+            avg_score = _average_tail(history_map.get(organelle_id), limit=limit)
+        if isinstance(genomes_map, dict):
+            genome_obj = genomes_map.get(organelle_id)
+            if isinstance(genome_obj, dict):
+                try:
+                    rank = int(genome_obj.get("rank", 0))
+                except Exception:
+                    rank = None
+        return avg_roi, avg_score, rank
+
+    # Legacy checkpoint compatibility
+    population = state.get("population")
+    try:
+        avg_roi = float(population.average_roi(organelle_id, limit=limit))  # type: ignore[attr-defined]
+    except Exception:
+        avg_roi = 0.0
+    try:
+        avg_score = float(population.average_score(organelle_id, limit=limit))  # type: ignore[attr-defined]
+    except Exception:
+        avg_score = 0.0
+    try:
+        genome = getattr(population, "population", {}).get(organelle_id)  # type: ignore[attr-defined]
+        if genome is not None:
+            rank = int(getattr(genome, "rank", 0))
+    except Exception:
+        rank = None
+    return avg_roi, avg_score, rank
+
+
 def main() -> None:
     args = parse_args()
     run_dir = args.run
@@ -63,25 +127,14 @@ def main() -> None:
     if not checkpoint_path.exists():
         raise SystemExit(f"Checkpoint not found: {checkpoint_path}")
 
-    state = pickle.loads(checkpoint_path.read_bytes())
-    population = state.get("population")
+    state = load_checkpoint(checkpoint_path, allow_unsafe_pickle=args.allow_unsafe_pickle)
     adapter_states = state.get("adapter_states", {}) or {}
 
     rows: list[dict[str, object]] = []
     for organelle_id, adapter_state in adapter_states.items():
         if not isinstance(organelle_id, str):
             continue
-        avg_roi = 0.0
-        avg_score = 0.0
-        rank = None
-        try:
-            avg_roi = float(population.average_roi(organelle_id, limit=10))  # type: ignore[attr-defined]
-            avg_score = float(population.average_score(organelle_id, limit=10))  # type: ignore[attr-defined]
-            genome = getattr(population, "population", {}).get(organelle_id)  # type: ignore[attr-defined]
-            if genome is not None:
-                rank = int(getattr(genome, "rank", 0))
-        except Exception:
-            pass
+        avg_roi, avg_score, rank = _metrics_from_population_state(state, organelle_id, limit=10)
         rows.append(
             {
                 "organelle_id": organelle_id,

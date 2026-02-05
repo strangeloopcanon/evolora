@@ -40,9 +40,15 @@ def summarise_run(run_dir: Path) -> dict:
     events = [rec for rec in assim if rec.get("type") == "assimilation"]
     passes = sum(1 for r in events if r.get("decision"))
     failures = sum(1 for r in events if not r.get("decision"))
-    cis = [r for r in events if isinstance(r.get("ci_low"), (int, float)) and isinstance(r.get("ci_high"), (int, float))]
+    cis = [
+        r
+        for r in events
+        if isinstance(r.get("ci_low"), (int, float)) and isinstance(r.get("ci_high"), (int, float))
+    ]
     ci_excl_zero = sum(1 for r in cis if (r["ci_low"] > 0) or (r["ci_high"] < 0))
-    powers = [float(r.get("power", 0.0)) for r in events if isinstance(r.get("power"), (int, float))]
+    powers = [
+        float(r.get("power", 0.0)) for r in events if isinstance(r.get("power"), (int, float))
+    ]
     return {
         "generations": len(gens),
         "roi_mean": float(mean(roi)) if roi else 0.0,
@@ -66,18 +72,38 @@ def main() -> None:
     args = ap.parse_args()
     a = summarise_run(args.run_a)
     b = summarise_run(args.run_b)
+
     def pct(x):
         return f"{x*100:.1f}%"
-    print("A gens:", a["generations"], "B gens:", b["generations"]) 
+
+    print("A gens:", a["generations"], "B gens:", b["generations"])
     print("ROI mean:", f"{a['roi_mean']:.3f}", "vs", f"{b['roi_mean']:.3f}")
-    print("Merges:", a["merges"], "vs", b["merges"], "/ Promotions:", a["promotions"], "vs", b["promotions"]) 
-    print("Trials:", a["trials"], "vs", b["trials"]) 
-    print("Assim events (pass/fail):", f"{a['assim_events']} ({a['assim_passes']}/{a['assim_failures']})", "vs", f"{b['assim_events']} ({b['assim_passes']}/{b['assim_failures']})")
+    print(
+        "Merges:",
+        a["merges"],
+        "vs",
+        b["merges"],
+        "/ Promotions:",
+        a["promotions"],
+        "vs",
+        b["promotions"],
+    )
+    print("Trials:", a["trials"], "vs", b["trials"])
+    print(
+        "Assim events (pass/fail):",
+        f"{a['assim_events']} ({a['assim_passes']}/{a['assim_failures']})",
+        "vs",
+        f"{b['assim_events']} ({b['assim_passes']}/{b['assim_failures']})",
+    )
     print("CI excl zero:", pct(a["ci_excl_zero_rate"]), "vs", pct(b["ci_excl_zero_rate"]))
     print("Power mean:", f"{a['power_mean']:.2f}", "vs", f"{b['power_mean']:.2f}")
-    print("Eval:", f"{a['eval_correct']}/{a['eval_total']}", "vs", f"{b['eval_correct']}/{b['eval_total']}")
+    print(
+        "Eval:",
+        f"{a['eval_correct']}/{a['eval_total']}",
+        "vs",
+        f"{b['eval_correct']}/{b['eval_total']}",
+    )
 
 
 if __name__ == "__main__":
     main()
-

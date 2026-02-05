@@ -5,16 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from symbiont_ecology import (
-    ATPLedger,
     AssimilationTester,
+    ATPLedger,
     BanditRouter,
     HostKernel,
     PopulationManager,
     TelemetrySink,
     load_ecology_config,
 )
-from symbiont_ecology.environment.human import HumanBandit
 from symbiont_ecology.environment.grid import GridEnvironment
+from symbiont_ecology.environment.human import HumanBandit
 from symbiont_ecology.environment.loops import EcologyLoop
 from symbiont_ecology.evolution.population import Genome
 

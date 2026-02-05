@@ -45,6 +45,8 @@ from typing import Any
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from symbiont_ecology.utils.checkpoint_io import load_checkpoint
+
 _LORA_TARGET_MODULES = (
     "q_proj",
     "k_proj",
@@ -315,6 +317,8 @@ def load_evolution_model(
     checkpoint_path: str | Path,
     model_id: str,
     device: str = "auto",
+    *,
+    allow_unsafe_pickle: bool = False,
 ) -> tuple[Any, Any]:
     """Load a model with evolution checkpoint adapters."""
     from peft import LoraConfig, get_peft_model
@@ -329,7 +333,7 @@ def load_evolution_model(
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
     # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    checkpoint = load_checkpoint(Path(checkpoint_path), allow_unsafe_pickle=allow_unsafe_pickle)
 
     # Get adapter states
     adapter_states = checkpoint.get("adapter_states", {})
@@ -422,6 +426,14 @@ def main() -> None:
         help="Path to evolution checkpoint (.pt file)",
     )
     parser.add_argument(
+        "--allow-unsafe-pickle",
+        action="store_true",
+        help=(
+            "Allow trusted legacy pickle checkpoints for --evo-checkpoint. "
+            "Unsafe: untrusted pickle files can execute arbitrary code."
+        ),
+    )
+    parser.add_argument(
         "--sft-adapter",
         help="Path to SFT PEFT adapter directory",
     )
@@ -475,7 +487,12 @@ def main() -> None:
     # Evaluate evolution checkpoint
     if args.evo_checkpoint:
         print(f"\nLoading evolution checkpoint from {args.evo_checkpoint}...")
-        model, tokenizer = load_evolution_model(args.evo_checkpoint, args.model, args.device)
+        model, tokenizer = load_evolution_model(
+            args.evo_checkpoint,
+            args.model,
+            args.device,
+            allow_unsafe_pickle=args.allow_unsafe_pickle,
+        )
         print("Evaluating evolution model...")
         evo_result = evaluate_model_transfer(
             model, tokenizer, tasks, args.source_family, "evolution", args.verbose

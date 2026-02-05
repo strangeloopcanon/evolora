@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
 import random
 import re
 from dataclasses import dataclass, field
@@ -39,6 +38,8 @@ from typing import Any
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from symbiont_ecology.utils.checkpoint_io import load_checkpoint
 
 _LORA_TARGET_MODULES = (
     "q_proj",
@@ -1059,14 +1060,14 @@ def _evaluate_model_with_evo_routing(
 
 
 def _load_evo_peft_model_and_states(
-    base_model, checkpoint_path: Path
+    base_model, checkpoint_path: Path, *, allow_unsafe_pickle: bool = False
 ) -> tuple[object, dict[str, dict[str, torch.Tensor]], dict[str, Any]]:
     from peft import LoraConfig, get_peft_model
 
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    checkpoint = pickle.loads(checkpoint_path.read_bytes())
+    checkpoint = load_checkpoint(checkpoint_path, allow_unsafe_pickle=allow_unsafe_pickle)
     if not isinstance(checkpoint, dict):
         raise ValueError("Evolution checkpoint did not deserialize into a dict")
     adapter_states = checkpoint.get("adapter_states", {})
@@ -1122,6 +1123,7 @@ def load_evo_model(
     selection_family: str | None = "any",
     selection_top_k_by_roi: int | None = None,
     selection_max_new_tokens: int = 96,
+    allow_unsafe_pickle: bool = False,
 ):
     """Load evolution checkpoint and apply the best organelle.
 
@@ -1142,7 +1144,7 @@ def load_evo_model(
     """
     try:
         peft_model, adapter_states, meta = _load_evo_peft_model_and_states(
-            base_model, checkpoint_path
+            base_model, checkpoint_path, allow_unsafe_pickle=allow_unsafe_pickle
         )
     except Exception as exc:
         print(f"  [warn] Failed to load evolution checkpoint: {exc}")
@@ -1302,6 +1304,14 @@ def main() -> None:
         type=Path,
         default=None,
         help="Path to evolution checkpoint.pt file.",
+    )
+    parser.add_argument(
+        "--allow-unsafe-pickle",
+        action="store_true",
+        help=(
+            "Allow trusted legacy pickle checkpoints for --evo-checkpoint. "
+            "Unsafe: untrusted pickle files can execute arbitrary code."
+        ),
     )
     parser.add_argument(
         "--evo-organelle-id",
@@ -1568,7 +1578,9 @@ def main() -> None:
             if routing_mode in {"family", "cell"} and args.evo_routing_json is not None:
                 try:
                     evo_model, adapter_states, _meta = _load_evo_peft_model_and_states(
-                        evo_base, args.evo_checkpoint
+                        evo_base,
+                        args.evo_checkpoint,
+                        allow_unsafe_pickle=args.allow_unsafe_pickle,
                     )
                 except Exception as exc:
                     print(f"  [error] Failed to load evolution checkpoint: {exc}")
@@ -1660,7 +1672,9 @@ def main() -> None:
             elif routing_mode in {"family", "cell"} and selection_tasks_path is not None:
                 try:
                     evo_model, adapter_states, _meta = _load_evo_peft_model_and_states(
-                        evo_base, args.evo_checkpoint
+                        evo_base,
+                        args.evo_checkpoint,
+                        allow_unsafe_pickle=args.allow_unsafe_pickle,
                     )
                 except Exception as exc:
                     print(f"  [error] Failed to load evolution checkpoint: {exc}")
@@ -1790,6 +1804,7 @@ def main() -> None:
                     selection_family=args.evo_selection_family,
                     selection_top_k_by_roi=args.evo_selection_top_k_by_roi,
                     selection_max_new_tokens=args.evo_selection_max_new_tokens,
+                    allow_unsafe_pickle=args.allow_unsafe_pickle,
                 )
                 evo_selection_details = getattr(evo_model, "_selection_details", None)
                 evo_selection_tasks = str(selection_tasks_path) if selection_tasks_path else None
