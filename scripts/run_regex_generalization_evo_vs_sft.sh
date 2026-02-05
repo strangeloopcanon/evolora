@@ -220,13 +220,14 @@ current_generation() {
     return 0
   fi
   "$PY" - <<'PY' "$checkpoint_path" || echo "0"
-import pickle
 import sys
 from pathlib import Path
 
+from symbiont_ecology.utils.checkpoint_io import load_checkpoint
+
 checkpoint_path = Path(sys.argv[1])
 try:
-    state = pickle.loads(checkpoint_path.read_bytes())
+    state = load_checkpoint(checkpoint_path)
     gen = int(state.get("generation", 0) or 0)
     print(str(gen))
 except Exception:
@@ -275,13 +276,14 @@ fi
 
 if [ "$RUN_SFT" -eq 1 ]; then
   EVO_LORA_RANK="$("$PY" - <<'PY' "$CHECKPOINT" || echo "0"
-import pickle
 import sys
 from pathlib import Path
 
+from symbiont_ecology.utils.checkpoint_io import load_checkpoint
+
 checkpoint_path = Path(sys.argv[1])
 try:
-    checkpoint = pickle.loads(checkpoint_path.read_bytes())
+    checkpoint = load_checkpoint(checkpoint_path)
 except Exception:
     print("0")
     raise SystemExit(0)

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "wheel>=0.46.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -68,7 +68,7 @@ plugins = []
 # extensive refactoring of the dict schemas to fix properly
 [[tool.mypy.overrides]]
 module = "symbiont_ecology.environment.loops"
-disable_error_code = ["arg-type", "call-overload", "attr-defined", "operator", "misc", "index", "no-any-return", "no-redef", "assignment", "var-annotated"]
+disable_error_code = ["arg-type", "call-overload", "attr-defined", "operator", "misc", "index", "no-any-return", "no-redef", "assignment"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
@@ -87,7 +87,6 @@ fail_under = 80
 omit = [
   "src/symbiont_ecology/host/gemma.py",
   "src/symbiont_ecology/organelles/peft_hebbian.py",
-  "src/symbiont_ecology/environment/synthetic.py",
 ]
 exclude_lines = [
   "pragma: no cover",

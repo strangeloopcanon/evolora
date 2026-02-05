@@ -17,7 +17,7 @@ PRECOMMIT := $(VENV)/bin/pre-commit
 
 $(VENV)/bin/activate:
 	@if [ ! -d $(VENV) ]; then $(PYTHON) -m venv $(VENV); fi
-	$(PIP) install --upgrade pip wheel
+	$(PIP) install --upgrade "pip>=26.0" "wheel>=0.46.2"
 	$(PIP) install -e .[dev]
 	$(PRECOMMIT) install || true
 
@@ -29,8 +29,8 @@ bootstrap: setup
 
 .PHONY: check
 check: setup
-	$(BLACK) --check src tests
-	$(RUFF) check src tests
+	$(BLACK) --check src tests scripts
+	$(RUFF) check src tests scripts
 	$(MYPY) src
 	$(BANDIT) -q -r src/symbiont_ecology --severity-level medium
 	git ls-files -z | xargs -0 $(DETECT_SECRETS_HOOK) --baseline .secrets.baseline
@@ -56,8 +56,8 @@ clean:
 
 .PHONY: format
 format: setup
-	$(BLACK) src tests
-	$(RUFF) check src tests --fix
+	$(BLACK) src tests scripts
+	$(RUFF) check src tests scripts --fix
 
 .PHONY: calibrate-resume
 calibrate-resume: setup

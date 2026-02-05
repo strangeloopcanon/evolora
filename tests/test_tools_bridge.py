@@ -10,3 +10,9 @@ def test_tool_registry_and_tools():
         raise AssertionError("expected KeyError")
     except KeyError:
         pass
+
+
+def test_calculator_rejects_code_execution_payload():
+    calc = CalculatorTool()
+    result = calc(expression="__import__('os').system('echo injected')")
+    assert result.startswith("error:")

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from statistics import mean
 from typing import Dict, Tuple
 
 from symbiont_ecology import (
@@ -49,7 +48,7 @@ def run_grid_diagnostics(cfg_path: Path, per_cell: int) -> None:
             cell: GridKey = (str(fam), str(dep))
             wins = 0
             tried = 0
-            for i in range(per_cell):
+            for _i in range(per_cell):
                 task = env.sample_task_from_cell(cell)
                 result = host.step(
                     prompt=task.prompt,
@@ -98,7 +97,9 @@ def run_grid_diagnostics(cfg_path: Path, per_cell: int) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Probe base model capability on grid cells and holdout tasks.")
+    ap = argparse.ArgumentParser(
+        description="Probe base model capability on grid cells and holdout tasks."
+    )
     ap.add_argument(
         "--config",
         type=Path,
@@ -117,4 +118,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

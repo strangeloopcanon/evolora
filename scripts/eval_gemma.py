@@ -6,8 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from symbiont_ecology import (
-    ATPLedger,
     AssimilationTester,
+    ATPLedger,
     BanditRouter,
     HostKernel,
     HumanBandit,
@@ -62,8 +62,12 @@ def main() -> None:
         assimilation.min_samples = int(getattr(tuning, "min_uplift_samples", 2))
         assimilation.dr_enabled = bool(getattr(tuning, "dr_enabled", False))
         assimilation.dr_strata = list(getattr(tuning, "dr_strata", assimilation.dr_strata))
-        assimilation.dr_min_stratum = int(getattr(tuning, "dr_min_stratum_size", assimilation.dr_min_stratum))
-        assimilation.dr_min_power = float(getattr(tuning, "dr_min_power", assimilation.dr_min_power))
+        assimilation.dr_min_stratum = int(
+            getattr(tuning, "dr_min_stratum_size", assimilation.dr_min_stratum)
+        )
+        assimilation.dr_min_power = float(
+            getattr(tuning, "dr_min_power", assimilation.dr_min_power)
+        )
     except Exception:
         pass
 

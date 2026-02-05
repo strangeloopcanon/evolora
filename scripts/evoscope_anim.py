@@ -19,11 +19,12 @@ If imageio is unavailable at runtime, the tests provide a stub in sys.modules.
 """
 try:  # pragma: no cover - exercised via tests using a stub
     import imageio  # type: ignore
+
     # prefer v2 API if present
     imageio_api = getattr(imageio, "v2", imageio)
 except Exception:  # pragma: no cover - fallback for very minimal envs
     imageio_api = None  # type: ignore
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # noqa: E402 - kept after imageio fallback import guard
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -76,7 +77,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Animate evolution timeline")
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--gif", action="store_true", help="write timeline.gif")
-    parser.add_argument("--mp4", action="store_true", help="write timeline.mp4 (requires imageio-ffmpeg)")
+    parser.add_argument(
+        "--mp4", action="store_true", help="write timeline.mp4 (requires imageio-ffmpeg)"
+    )
     args = parser.parse_args()
     root: Path = args.run_dir
     gen_path = root / "gen_summaries.jsonl"
@@ -88,6 +91,7 @@ def main() -> None:
             # tests stub imageio.mimsave; if not present, no-op
             try:
                 import imageio as _img  # type: ignore
+
                 _img.mimsave(out, frames, duration=0.08)  # type: ignore
             except Exception:
                 pass
@@ -99,6 +103,7 @@ def main() -> None:
         if imageio_api is None:
             try:
                 import imageio as _img  # type: ignore
+
                 _img.mimsave(out, frames, fps=12)  # type: ignore
             except Exception:
                 pass

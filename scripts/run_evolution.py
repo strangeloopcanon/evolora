@@ -7,7 +7,6 @@ import argparse
 import csv
 import json
 import os
-import pickle
 import random
 import re
 import time
@@ -30,10 +29,12 @@ from symbiont_ecology import (
     load_ecology_config,
 )
 from symbiont_ecology.economics.api import compute_route_cost
-from symbiont_ecology.environment.grid import GridEnvironment, GridTask
+from symbiont_ecology.environment.grid import GridCellState, GridEnvironment, GridKey, GridTask
 from symbiont_ecology.environment.loops import EcologyLoop
+from symbiont_ecology.evolution.ledger import ATPAccount
 from symbiont_ecology.evolution.population import Genome
 from symbiont_ecology.metrics.telemetry import ComputeBudget
+from symbiont_ecology.utils.checkpoint_io import load_checkpoint, save_checkpoint
 
 hf_logging.set_verbosity_error()
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -501,6 +502,14 @@ def parse_args() -> argparse.Namespace:
         help="Optional run directory containing a checkpoint.pt to resume from.",
     )
     parser.add_argument(
+        "--allow-unsafe-pickle",
+        action="store_true",
+        help=(
+            "Allow trusted legacy pickle checkpoints when resuming. "
+            "Unsafe: untrusted pickle files can execute arbitrary code."
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-every",
         type=int,
         default=0,
@@ -521,10 +530,504 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_checkpoint(path: Path) -> dict:
-    if not path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {path}")
-    return pickle.loads(path.read_bytes())
+def _to_float(value: object, default: float = 0.0) -> float:
+    try:
+        if isinstance(value, bool):
+            return float(int(value))
+        return float(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
+def _to_int(value: object, default: int = 0) -> int:
+    try:
+        if isinstance(value, bool):
+            return int(value)
+        return int(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
+def _to_grid_key(value: object) -> GridKey | None:
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return (str(value[0]), str(value[1]))
+    return None
+
+
+def _serialize_grid_task(task: GridTask) -> dict[str, object]:
+    return {
+        "task_id": task.task_id,
+        "cell": list(task.cell),
+        "prompt": task.prompt,
+        "price": float(task.price),
+        "target": task.target,
+        "family": task.family,
+        "depth": task.depth,
+        "difficulty": float(task.difficulty),
+        "canary": bool(task.canary),
+        "reward_bonus": float(task.reward_bonus),
+        "failure_cost_scale": float(task.failure_cost_scale),
+    }
+
+
+def _deserialize_grid_task(payload: object) -> GridTask | None:
+    if not isinstance(payload, dict):
+        return None
+    cell = _to_grid_key(payload.get("cell"))
+    if cell is None:
+        return None
+    return GridTask(
+        task_id=str(payload.get("task_id", "")),
+        cell=cell,
+        prompt=str(payload.get("prompt", "")),
+        price=_to_float(payload.get("price", 0.0), 0.0),
+        target=payload.get("target"),
+        family=str(payload.get("family", cell[0])),
+        depth=str(payload.get("depth", cell[1])),
+        difficulty=_to_float(payload.get("difficulty", 0.0), 0.0),
+        canary=bool(payload.get("canary", False)),
+        reward_bonus=_to_float(payload.get("reward_bonus", 0.0), 0.0),
+        failure_cost_scale=_to_float(payload.get("failure_cost_scale", 1.0), 1.0),
+    )
+
+
+def _serialize_population(population: PopulationManager) -> dict[str, object]:
+    genomes: dict[str, dict[str, object]] = {}
+    for oid, genome in population.population.items():
+        genomes[oid] = {
+            "organelle_id": genome.organelle_id,
+            "drive_weights": dict(genome.drive_weights),
+            "gate_bias": float(genome.gate_bias),
+            "rank": int(genome.rank),
+            "explore_rate": float(genome.explore_rate),
+            "post_rate": float(genome.post_rate),
+            "read_rate": float(genome.read_rate),
+            "hint_weight": float(genome.hint_weight),
+            "beta_exploit": float(genome.beta_exploit),
+            "q_decay": float(genome.q_decay),
+            "ucb_bonus": float(genome.ucb_bonus),
+            "budget_aggressiveness": float(genome.budget_aggressiveness),
+            "rank_noise": dict(genome.rank_noise),
+            "adapter_dropout": sorted(genome.adapter_dropout),
+            "duplication_factors": dict(genome.duplication_factors),
+        }
+    assimilation_history: list[dict[str, object]] = []
+    for key, records in population.assimilation_history.items():
+        oid, family, depth = key
+        assimilation_history.append(
+            {
+                "organelle_id": oid,
+                "family": family,
+                "depth": depth,
+                "records": list(records),
+            }
+        )
+    cell_values: list[dict[str, object]] = []
+    for oid, per_cell in population.cell_values.items():
+        for cell, value in per_cell.items():
+            cell_values.append({"organelle_id": oid, "cell": list(cell), "value": float(value)})
+    cell_counts: list[dict[str, object]] = []
+    for oid, per_cell in population.cell_counts.items():
+        for cell, count in per_cell.items():
+            cell_counts.append({"organelle_id": oid, "cell": list(cell), "count": int(count)})
+    global_cell_counts = [
+        {"cell": list(cell), "count": int(count)}
+        for cell, count in population.global_cell_counts.items()
+    ]
+    return {
+        "genomes": genomes,
+        "history": {k: list(v) for k, v in population.history.items()},
+        "score_meta": {k: list(v) for k, v in population.score_meta.items()},
+        "ages": dict(population.ages),
+        "energy": {k: list(v) for k, v in population.energy.items()},
+        "roi": {k: list(v) for k, v in population.roi.items()},
+        "adapter_usage": {k: dict(v) for k, v in population.adapter_usage.items()},
+        "energy_delta": {k: list(v) for k, v in population.energy_delta.items()},
+        "evidence_credit": dict(population.evidence_credit),
+        "assimilation_history_limit": population.assimilation_history_limit,
+        "assimilation_history": assimilation_history,
+        "cell_values": cell_values,
+        "cell_counts": cell_counts,
+        "global_cell_counts": global_cell_counts,
+    }
+
+
+def _restore_population(state_obj: object, population: PopulationManager) -> PopulationManager:
+    if not isinstance(state_obj, dict):
+        return population
+    genomes_obj = state_obj.get("genomes")
+    if not isinstance(genomes_obj, dict):
+        return population
+
+    restored = PopulationManager(population.config, population.foraging)
+    for oid, genome_obj in genomes_obj.items():
+        if not isinstance(oid, str) or not isinstance(genome_obj, dict):
+            continue
+        drive_raw = genome_obj.get("drive_weights", {})
+        drive_weights: dict[str, float] = {}
+        if isinstance(drive_raw, dict):
+            for key, value in drive_raw.items():
+                if isinstance(key, str):
+                    drive_weights[key] = _to_float(value, 0.0)
+        rank_noise_raw = genome_obj.get("rank_noise", {})
+        if not isinstance(rank_noise_raw, dict):
+            rank_noise_raw = {}
+        adapter_dropout_raw = genome_obj.get("adapter_dropout", [])
+        if not isinstance(adapter_dropout_raw, list):
+            adapter_dropout_raw = []
+        duplication_raw = genome_obj.get("duplication_factors", {})
+        if not isinstance(duplication_raw, dict):
+            duplication_raw = {}
+        genome = Genome(
+            organelle_id=str(genome_obj.get("organelle_id", oid)),
+            drive_weights=drive_weights,
+            gate_bias=_to_float(genome_obj.get("gate_bias", 0.0), 0.0),
+            rank=max(1, _to_int(genome_obj.get("rank", 1), 1)),
+            explore_rate=_to_float(genome_obj.get("explore_rate", 0.5), 0.5),
+            post_rate=_to_float(genome_obj.get("post_rate", 0.0), 0.0),
+            read_rate=_to_float(genome_obj.get("read_rate", 0.0), 0.0),
+            hint_weight=_to_float(genome_obj.get("hint_weight", 0.0), 0.0),
+            beta_exploit=_to_float(genome_obj.get("beta_exploit", 1.5), 1.5),
+            q_decay=_to_float(genome_obj.get("q_decay", 0.3), 0.3),
+            ucb_bonus=_to_float(genome_obj.get("ucb_bonus", 0.2), 0.2),
+            budget_aggressiveness=_to_float(genome_obj.get("budget_aggressiveness", 0.5), 0.5),
+            rank_noise={
+                str(key): _to_float(value, 0.0)
+                for key, value in rank_noise_raw.items()
+                if isinstance(key, str)
+            },
+            adapter_dropout={str(item) for item in adapter_dropout_raw if isinstance(item, str)},
+            duplication_factors={
+                str(key): _to_float(value, 0.0)
+                for key, value in duplication_raw.items()
+                if isinstance(key, str)
+            },
+        )
+        restored.register(genome)
+
+    history_obj = state_obj.get("history")
+    if isinstance(history_obj, dict):
+        restored.history = {
+            str(k): [_to_float(v, 0.0) for v in list(values)]
+            for k, values in history_obj.items()
+            if isinstance(k, str) and isinstance(values, list)
+        }
+    score_meta_obj = state_obj.get("score_meta")
+    if isinstance(score_meta_obj, dict):
+        restored.score_meta = {
+            str(k): [dict(item) for item in values if isinstance(item, dict)]
+            for k, values in score_meta_obj.items()
+            if isinstance(k, str) and isinstance(values, list)
+        }
+    ages_obj = state_obj.get("ages")
+    if isinstance(ages_obj, dict):
+        restored.ages = {
+            str(k): max(0, _to_int(v, 0)) for k, v in ages_obj.items() if isinstance(k, str)
+        }
+    energy_obj = state_obj.get("energy")
+    if isinstance(energy_obj, dict):
+        restored.energy = {
+            str(k): [_to_float(v, 0.0) for v in list(values)]
+            for k, values in energy_obj.items()
+            if isinstance(k, str) and isinstance(values, list)
+        }
+    roi_obj = state_obj.get("roi")
+    if isinstance(roi_obj, dict):
+        restored.roi = {
+            str(k): [_to_float(v, 0.0) for v in list(values)]
+            for k, values in roi_obj.items()
+            if isinstance(k, str) and isinstance(values, list)
+        }
+    adapter_usage_obj = state_obj.get("adapter_usage")
+    if isinstance(adapter_usage_obj, dict):
+        restored.adapter_usage = {}
+        for oid, per_module in adapter_usage_obj.items():
+            if not isinstance(oid, str) or not isinstance(per_module, dict):
+                continue
+            clean_per_module: dict[str, list[float]] = {}
+            for module_name, values in per_module.items():
+                if not isinstance(module_name, str) or not isinstance(values, list):
+                    continue
+                clean_per_module[module_name] = [_to_float(v, 0.0) for v in values]
+            restored.adapter_usage[oid] = clean_per_module
+    energy_delta_obj = state_obj.get("energy_delta")
+    if isinstance(energy_delta_obj, dict):
+        restored.energy_delta = {
+            str(k): [_to_float(v, 0.0) for v in list(values)]
+            for k, values in energy_delta_obj.items()
+            if isinstance(k, str) and isinstance(values, list)
+        }
+    evidence_credit_obj = state_obj.get("evidence_credit")
+    if isinstance(evidence_credit_obj, dict):
+        restored.evidence_credit = {
+            str(k): max(0, _to_int(v, 0))
+            for k, v in evidence_credit_obj.items()
+            if isinstance(k, str)
+        }
+    limit_obj = state_obj.get("assimilation_history_limit")
+    if isinstance(limit_obj, int):
+        restored.assimilation_history_limit = limit_obj
+
+    restored.assimilation_history = {}
+    assimilation_history_obj = state_obj.get("assimilation_history")
+    if isinstance(assimilation_history_obj, list):
+        for item in assimilation_history_obj:
+            if not isinstance(item, dict):
+                continue
+            oid = str(item.get("organelle_id", ""))
+            family = str(item.get("family", ""))
+            depth = str(item.get("depth", ""))
+            if not oid or not family or not depth:
+                continue
+            records_raw = item.get("records", [])
+            if isinstance(records_raw, list):
+                restored.assimilation_history[(oid, family, depth)] = [
+                    dict(record) for record in records_raw if isinstance(record, dict)
+                ]
+
+    restored.cell_values = {}
+    cell_values_obj = state_obj.get("cell_values")
+    if isinstance(cell_values_obj, list):
+        for item in cell_values_obj:
+            if not isinstance(item, dict):
+                continue
+            oid = str(item.get("organelle_id", ""))
+            cell = _to_grid_key(item.get("cell"))
+            if not oid or cell is None:
+                continue
+            restored.cell_values.setdefault(oid, {})[cell] = _to_float(item.get("value", 0.0), 0.0)
+
+    restored.cell_counts = {}
+    cell_counts_obj = state_obj.get("cell_counts")
+    if isinstance(cell_counts_obj, list):
+        for item in cell_counts_obj:
+            if not isinstance(item, dict):
+                continue
+            oid = str(item.get("organelle_id", ""))
+            cell = _to_grid_key(item.get("cell"))
+            if not oid or cell is None:
+                continue
+            restored.cell_counts.setdefault(oid, {})[cell] = max(
+                0, _to_int(item.get("count", 0), 0)
+            )
+
+    restored.global_cell_counts = {}
+    global_cell_counts_obj = state_obj.get("global_cell_counts")
+    if isinstance(global_cell_counts_obj, list):
+        for item in global_cell_counts_obj:
+            if not isinstance(item, dict):
+                continue
+            cell = _to_grid_key(item.get("cell"))
+            if cell is None:
+                continue
+            restored.global_cell_counts[cell] = max(0, _to_int(item.get("count", 0), 0))
+
+    return restored
+
+
+def _serialize_ledger(ledger: ATPLedger) -> dict[str, object]:
+    return {
+        "accounts": {
+            organelle_id: _to_float(account.balance, 0.0)
+            for organelle_id, account in ledger.accounts.items()
+        },
+        "energy_accounts": {
+            organelle_id: _to_float(balance, 0.0)
+            for organelle_id, balance in ledger.energy_accounts.items()
+        },
+        "energy_cap": _to_float(ledger.energy_cap, 5.0),
+    }
+
+
+def _restore_ledger(state_obj: object, ledger: ATPLedger) -> ATPLedger:
+    if not isinstance(state_obj, dict):
+        return ledger
+    restored = ATPLedger()
+    restored.energy_cap = _to_float(
+        state_obj.get("energy_cap", ledger.energy_cap), ledger.energy_cap
+    )
+    accounts_obj = state_obj.get("accounts")
+    if isinstance(accounts_obj, dict):
+        restored.accounts = {
+            organelle_id: ATPAccount(_to_float(balance, 0.0))
+            for organelle_id, balance in accounts_obj.items()
+            if isinstance(organelle_id, str)
+        }
+    energy_obj = state_obj.get("energy_accounts")
+    if isinstance(energy_obj, dict):
+        restored.energy_accounts = {
+            organelle_id: max(0.0, _to_float(balance, 0.0))
+            for organelle_id, balance in energy_obj.items()
+            if isinstance(organelle_id, str)
+        }
+    return restored
+
+
+def _serialize_environment_state(environment: GridEnvironment) -> dict[str, object]:
+    controller_cells: dict[tuple[str, str], dict[str, object]] = {}
+    for cell, state in environment.controller.cells.items():
+        controller_cells[cell] = {
+            "difficulty": _to_float(state.difficulty, 0.5),
+            "success_ema": _to_float(state.success_ema, 0.5),
+            "price": _to_float(state.price, 1.0),
+            "canary_index": max(0, _to_int(state.canary_index, 0)),
+            "canaries": [_serialize_grid_task(task) for task in state.canaries],
+        }
+    organism_stats: dict[str, list[dict[str, object]]] = {}
+    for organelle_id, per_cell in environment.organism_stats.items():
+        entries: list[dict[str, object]] = []
+        for cell, value in per_cell.items():
+            entries.append({"cell": list(cell), "value": _to_float(value, 0.0)})
+        organism_stats[organelle_id] = entries
+    return {
+        "controller": {
+            "cells": controller_cells,
+            "bandit_counts": dict(environment.controller.bandit_counts),
+            "bandit_success": dict(environment.controller.bandit_success),
+            "lp_progress": dict(environment.controller.lp_progress),
+            "lp_prev_ema": dict(environment.controller.lp_prev_ema),
+            "bandit_c": _to_float(environment.controller.bandit_c, 1.2),
+            "lp_alpha": _to_float(environment.controller.lp_alpha, 0.5),
+            "tau": _to_float(environment.controller.ctrl.tau, 0.5),
+            "beta": _to_float(environment.controller.ctrl.beta, 0.5),
+            "eta": _to_float(environment.controller.ctrl.eta, 0.1),
+            "price_base": _to_float(environment.controller.pricing.base, 1.0),
+            "price_k": _to_float(environment.controller.pricing.k, 1.0),
+            "price_min": _to_float(environment.controller.pricing.min, 0.0),
+            "price_max": _to_float(environment.controller.pricing.max, 1.0),
+            "rng_state": environment.controller.rng.getstate(),
+        },
+        "organism_stats": organism_stats,
+        "organism_canary_fail": dict(environment.organism_canary_fail),
+        "rng_state": environment.rng.getstate(),
+        "task_counter": max(0, _to_int(environment.task_counter, 0)),
+    }
+
+
+def _restore_environment_state(environment: GridEnvironment, state_obj: object) -> None:
+    if not isinstance(state_obj, dict):
+        return
+
+    controller_obj = state_obj.get("controller")
+    if isinstance(controller_obj, dict):
+        environment.controller.bandit_c = _to_float(
+            controller_obj.get("bandit_c", environment.controller.bandit_c),
+            environment.controller.bandit_c,
+        )
+        environment.controller.lp_alpha = _to_float(
+            controller_obj.get("lp_alpha", environment.controller.lp_alpha),
+            environment.controller.lp_alpha,
+        )
+        environment.controller.ctrl.tau = _to_float(
+            controller_obj.get("tau", environment.controller.ctrl.tau),
+            environment.controller.ctrl.tau,
+        )
+        environment.controller.ctrl.beta = _to_float(
+            controller_obj.get("beta", environment.controller.ctrl.beta),
+            environment.controller.ctrl.beta,
+        )
+        environment.controller.ctrl.eta = _to_float(
+            controller_obj.get("eta", environment.controller.ctrl.eta),
+            environment.controller.ctrl.eta,
+        )
+        environment.controller.pricing.base = _to_float(
+            controller_obj.get("price_base", environment.controller.pricing.base),
+            environment.controller.pricing.base,
+        )
+        environment.controller.pricing.k = _to_float(
+            controller_obj.get("price_k", environment.controller.pricing.k),
+            environment.controller.pricing.k,
+        )
+        environment.controller.pricing.min = _to_float(
+            controller_obj.get("price_min", environment.controller.pricing.min),
+            environment.controller.pricing.min,
+        )
+        environment.controller.pricing.max = _to_float(
+            controller_obj.get("price_max", environment.controller.pricing.max),
+            environment.controller.pricing.max,
+        )
+
+        cells_obj = controller_obj.get("cells")
+        if isinstance(cells_obj, dict):
+            for raw_cell, raw_state in cells_obj.items():
+                cell = _to_grid_key(raw_cell)
+                if cell is None or cell not in environment.controller.cells:
+                    continue
+                if not isinstance(raw_state, dict):
+                    continue
+                canaries: list[GridTask] = []
+                canaries_obj = raw_state.get("canaries")
+                if isinstance(canaries_obj, list):
+                    for task_payload in canaries_obj:
+                        task = _deserialize_grid_task(task_payload)
+                        if task is not None:
+                            canaries.append(task)
+                environment.controller.cells[cell] = GridCellState(
+                    difficulty=_to_float(raw_state.get("difficulty", 0.5), 0.5),
+                    success_ema=_to_float(raw_state.get("success_ema", 0.5), 0.5),
+                    price=_to_float(raw_state.get("price", 1.0), 1.0),
+                    canary_index=max(0, _to_int(raw_state.get("canary_index", 0), 0)),
+                    canaries=canaries,
+                )
+
+        for map_name in ("bandit_counts", "bandit_success", "lp_progress", "lp_prev_ema"):
+            raw_map = controller_obj.get(map_name)
+            if not isinstance(raw_map, dict):
+                continue
+            target = getattr(environment.controller, map_name)
+            target.clear()
+            for raw_cell, value in raw_map.items():
+                cell = _to_grid_key(raw_cell)
+                if cell is None:
+                    continue
+                if map_name == "bandit_counts":
+                    target[cell] = max(0, _to_int(value, 0))
+                else:
+                    target[cell] = _to_float(value, 0.0)
+
+        controller_rng_state = controller_obj.get("rng_state")
+        if controller_rng_state is not None:
+            try:
+                environment.controller.rng.setstate(controller_rng_state)
+            except Exception:
+                pass
+
+    organism_stats_obj = state_obj.get("organism_stats")
+    if isinstance(organism_stats_obj, dict):
+        restored_stats: dict[str, dict[GridKey, float]] = {}
+        for organelle_id, entries in organism_stats_obj.items():
+            if not isinstance(organelle_id, str) or not isinstance(entries, list):
+                continue
+            per_cell: dict[GridKey, float] = {}
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                cell = _to_grid_key(entry.get("cell"))
+                if cell is None:
+                    continue
+                per_cell[cell] = _to_float(entry.get("value", 0.0), 0.0)
+            restored_stats[organelle_id] = per_cell
+        environment.organism_stats = restored_stats
+
+    organism_canary_obj = state_obj.get("organism_canary_fail")
+    if isinstance(organism_canary_obj, dict):
+        environment.organism_canary_fail = {
+            str(key): bool(value)
+            for key, value in organism_canary_obj.items()
+            if isinstance(key, str)
+        }
+
+    environment.task_counter = max(0, _to_int(state_obj.get("task_counter", 0), 0))
+    env_rng_state = state_obj.get("rng_state")
+    if env_rng_state is not None:
+        try:
+            environment.rng.setstate(env_rng_state)
+        except Exception:
+            pass
+
+
+def _load_checkpoint(path: Path, *, allow_unsafe_pickle: bool = False) -> dict[str, Any]:
+    return load_checkpoint(path, allow_unsafe_pickle=allow_unsafe_pickle)
 
 
 def _save_checkpoint(
@@ -540,22 +1043,21 @@ def _save_checkpoint(
     compute_budget: ComputeBudget | None = None,
 ) -> None:
     adapter_states: dict[str, object] = {}
+    export_errors: list[str] = []
     for oid, org in host.organelles.items():
         try:
             adapter_states[oid] = org.export_adapter_state()  # type: ignore[attr-defined]
-        except Exception:
-            adapter_states[oid] = {}
+        except Exception as exc:
+            export_errors.append(f"{oid}: {exc}")
+    if export_errors:
+        joined = "; ".join(export_errors)
+        raise RuntimeError(f"Failed to export adapter state for checkpoint save: {joined}")
     state = {
+        "checkpoint_version": 2,
         "generation": generation,
-        "population": population,
-        "environment_state": {
-            "controller": environment.controller,
-            "organism_stats": environment.organism_stats,
-            "organism_canary_fail": environment.organism_canary_fail,
-            "rng_state": environment.rng.getstate(),
-            "task_counter": environment.task_counter,
-        },
-        "ledger": ledger,
+        "population_state": _serialize_population(population),
+        "environment_state": _serialize_environment_state(environment),
+        "ledger_state": _serialize_ledger(ledger),
         "adapter_states": adapter_states,
         "random_state": random_state,
         "assimilation_cooldown": loop.assimilation_cooldown,
@@ -563,10 +1065,7 @@ def _save_checkpoint(
         "telemetry_bytes": dict(telemetry_bytes or {}),
         "compute_budget": compute_budget.model_dump() if compute_budget else None,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_bytes(pickle.dumps(state))
-    os.replace(tmp_path, path)
+    save_checkpoint(path, state)
 
 
 def _truncate_file_to_bytes(path: Path, size_bytes: int | None) -> None:
@@ -657,7 +1156,7 @@ def main() -> None:
 
     checkpoint_path = config.metrics.root / "checkpoint.pt"
     if resume_root is not None and checkpoint_path.exists():
-        state = _load_checkpoint(checkpoint_path)
+        state = _load_checkpoint(checkpoint_path, allow_unsafe_pickle=args.allow_unsafe_pickle)
         start_generation = int(state.get("generation", 0))
         telemetry_bytes = state.get("telemetry_bytes") if isinstance(state, dict) else None
         if isinstance(telemetry_bytes, dict):
@@ -665,7 +1164,11 @@ def main() -> None:
             _truncate_file_to_bytes(assimilation_path, telemetry_bytes.get("assimilation"))
             _truncate_file_to_bytes(gen_summaries_path, telemetry_bytes.get("gen_summaries"))
         # restore population
-        population = state.get("population", population)
+        population_state = state.get("population_state")
+        if population_state is not None:
+            population = _restore_population(population_state, population)
+        else:
+            population = state.get("population", population)
         # respawn organelles with saved IDs and adapter states
         adapter_states = state.get("adapter_states", {}) or {}
         population.population = dict(population.population)
@@ -686,10 +1189,14 @@ def main() -> None:
             ledger.ensure(oid, 0.0)
             ledger.ensure_energy(oid, 0.0)
         # restore ledger balances
-        saved_ledger: ATPLedger = state.get("ledger", ledger)
-        ledger.accounts = saved_ledger.accounts
-        ledger.energy_accounts = saved_ledger.energy_accounts
-        ledger.energy_cap = saved_ledger.energy_cap
+        if state.get("ledger_state") is not None:
+            ledger = _restore_ledger(state.get("ledger_state"), ledger)
+            host.ledger = ledger
+        else:
+            saved_ledger: ATPLedger = state.get("ledger", ledger)
+            ledger.accounts = saved_ledger.accounts
+            ledger.energy_accounts = saved_ledger.energy_accounts
+            ledger.energy_cap = saved_ledger.energy_cap
         # restore compute budget
         saved_compute = state.get("compute_budget")
         if saved_compute is not None:
@@ -707,18 +1214,23 @@ def main() -> None:
             failure_cost_multiplier=config.environment.failure_cost_multiplier,
             lp_alpha=getattr(config.curriculum, "lp_alpha", 0.5),
         )
-        try:
-            environment.controller = env_state.get("controller", environment.controller)
-            environment.organism_stats = env_state.get("organism_stats", environment.organism_stats)
-            environment.organism_canary_fail = env_state.get(
-                "organism_canary_fail", environment.organism_canary_fail
-            )
-            environment.task_counter = env_state.get("task_counter", environment.task_counter)
-            rng_state = env_state.get("rng_state")
-            if rng_state is not None:
-                environment.rng.setstate(rng_state)
-        except Exception:
-            pass
+        if "checkpoint_version" in state:
+            _restore_environment_state(environment, env_state)
+        else:
+            try:
+                environment.controller = env_state.get("controller", environment.controller)
+                environment.organism_stats = env_state.get(
+                    "organism_stats", environment.organism_stats
+                )
+                environment.organism_canary_fail = env_state.get(
+                    "organism_canary_fail", environment.organism_canary_fail
+                )
+                environment.task_counter = env_state.get("task_counter", environment.task_counter)
+                rng_state = env_state.get("rng_state")
+                if rng_state is not None:
+                    environment.rng.setstate(rng_state)
+            except Exception:
+                pass
         assim = _make_assimilation_tester(config)
         loop = EcologyLoop(
             config=config,
