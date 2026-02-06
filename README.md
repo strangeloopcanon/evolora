@@ -64,11 +64,13 @@ See `docs/paper_packs/` for detailed run reports and plots.
 
 So far, the pattern looks like this:
 
+These robustness numbers come from a historical broad-mix run on `Qwen/Qwen2.5-0.5B` (kept for comparison with the Qwen3 table above).
+
 - **SFT wins on specialization**: on in-distribution tasks, compute-matched SFT (matched on training FLOPs) is usually the strongest baseline.
 - **Evolution can win on robustness**: on a family shift, a routed portfolio of evolved specialists can beat SFT—sometimes by retaining a capability that a single adapter loses (e.g., `word.count`).
 
 - **ID (6-family grid mix; Qwen/Qwen2.5-0.5B)**: base **70/512 (13.7%)**, SFT **318/512 (62.1%)**, evo (routed) **157/512 (30.7%)**
-- **OOD (paper holdout; math + word.count + code.format)**: base **5/120 (4.2%)**, SFT **54/120 (45.0%)**, evo (routed) **68/120 (56.7%)**
+- **OOD (paper holdout; math + word.count + code.format; Qwen/Qwen2.5-0.5B)**: base **5/120 (4.2%)**, SFT **54/120 (45.0%)**, evo (routed) **68/120 (56.7%)**
   - Best single evolved organelle: **58/120 (48.3%)**; routing + OOD reselection: **68/120 (56.7%)**
   - Most striking detail: SFT collapsed on `word.count` (**1/40**) while evo stayed closer to base (**7/40**).
 
@@ -95,7 +97,7 @@ python scripts/generate_grid_datasets.py \
 
 python scripts/evaluate_holdout.py \
   --holdout config/evaluation/paper_qwen3_holdout_v1.jsonl \
-  --model Qwen/Qwen2.5-0.5B \
+  --model <BASE_MODEL_MATCHING_RUN> \
   --sft-adapter <RUN_DIR>/sft/peft_adapter \
   --evo-checkpoint <RUN_DIR>/checkpoint.pt \
   --evo-eval-routing family \
@@ -113,11 +115,11 @@ python scripts/evaluate_holdout.py \
 
 A key question: does evolutionary adaptation actually outperform standard supervised fine-tuning given the same compute budget? This section explains how to run a fair comparison.
 
-Note: `scripts/run_sft.py` depends on `datasets` (in `requirements.txt`). If you see `ModuleNotFoundError: No module named 'datasets'`, run `.venv/bin/pip install -r requirements.txt`.
+Note: `scripts/run_sft.py` depends on `datasets` (in `requirements.txt`). If you see `ModuleNotFoundError: No module named 'datasets'`, run `make setup` (or `.venv/bin/python -m pip install -r requirements.txt`).
 
 ### What We Found (Regex Generalization Snapshot)
 
-In a single compute-matched run on **Qwen/Qwen2.5-0.5B** (LoRA rank=7; evo organelles trained with `EVOLORA_PLASTICITY=backprop`):
+In a historical compute-matched run on **Qwen/Qwen2.5-0.5B** (LoRA rank=7; evo organelles trained with `EVOLORA_PLASTICITY=backprop`):
 
 - **OOD holdout** (`config/evaluation/regex_generalization.jsonl`, 19 tasks): base **2/19** (10.5%), SFT **12/19** (63.2%), evo **5/19** (26.3%)
 - **ID holdout** (512 generated tasks from the same task mix): base **94/512** (18.4%), SFT **354/512** (69.1%), evo **148/512** (28.9%)
