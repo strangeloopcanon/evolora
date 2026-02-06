@@ -10,8 +10,8 @@
 #   scripts/run_regex_generalization_evo_vs_sft.sh --config config/experiments/qwen3_regex_generalization.yaml ...
 host:
   backbone_type: gemma
-  backbone_model: Qwen/Qwen2.5-0.5B
-  tokenizer: Qwen/Qwen2.5-0.5B
+  backbone_model: Qwen/Qwen3-0.6B
+  tokenizer: Qwen/Qwen3-0.6B
   device: mps
   min_lora_rank: 4
   max_lora_rank: 8

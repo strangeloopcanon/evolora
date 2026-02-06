@@ -3,13 +3,13 @@
 # This config is intended for the "evolution vs compute-matched SFT" regex track:
 # - Evolution run: `python scripts/run_evolution.py --config config/experiments/qwen3_regex.yaml ...`
 # - Compute-matched SFT (recommended: match evo train compute via tokens + multiplier):
-#     `python scripts/run_sft.py --checkpoint <run_dir>/checkpoint.pt --match-budget-field train_tokens --backprop-multiplier 2.0 --attn-implementation eager --engine manual --resume --data <run_dir>/datasets/sft_train.jsonl --model Qwen/Qwen2.5-0.5B ...`
+#     `python scripts/run_sft.py --checkpoint <run_dir>/checkpoint.pt --match-budget-field train_tokens --backprop-multiplier 2.0 --attn-implementation eager --engine manual --resume --data <run_dir>/datasets/sft_train.jsonl --model Qwen/Qwen3-0.6B ...`
 #   (Alternative: wall-clock match via `--match-budget-field wall_clock_seconds`.)
 # - Holdout eval: `python scripts/evaluate_holdout.py --holdout <run_dir>/datasets/holdout_tasks.jsonl --evo-selection-tasks <run_dir>/datasets/selection_tasks.jsonl ...`
 host:
   backbone_type: gemma
-  backbone_model: Qwen/Qwen2.5-0.5B
-  tokenizer: Qwen/Qwen2.5-0.5B
+  backbone_model: Qwen/Qwen3-0.6B
+  tokenizer: Qwen/Qwen3-0.6B
   device: mps
   max_lora_rank: 8
   max_sequence_length: 256
