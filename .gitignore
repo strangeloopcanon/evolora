@@ -3,15 +3,11 @@ __pycache__/
 *.py[cod]
 *.so
 .venv/
-.venv311/
 .env
 .env.*
 
 # Local tooling
-.beads/*
-!.beads/config.yaml
-!.beads/README.md
-!.beads/.gitignore
+.beads/
 .codex/
 
 
