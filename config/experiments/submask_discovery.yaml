@@ -1,0 +1,54 @@
+# Pretrained Submask Discovery: Task-Specific Circuits in a Frozen LLM
+#
+# Usage:
+#   python scripts/run_calibration.py --config config/experiments/submask_discovery.yaml
+#   python scripts/derive_masks.py --config config/experiments/submask_discovery.yaml
+#   python scripts/evaluate_submasks.py --config config/experiments/submask_discovery.yaml
+#   python scripts/analyze_submasks.py --config config/experiments/submask_discovery.yaml
+
+calibration:
+  model:
+    model_id: "Qwen/Qwen3-1.7B"
+    dtype: "bfloat16"
+    device: "auto"
+    batch_size: 8
+  tasks:
+    families: ["regex", "math", "word.count"]
+    calibration_per_family: 200
+    holdout_per_family: 200
+    calibration_seed: 42
+    holdout_seed: 7777
+    max_sequence_length: 256
+  output_dir: "artifacts_plasticity/calibration"
+
+masks:
+  importance_dir: "artifacts_plasticity/calibration"
+  sparsity_levels: [0.3, 0.5, 0.7, 0.9]
+  output_dir: "artifacts_plasticity/masks"
+  random_seed: 999
+
+evaluation:
+  model:
+    model_id: "Qwen/Qwen3-1.7B"
+    dtype: "bfloat16"
+    device: "auto"
+    batch_size: 8
+  tasks:
+    families: ["regex", "math", "word.count"]
+    calibration_per_family: 200
+    holdout_per_family: 200
+    calibration_seed: 42
+    holdout_seed: 7777
+    max_sequence_length: 256
+  masks_dir: "artifacts_plasticity/masks"
+  output_dir: "artifacts_plasticity/eval"
+  conditions: ["dense", "task_matched", "cross_task", "global", "random"]
+
+analysis:
+  masks_dir: "artifacts_plasticity/masks"
+  importance_dir: "artifacts_plasticity/calibration"
+  eval_dir: "artifacts_plasticity/eval"
+  output_dir: "artifacts_plasticity/analysis"
+  families: ["regex", "math", "word.count"]
+  sparsity_levels: [0.3, 0.5, 0.7, 0.9]
+  dpi: 150
